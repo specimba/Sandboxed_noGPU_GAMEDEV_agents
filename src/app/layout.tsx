@@ -14,17 +14,17 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "NEXUS ARMOR — Browser Tank Combat",
+  title: "ECHOVOID — Sing to the Void",
   description:
-    "Original-IP browser tank combat: angle your armor, hold the line, earn every unlock. Three.js/WebGL, PvE campaign, no downloads, no pay-to-win.",
-  keywords: ["tank game", "browser game", "WebGL", "Three.js", "tank combat", "PvE"],
-  authors: [{ name: "NEXUS ARMOR Team" }],
+    "An original 3D descent: the world is pitch black, and only your echo pulses reveal it — for a breath. Collect shards, wake the gate, but the Listeners hunt by sound. Three.js/WebGL, no downloads.",
+  keywords: ["browser game", "WebGL", "Three.js", "echolocation", "3D game", "ECHOVOID"],
+  authors: [{ name: "ECHOVOID" }],
   icons: {
     icon: "https://z-cdn.chatglm.cn/z-ai/static/logo.svg",
   },
   openGraph: {
-    title: "NEXUS ARMOR",
-    description: "Instant-play tactical tank combat in your browser.",
+    title: "ECHOVOID",
+    description: "See with sound. Survive what listens. Descend forever.",
     type: "website",
   },
 };
@@ -34,7 +34,7 @@ export const viewport: Viewport = {
   initialScale: 1,
   maximumScale: 1,
   userScalable: false,
-  themeColor: "#0c0a09",
+  themeColor: "#030508",
 };
 
 export default function RootLayout({

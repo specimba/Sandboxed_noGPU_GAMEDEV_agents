@@ -132,3 +132,26 @@ Stage Summary:
 - Kernel checklist (docs/QA.md): launch, first-interact, input, core loop, pause freeze, persistence, restart, visibility pause — ALL PASS in browser
 - Console clean (only dev-mode HMR notes); lint + tsc clean
 - Known dev-only artifact: Fast Refresh of engine modules desyncs UI/engine until reload (does not occur on fresh loads/production)
+---
+Task ID: 7 (pivot)
+Agent: lead (Z.ai Code)
+Task: Full ground-up pivot — discard tank concept, design & ship an original showcase game
+
+Work Log:
+- Read prior worklog + repo state; user clarified the tank game was only a capability reference, NOT the deliverable; ordered a from-scratch redesign with priorities: no military/tank reuse, showcase Three.js (lighting/shaders/physics/particles/camera/audio/UI), memorable core mechanic, striking first minutes, playable + polished + feasible
+- Deleted entire NEXUS ARMOR codebase (src/game, src/components/game, src/store, tank docs, profile API) and tank CSS layer; kept project shell
+- Chose ECHOVOID (echolocation descent): pitch "See with sound. Survive what listens. Descend forever." — perception IS the mechanic; pulse = sight + risk (close pulses stun Listeners, distant ones summon them)
+- Built engine (src/game/): constants/rng/store(zustand)/input(kb+mouse+touch)/shaders/reveal-material/level/particles/player/hunter/objects/gate/cameraRig/audio/engine
+- Signature shader tech: shared ring-buffer uniform of 8 pulses (vec4 origin+time) drives ALL reveal materials; geometry lights as wavefront passes + ember afterglow; band/after separated so only the thin traveling rim exceeds 1.0 (blooms) while lit surfaces stay sub-bloom; 3,200-mote dust field pushed by wavefront in vertex shader; fresnel rim listeners; HDR pipeline (HalfFloat MSAA target + UnrealBloom + custom vignette/dread/fade pass + OutputPass, ACES)
+- Procedural levels: mulberry32-seeded path + branches; ALL static geometry merged to ONE draw call (vertex color + aGlow); colliders/spikes/shards/gate/hunters from same data; heart-ring vista at y=-85
+- Audio: fully synthesized WebAudio (echo-bus sonar ping, wavefront-arrival-delayed chimes — you HEAR the pulse hit things with physical delay, heartbeat threat layer, depth-mood drone, wind, void-calls)
+- Flow: title attract mode (auto-pulses) → camera fly-in → play; 3 shards → gate awakens (gold pulse) → enter → cleared → descend (harder: more/faster listeners, more spikes, darker drone); death (3 lights) → CONSUMED overlay → respawn; Esc pause (resume/restart/sound/reduced-FX/abandon); localStorage best depth
+- React UI: TitleScreen (live attract bg, echo rings), HUD (depth/shards/light/pulse ring/dash/gate compass/threat/toasts), Overlays (pause/death/clear), TouchControls (joystick + ECHO/JUMP/DASH), responsive 390px→desktop
+- Browser verification loop (agent-browser) found & fixed: wave sphere BackSide full-screen additive washout → FrontSide subtle shell that hands off to geometry band; dust/particle point-size blowup near lens → size clamp + near fade; bloom halos from large lit areas → band/base split + threshold 0.7; pulse ring-buffer always reusing slot 0 → round-robin; free void-fall healing (respawn refilled hearts) → reposition() vs respawn() split; mobile title overflow + HUD overlap with touch buttons
+- E2E verified via engine debug hooks: begin→playing, W displacement, shard collection ×3, gate activation, cleared phase, descend (hunters 3→4), void-fall damage 3→2→1→0 → dead, respawn, pause menu, touch controls render, best-depth persistence, zero console errors; lint + tsc clean
+
+Stage Summary:
+- Shipped: ECHOVOID vertical slice — original IP, zero asset files (all geometry/audio procedural), 1-draw-call world, 60fps-budgeted (adaptive DPR), desktop + touch
+- Key decisions: echolocation over combat (mechanic = perception); darkness as performance budget (cheap to render, unique to look at); physical wavefront timing shared by shader, gameplay scheduling and audio delay = one source of truth
+- Files: src/game/{constants,rng,store,input,shaders,audio,level,particles,player,hunter,objects,cameraRig,engine}.ts, src/components/game/{GameCanvas,Hud,TitleScreen,Overlays,TouchControls}.tsx, src/app/{page,layout,globals.css}, docs/GAME_DESIGN.md
+- Backlog next: listener telegraph, sensitivity options, second enemy archetype, biome palettes

@@ -122,76 +122,40 @@
 }
 
 /* ============================================================
-   NEXUS ARMOR — game layer styles
+   ECHOVOID — game layer styles
    ============================================================ */
 
 html, body {
   overflow: hidden;
   overscroll-behavior: none;
-  background: #0c0a09;
+  background: #030508;
 }
 
-/* floating combat text (pooled DOM, transform-only updates) */
-.na-dmg {
-  position: absolute;
-  top: 0;
-  left: 0;
-  font-weight: 800;
-  font-size: 15px;
-  letter-spacing: 0.02em;
-  pointer-events: none;
-  will-change: transform, opacity;
-  text-shadow: 0 1px 2px rgba(0,0,0,0.9), 0 0 8px rgba(0,0,0,0.5);
-  white-space: nowrap;
-}
-.na-dmg-norm { color: #fcd34d; }
-.na-dmg-big  { color: #fb923c; font-size: 19px; }
-.na-dmg-rico { color: #f4f4f5; font-style: italic; font-size: 13px; letter-spacing: 0.12em; }
-
-/* player-hit vignette flash */
-.na-vignette {
-  background: radial-gradient(ellipse at center, transparent 52%, rgba(220,38,38,0.45) 100%);
-  transition: opacity 0.15s ease-out;
-}
-.na-hit {
-  animation: naHitFlash 0.5s ease-out;
-}
-@keyframes naHitFlash {
-  0%   { opacity: 1; }
-  100% { opacity: 0; }
-}
-
-/* persistent low-HP pulse */
-.na-lowhp {
-  background: radial-gradient(ellipse at center, transparent 55%, rgba(185,28,28,0.35) 100%);
-  animation: naLowPulse 1.6s ease-in-out infinite;
-}
-@keyframes naLowPulse {
-  0%, 100% { opacity: 0.35; }
-  50%      { opacity: 0.9; }
+/* title screen expanding echo rings */
+@keyframes evRing {
+  0%   { transform: translate(-50%, -50%) scale(1);   opacity: 0.9; }
+  100% { transform: translate(-50%, -50%) scale(9);   opacity: 0; }
 }
 
 /* toast entrance */
-.na-toast {
-  animation: naToastIn 0.18s ease-out;
-}
-@keyframes naToastIn {
-  from { opacity: 0; transform: translateX(-8px); }
-  to   { opacity: 1; transform: translateX(0); }
-}
-
-@keyframes naFadeIn {
-  from { opacity: 0; transform: translateY(10px); }
+@keyframes evToastIn {
+  from { opacity: 0; transform: translateY(8px); }
   to   { opacity: 1; transform: translateY(0); }
 }
 
-/* slim scrollbars inside game overlays */
+/* listener-threat pulse */
+@keyframes evPulse {
+  0%, 100% { opacity: 0.35; }
+  50%      { opacity: 1; }
+}
+
+/* slim scrollbars inside overlays */
 ::-webkit-scrollbar { width: 8px; height: 8px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: rgba(245,158,11,0.25); border-radius: 4px; }
-::-webkit-scrollbar-thumb:hover { background: rgba(245,158,11,0.4); }
+::-webkit-scrollbar-thumb { background: rgba(255,210,122,0.25); border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(255,210,122,0.4); }
 
 /* reduced motion: kill decorative animation */
 @media (prefers-reduced-motion: reduce) {
-  .na-lowhp, .na-toast, .na-hit { animation: none !important; }
+  .ev-ring, .ev-toast { animation: none !important; }
 }
