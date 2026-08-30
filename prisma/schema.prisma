@@ -1,0 +1,19 @@
+// NEXUS ARMOR — Prisma schema. Only the optional profile-sync table lives here;
+// gameplay itself never requires the database (offline-first).
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model PlayerSave {
+  id        String   @id @default(cuid())
+  clientId  String   @unique
+  data      String // JSON PlayerProfile blob (versioned client-side)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
