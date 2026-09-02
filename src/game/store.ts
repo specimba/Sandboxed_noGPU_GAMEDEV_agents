@@ -2,15 +2,7 @@
 
 import { create } from 'zustand';
 
-export type Phase =
-  | 'loading'
-  | 'error'
-  | 'title'
-  | 'flying'
-  | 'playing'
-  | 'paused'
-  | 'dead'
-  | 'cleared';
+export type Phase = 'loading' | 'error' | 'title' | 'playing' | 'paused' | 'dead';
 
 export interface Toast {
   id: number;
@@ -18,31 +10,38 @@ export interface Toast {
   kind: 'info' | 'gold' | 'red';
 }
 
+export interface Banner {
+  id: number;
+  text: string;
+  sub: string;
+  kind: 'wave' | 'warden' | 'overdrive';
+}
+
 interface GameState {
   phase: Phase;
   webglError: boolean;
 
-  depth: number;
+  score: number;
+  best: number;
+  bestWave: number;
+  wave: number;
+  enemiesLeft: number;
+  mult: number;
+
   shards: number;
-  hearts: number;
-  deaths: number;
+  shardsMax: number;
+  embers: number;
 
-  /** 0..1 — 1 means echo pulse ready */
-  pulseReady: number;
-  /** 0..1 — 1 means dash ready */
+  /** 0..1 dash readiness */
   dashReady: number;
-  /** 0..1 — listener threat intensity */
-  alert: number;
-  gateActive: boolean;
-  /** screen-space angle (radians) pointing toward the active gate, null when inactive */
-  gateDir: number | null;
+  /** 0..1 overdrive charge; active shows remaining duration */
+  overdrive: number;
+  overdriveActive: boolean;
+  /** 0..1 sun rekindle energy */
+  sun: number;
 
-  runTime: number;
-  lastRunTime: number;
-  bestDepth: number;
-
+  banner: Banner | null;
   muted: boolean;
-  reduceFx: boolean;
   touch: boolean;
 
   toasts: Toast[];
@@ -50,31 +49,34 @@ interface GameState {
   set: (p: Partial<GameState>) => void;
   pushToast: (text: string, kind?: Toast['kind']) => void;
   dropToast: (id: number) => void;
+  showBanner: (text: string, sub: string, kind: Banner['kind']) => void;
 }
 
 let toastId = 0;
+let bannerId = 0;
 
 export const useGameStore = create<GameState>()((set) => ({
   phase: 'loading',
   webglError: false,
 
-  depth: 1,
-  shards: 0,
-  hearts: 3,
-  deaths: 0,
+  score: 0,
+  best: 0,
+  bestWave: 1,
+  wave: 0,
+  enemiesLeft: 0,
+  mult: 1,
 
-  pulseReady: 1,
+  shards: 3,
+  shardsMax: 6,
+  embers: 3,
+
   dashReady: 1,
-  alert: 0,
-  gateActive: false,
-  gateDir: null,
+  overdrive: 0,
+  overdriveActive: false,
+  sun: 0,
 
-  runTime: 0,
-  lastRunTime: 0,
-  bestDepth: 1,
-
+  banner: null,
   muted: false,
-  reduceFx: false,
   touch: false,
 
   toasts: [],
@@ -84,26 +86,42 @@ export const useGameStore = create<GameState>()((set) => ({
     set((s) => {
       const id = ++toastId;
       const toasts = [...s.toasts.slice(-3), { id, text, kind }];
-      window.setTimeout(() => useGameStore.getState().dropToast(id), 3000);
+      window.setTimeout(() => useGameStore.getState().dropToast(id), 2600);
       return { toasts };
     }),
   dropToast: (id) => set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) })),
+  showBanner: (text, sub, kind) => {
+    const id = ++bannerId;
+    set({ banner: { id, text, sub, kind } });
+    window.setTimeout(() => {
+      const cur = useGameStore.getState().banner;
+      if (cur && cur.id === id) set({ banner: null });
+    }, 2200);
+  },
 }));
 
-export function loadBestDepth(): number {
-  try {
-    const v = window.localStorage.getItem('echovoid.best');
-    const n = v ? parseInt(v, 10) : 1;
-    return Number.isFinite(n) && n >= 1 ? n : 1;
-  } catch {
-    return 1;
-  }
+export interface BestRecord {
+  score: number;
+  wave: number;
 }
 
-export function saveBestDepth(depth: number): void {
+export function loadBest(): BestRecord {
   try {
-    window.localStorage.setItem('echovoid.best', String(depth));
+    const raw = window.localStorage.getItem('hollowsun.best');
+    if (raw) {
+      const o = JSON.parse(raw) as Partial<BestRecord>;
+      return { score: o.score ?? 0, wave: o.wave ?? 1 };
+    }
   } catch {
-    /* storage unavailable — best-depth is a nicety, not a requirement */
+    /* storage unavailable */
+  }
+  return { score: 0, wave: 1 };
+}
+
+export function saveBest(rec: BestRecord): void {
+  try {
+    window.localStorage.setItem('hollowsun.best', JSON.stringify(rec));
+  } catch {
+    /* storage unavailable */
   }
 }

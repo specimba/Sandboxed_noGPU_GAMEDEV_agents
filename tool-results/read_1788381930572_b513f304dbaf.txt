@@ -1,0 +1,786 @@
+     1→import * as THREE from 'three';
+     2→import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
+     3→import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
+     4→import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
+     5→import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js';
+     6→import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
+     7→
+     8→import { CAMERA, COLORS, GAME, PLAYER, WAVE, depthMeters, depthRoman } from './constants';
+     9→import {
+    10→  createDust,
+    11→  createWaveMaterial,
+    12→  VIGNETTE_SHADER,
+    13→  type DustField,
+    14→  type PulseArray,
+    15→} from './shaders';
+    16→import { Input } from './input';
+    17→import { AudioEngine } from './audio';
+    18→import { buildLevel, type LevelData } from './level';
+    19→import { Player, type PlayerEvents } from './player';
+    20→import { CameraRig } from './cameraRig';
+    21→import { Hunter } from './hunter';
+    22→import { Gate, Shard } from './objects';
+    23→import { ParticlePool } from './particles';
+    24→import { loadBestDepth, saveBestDepth, useGameStore } from './store';
+    25→
+    26→/**
+    27→ * ECHOVOID engine — owns the renderer, the phase machine and the pulse system.
+    28→ * React talks to it through the exported methods + the zustand store.
+    29→ */
+    30→
+    31→let activeEngine: Engine | null = null;
+    32→export function getEngine(): Engine | null {
+    33→  return activeEngine;
+    34→}
+    35→
+    36→type Phase = 'title' | 'flying' | 'playing' | 'paused' | 'dead' | 'cleared';
+    37→
+    38→interface WaveFx {
+    39→  mesh: THREE.Mesh;
+    40→  mat: THREE.ShaderMaterial;
+    41→  t0: number;
+    42→  origin: THREE.Vector3;
+    43→}
+    44→
+    45→interface PendingEvent {
+    46→  t: number;
+    47→  fn: () => void;
+    48→}
+    49→
+    50→export class Engine {
+    51→  private renderer: THREE.WebGLRenderer;
+    52→  private scene = new THREE.Scene();
+    53→  private camera: THREE.PerspectiveCamera;
+    54→  private composer: EffectComposer;
+    55→  private bloom: UnrealBloomPass;
+    56→  private vignette: ShaderPass;
+    57→
+    58→  readonly input: Input;
+    59→  private audio = new AudioEngine();
+    60→  private particles: ParticlePool;
+    61→  private dust: DustField;
+    62→  private rig = new CameraRig();
+    63→
+    64→  private pulseUniform: { value: PulseArray } | null = null;
+    65→  private level: LevelData | null = null;
+    66→  private player!: Player;
+    67→  private hunters: Hunter[] = [];
+    68→  private shards: Shard[] = [];
+    69→  private gate: Gate | null = null;
+    70→
+    71→  private waves: WaveFx[] = [];
+    72→  private pending: PendingEvent[] = [];
+    73→  private playerEvents: PlayerEvents = { landed: false, jumped: false, dashed: false };
+    74→
+    75→  private phase: Phase = 'title';
+    76→  private depth = 1;
+    77→  private seed = 1;
+    78→  private runStart = 0;
+    79→  private deadAt = 0;
+    80→  private fadeTarget = 0;
+    81→
+    82→  private clock = new THREE.Clock();
+    83→  private t = 0;
+    84→  private vitalsTimer = 0;
+    85→  private alertLevel = 0;
+    86→  private attractAngle = 0;
+    87→  private attractPulse = 2.2;
+    88→  private dpr = 1;
+    89→  private frameEma = 16;
+    90→  private dprCheck = 0;
+    91→  private raf = 0;
+    92→  private disposed = false;
+    93→  private reduceFx = false;
+    94→
+    95→  private onResize = () => this.resize();
+    96→  private onVisibility = () => {
+    97→    if (document.hidden && this.phase === 'playing') this.pause();
+    98→  };
+    99→
+   100→  constructor(private canvas: HTMLCanvasElement) {
+   101→    // intentional module-level singleton so React UI can reach the engine
+   102→    // eslint-disable-next-line @typescript-eslint/no-this-alias
+   103→    activeEngine = this;
+   104→    const store = useGameStore.getState();
+   105→
+   106→    this.renderer = new THREE.WebGLRenderer({
+   107→      canvas,
+   108→      antialias: true,
+   109→      powerPreference: 'high-performance',
+   110→    });
+   111→    this.renderer.setClearColor(COLORS.bg, 1);
+   112→    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+   113→    this.renderer.toneMappingExposure = 1.12;
+   114→
+   115→    this.camera = new THREE.PerspectiveCamera(CAMERA.fov, 1, 0.1, 400);
+   116→    this.scene.background = new THREE.Color(COLORS.bg);
+   117→
+   118→    // HDR target so bloom has headroom
+   119→    const target = new THREE.WebGLRenderTarget(2, 2, {
+   120→      type: THREE.HalfFloatType,
+   121→      samples: 2,
+   122→    });
+   123→    this.composer = new EffectComposer(this.renderer, target);
+   124→    this.composer.addPass(new RenderPass(this.scene, this.camera));
+   125→    this.bloom = new UnrealBloomPass(new THREE.Vector2(2, 2), 0.65, 0.35, 0.7);
+   126→    this.composer.addPass(this.bloom);
+   127→    this.vignette = new ShaderPass(VIGNETTE_SHADER);
+   128→    this.composer.addPass(this.vignette);
+   129→    this.composer.addPass(new OutputPass());
+   130→
+   131→    // shared pulse ring buffer
+   132→    const pulses = Array.from({ length: WAVE.maxPulses }, () => new THREE.Vector4(0, 0, 0, -1));
+   133→    this.pulseUniform = { value: pulses };
+   134→
+   135→    this.particles = new ParticlePool(this.scene, 700);
+   136→    this.dust = createDust(this.pulseUniform, 3200);
+   137→    this.scene.add(this.dust.points);
+   138→    this.dust.uniforms.uPix.value = this.dpr;
+   139→
+   140→    this.input = new Input(canvas);
+   141→    this.player = new Player(this.scene, this.particles);
+   142→
+   143→    this.seed = (Date.now() % 100000) | 0;
+   144→    this.buildLevelObjects(1, this.seed);
+   145→
+   146→    store.set({
+   147→      phase: 'title',
+   148→      depth: 1,
+   149→      shards: 0,
+   150→      hearts: GAME.heartsMax,
+   151→      bestDepth: loadBestDepth(),
+   152→      gateActive: false,
+   153→      gateDir: null,
+   154→      alert: 0,
+   155→      pulseReady: 1,
+   156→      dashReady: 1,
+   157→    });
+   158→
+   159→    const isTouch = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
+   160→    store.set({ touch: isTouch });
+   161→
+   162→    window.addEventListener('resize', this.onResize);
+   163→    document.addEventListener('visibilitychange', this.onVisibility);
+   164→    this.resize();
+   165→    this.raf = requestAnimationFrame(this.loop);
+   166→
+   167→    // dev/test hook for automated verification
+   168→    (window as unknown as Record<string, unknown>).__echovoid = this;
+   169→  }
+   170→
+   171→  /* ================= public API (used by React UI) ================= */
+   172→
+   173→  begin(): void {
+   174→    if (this.phase !== 'title') return;
+   175→    this.audio.unlock();
+   176→    this.audio.click();
+   177→    this.audio.setDepthMood(this.depth);
+   178→    this.phase = 'flying';
+   179→    useGameStore.getState().set({ phase: 'flying' });
+   180→    this.rig.startFly(this.rig.currentPos.clone(), this.rig.currentLook.clone(), 1.5);
+   181→  }
+   182→
+   183→  pause(): void {
+   184→    if (this.phase !== 'playing') return;
+   185→    this.phase = 'paused';
+   186→    useGameStore.getState().set({ phase: 'paused' });
+   187→  }
+   188→
+   189→  resume(): void {
+   190→    if (this.phase !== 'paused') return;
+   191→    this.audio.unlock();
+   192→    this.phase = 'playing';
+   193→    useGameStore.getState().set({ phase: 'playing' });
+   194→  }
+   195→
+   196→  togglePause(): void {
+   197→    if (this.phase === 'playing') this.pause();
+   198→    else if (this.phase === 'paused') this.resume();
+   199→  }
+   200→
+   201→  restartDepth(): void {
+   202→    if (this.phase !== 'paused') return;
+   203→    this.clearLevelObjects();
+   204→    this.buildLevelObjects(this.depth, (Math.random() * 100000) | 0);
+   205→    this.player.respawn(this.level!.spawn);
+   206→    this.fadeTarget = 0;
+   207→    this.phase = 'playing';
+   208→    useGameStore.getState().set({ phase: 'playing', shards: 0, hearts: GAME.heartsMax, gateActive: false, gateDir: null });
+   209→  }
+   210→
+   211→  quitToTitle(): void {
+   212→    this.clearLevelObjects();
+   213→    this.depth = 1;
+   214→    this.buildLevelObjects(1, (Math.random() * 100000) | 0);
+   215→    this.attractAngle = Math.random() * Math.PI * 2;
+   216→    this.fadeTarget = 0;
+   217→    this.phase = 'title';
+   218→    useGameStore.getState().set({
+   219→      phase: 'title',
+   220→      depth: 1,
+   221→      shards: 0,
+   222→      hearts: GAME.heartsMax,
+   223→      gateActive: false,
+   224→      gateDir: null,
+   225→    });
+   226→  }
+   227→
+   228→  respawn(): void {
+   229→    if (this.phase !== 'dead') return;
+   230→    this.player.respawn(this.level!.spawn);
+   231→    for (const h of this.hunters) h.reset();
+   232→    this.fadeTarget = 0;
+   233→    this.phase = 'playing';
+   234→    useGameStore.getState().set({ phase: 'playing', hearts: GAME.heartsMax, alert: 0 });
+   235→  }
+   236→
+   237→  descend(): void {
+   238→    if (this.phase !== 'cleared') return;
+   239→    this.depth += 1;
+   240→    const best = Math.max(this.depth, useGameStore.getState().bestDepth);
+   241→    saveBestDepth(best);
+   242→    this.clearLevelObjects();
+   243→    this.buildLevelObjects(this.depth, (Math.random() * 100000) | 0);
+   244→    this.player.hearts = Math.min(GAME.heartsMax, this.player.hearts + 1);
+   245→    this.player.reposition(this.level!.spawn);
+   246→    this.audio.setDepthMood(this.depth);
+   247→    this.fadeTarget = 0;
+   248→    this.phase = 'playing';
+   249→    this.runStart = this.t;
+   250→    useGameStore.getState().set({
+   251→      phase: 'playing',
+   252→      depth: this.depth,
+   253→      bestDepth: best,
+   254→      shards: 0,
+   255→      hearts: this.player.hearts,
+   256→      gateActive: false,
+   257→      gateDir: null,
+   258→    });
+   259→    useGameStore
+   260→      .getState()
+   261→      .pushToast(`DEPTH ${depthRoman(this.depth)} — ${depthMeters(this.depth)}m BELOW`, 'gold');
+   262→  }
+   263→
+   264→  toggleMute(): void {
+   265→    const m = !useGameStore.getState().muted;
+   266→    useGameStore.getState().set({ muted: m });
+   267→    this.audio.setMuted(m);
+   268→  }
+   269→
+   270→  toggleReduceFx(): void {
+   271→    const r = !useGameStore.getState().reduceFx;
+   272→    this.reduceFx = r;
+   273→    this.bloom.strength = r ? 0.4 : 0.85;
+   274→    useGameStore.getState().set({ reduceFx: r });
+   275→  }
+   276→
+   277→  /* ================= level lifecycle ================= */
+   278→
+   279→  private buildLevelObjects(depth: number, seed: number): void {
+   280→    const level = buildLevel(depth, seed, this.pulseUniform!);
+   281→    this.level = level;
+   282→    this.scene.add(level.group);
+   283→
+   284→    for (const p of level.shardPositions) this.shards.push(new Shard(this.scene, p));
+   285→    this.gate = new Gate(this.scene, level.gatePosition, level.gateYaw);
+   286→    for (const h of level.hunterHomes) this.hunters.push(new Hunter(this.scene, h, depth));
+   287→
+   288→    this.player.respawn(level.spawn);
+   289→    // face down the path
+   290→    this.rig.yaw = Math.atan2(
+   291→      level.gatePosition.x - level.spawn.x,
+   292→      level.gatePosition.z - level.spawn.z,
+   293→    ) + Math.PI;
+   294→    this.rig.pitch = 0.38;
+   295→  }
+   296→
+   297→  private clearLevelObjects(): void {
+   298→    for (const s of this.shards) s.dispose(this.scene);
+   299→    this.shards = [];
+   300→    for (const h of this.hunters) h.dispose(this.scene);
+   301→    this.hunters = [];
+   302→    this.gate?.dispose(this.scene);
+   303→    this.gate = null;
+   304→    this.level?.dispose();
+   305→    this.level = null;
+   306→    this.pending = [];
+   307→    for (const w of this.waves) {
+   308→      w.mesh.removeFromParent();
+   309→      w.mat.dispose();
+   310→      w.mesh.geometry.dispose();
+   311→    }
+   312→    this.waves = [];
+   313→  }
+   314→
+   315→  /* ================= pulse system ================= */
+   316→
+   317→  private pulseIdx = 0;
+   318→
+   319→  private emitPulse(origin: THREE.Vector3, kind: 'teal' | 'gold' = 'teal', silent = false): void {
+   320→    const pulses = this.pulseUniform!.value;
+   321→    // round-robin slot so simultaneous echoes coexist in the shader buffer
+   322→    this.pulseIdx = (this.pulseIdx + 1) % pulses.length;
+   323→    pulses[this.pulseIdx].set(origin.x, origin.y, origin.z, this.t);
+   324→
+   325→    // visual shockwave sphere
+   326→    const mat = createWaveMaterial();
+   327→    mat.uniforms.uColor.value = kind === 'gold' ? COLORS.gate.clone() : new THREE.Color('#6ff2df');
+   328→    const mesh = new THREE.Mesh(waveGeo, mat);
+   329→    mesh.position.copy(origin);
+   330→    mesh.frustumCulled = false;
+   331→    mesh.renderOrder = 8;
+   332→    this.scene.add(mesh);
+   333→    this.waves.push({ mesh, mat, t0: this.t, origin: origin.clone() });
+   334→
+   335→    if (!silent) {
+   336→      this.audio.pulse();
+   337→      this.rig.addFovKick(5);
+   338→      this.rig.addShake(0.1);
+   339→    }
+   340→
+   341→    // schedule wavefront hits at physically-correct delays
+   342→    const schedule = (obj: THREE.Vector3, fn: () => void) => {
+   343→      const d = obj.distanceTo(origin);
+   344→      if (d > WAVE.revealRadius) return;
+   345→      this.pending.push({ t: this.t + d / WAVE.speed, fn });
+   346→    };
+   347→    for (const s of this.shards) {
+   348→      if (s.taken) continue;
+   349→      const i = this.shards.indexOf(s);
+   350→      schedule(
+   351→        s.group.position,
+   352→        () => {
+   353→          s.bloom();
+   354→          this.audio.chime(0, 1100 + i * 140, 0.14);
+   355→        },
+   356→      );
+   357→    }
+   358→    if (this.gate && !this.gate.active) {
+   359→      schedule(this.gate.group.position, () => {
+   360→        this.gate!.reveal = 1;
+   361→        this.audio.chime(0, 480, 0.12);
+   362→      });
+   363→    }
+   364→    for (const h of this.hunters) {
+   365→      const d = h.pos.distanceTo(origin);
+   366→      if (d > WAVE.revealRadius) continue;
+   367→      if (d < WAVE.stunRadius) {
+   368→        this.pending.push({
+   369→          t: this.t + d / WAVE.speed,
+   370→          fn: () => {
+   371→            h.onPulse(origin, 'stun');
+   372→            this.audio.stun();
+   373→            this.particles.burst(h.pos, 14, 4, { color: COLORS.hazard, life: 0.7, size: 0.4 });
+   374→          },
+   375→        });
+   376→      } else if (d < WAVE.alertRadius) {
+   377→        this.pending.push({
+   378→          t: this.t + d / WAVE.speed,
+   379→          fn: () => {
+   380→            h.onPulse(origin, 'alert');
+   381→            this.audio.growl(0);
+   382→          },
+   383→        });
+   384→      } else {
+   385→        this.pending.push({ t: this.t + d / WAVE.speed, fn: () => h.onPulse(origin, 'reveal') });
+   386→      }
+   387→    }
+   388→
+   389→    if (kind === 'gold') {
+   390→      this.particles.burst(origin, 40, 7, { color: COLORS.gate, life: 1.2, size: 0.5 });
+   391→    }
+   392→  }
+   393→
+   394→  /* ================= damage / death ================= */
+   395→
+   396→  private damage(from: THREE.Vector3, scatterHunters: boolean): void {
+   397→    if (this.player.invuln > 0 || this.phase !== 'playing') return;
+   398→    this.player.hearts -= 1;
+   399→    const store = useGameStore.getState();
+   400→    store.set({ hearts: Math.max(0, this.player.hearts) });
+   401→    this.vignette.uniforms.uHurt.value = 1;
+   402→    this.rig.addShake(0.55);
+   403→    this.audio.hit();
+   404→    const away = this.player.pos.clone().sub(from).setY(0);
+   405→    if (away.lengthSq() < 0.01) away.set(0, 0, 1);
+   406→    away.normalize().multiplyScalar(13);
+   407→    this.player.vel.set(away.x, 6.5, away.z);
+   408→    this.player.invuln = 1.4;
+   409→    if (scatterHunters) for (const h of this.hunters) h.scatter();
+   410→    if (this.player.hearts <= 0) this.die();
+   411→  }
+   412→
+   413→  private die(): void {
+   414→    this.phase = 'dead';
+   415→    this.deadAt = this.t;
+   416→    this.fadeTarget = 0.9;
+   417→    this.audio.death();
+   418→    this.audio.setAlert(0);
+   419→    const store = useGameStore.getState();
+   420→    store.set({ phase: 'dead', deaths: store.deaths + 1, alert: 0 });
+   421→    this.particles.burst(this.player.pos, 50, 9, { color: COLORS.player, life: 1.2, size: 0.5 });
+   422→  }
+   423→
+   424→  /* ================= main loop ================= */
+   425→
+   426→  private loop = () => {
+   427→    if (this.disposed) return;
+   428→    this.raf = requestAnimationFrame(this.loop);
+   429→    const dt = Math.min(0.05, this.clock.getDelta());
+   430→    this.t += dt;
+   431→
+   432→    this.frameEma = this.frameEma * 0.95 + dt * 1000 * 0.05;
+   433→    this.adaptDpr(dt);
+   434→
+   435→    switch (this.phase) {
+   436→      case 'title':
+   437→        this.updateTitle(dt);
+   438→        break;
+   439→      case 'flying':
+   440→        this.updateFlying(dt);
+   441→        break;
+   442→      case 'playing':
+   443→        this.updatePlaying(dt);
+   444→        break;
+   445→      case 'paused':
+   446→      case 'dead':
+   447→      case 'cleared':
+   448→        this.updateFrozen(dt);
+   449→        break;
+   450→    }
+   451→
+   452→    // shared uniforms
+   453→    for (const u of [this.level?.material.uniforms, this.dust.uniforms]) {
+   454→      if (!u) continue;
+   455→      if ('uTime' in u) u.uTime.value = this.t;
+   456→      if ('uPlayerPos' in u) (u.uPlayerPos.value as THREE.Vector3).copy(this.player.pos);
+   457→    }
+   458→    this.dust.uniforms.uPix.value = this.dpr;
+   459→
+   460→    // vignette state
+   461→    const v = this.vignette.uniforms;
+   462→    v.uTime.value = this.t;
+   463→    v.uHurt.value = Math.max(0, v.uHurt.value - dt * 1.6);
+   464→    v.uAlert.value += (this.alertLevel - v.uAlert.value) * Math.min(1, dt * 3);
+   465→    v.uFade.value += (this.fadeTarget - v.uFade.value) * Math.min(1, dt * 2.2);
+   466→
+   467→    this.composer.render();
+   468→    this.input.clearFrame();
+   469→  };
+   470→
+   471→  private updateTitle(dt: number): void {
+   472→    this.attractAngle += dt * 0.06;
+   473→    const center = this.level!.center;
+   474→    this.rig.setOrbit(center, this.attractAngle, 26, 15);
+   475→    this.camera.position.copy(this.rig.currentPos);
+   476→    this.camera.lookAt(this.rig.currentLook);
+   477→
+   478→    this.attractPulse -= dt;
+   479→    if (this.attractPulse <= 0) {
+   480→      this.attractPulse = 3.4;
+   481→      const n = this.level!.colliders[(Math.random() * this.level!.colliders.length) | 0];
+   482→      this.emitPulse(new THREE.Vector3(n.x, n.top + 0.5, n.z), 'teal', true);
+   483→    }
+   484→    this.updateAmbient(dt);
+   485→    if (this.input.consumeBegin()) this.begin();
+   486→  }
+   487→
+   488→  private updateFlying(dt: number): void {
+   489→    // camera flies to the wisp; world idles
+   490→    this.updateAmbient(dt);
+   491→    this.rig.update(dt, this.camera, this.player.pos, ZERO, this.level!.colliders, this.reduceFx);
+   492→    this.player.group.position.copy(this.player.pos);
+   493→    this.player.group.position.y += Math.sin(this.t * 2) * 0.06;
+   494→    if (!this.rig.flying) {
+   495→      this.phase = 'playing';
+   496→      this.runStart = this.t;
+   497→      const store = useGameStore.getState();
+   498→      store.set({ phase: 'playing', runTime: 0 });
+   499→      store.pushToast(`DEPTH ${depthRoman(this.depth)} — ${depthMeters(this.depth)}m BELOW`, 'gold');
+   500→      store.pushToast('CLICK / F — ECHO PULSE', 'info');
+   501→    }
+   502→  }
+   503→
+   504→  private updatePlaying(dt: number): void {
+   505→    const store = useGameStore.getState();
+   506→    const level = this.level!;
+   507→
+   508→    // --- input actions ---
+   509→    if (this.input.consumePause()) {
+   510→      this.pause();
+   511→      return;
+   512→    }
+   513→    if (this.input.consumePulse()) this.tryPulse();
+   514→    if (this.input.consumeJump()) this.player.requestJump();
+   515→    if (this.input.consumeDash()) {
+   516→      const yaw = this.rig.yaw;
+   517→      const mx = this.input.moveX;
+   518→      const my = this.input.moveY;
+   519→      const fwdX = -Math.sin(yaw);
+   520→      const fwdZ = -Math.cos(yaw);
+   521→      const dx = fwdX * my + -fwdZ * mx;
+   522→      const dz = fwdZ * my + fwdX * mx;
+   523→      if (this.player.tryDash(dx, dz)) this.audio.dash();
+   524→    }
+   525→
+   526→    // camera orbit
+   527→    this.rig.orbit(this.input.lookX, this.input.lookY);
+   528→    this.rig.rotate(this.input.rotateAxis, dt);
+   529→    if (this.input.zoom !== 0) this.rig.zoomBy(this.input.zoom);
+   530→
+   531→    // --- player physics ---
+   532→    this.player.update(
+   533→      dt,
+   534→      { moveX: this.input.moveX, moveY: this.input.moveY, jumpHeld: this.input.jumpHeld },
+   535→      this.rig.yaw,
+   536→      level.colliders,
+   537→      this.playerEvents,
+   538→    );
+   539→    if (this.playerEvents.landed) {
+   540→      this.audio.land();
+   541→      this.particles.burst(this.player.pos, 8, 2.5, { color: COLORS.rock, life: 0.4, size: 0.3 });
+   542→    }
+   543→    if (this.playerEvents.jumped) this.audio.jump();
+   544→
+   545→    // fell into the abyss
+   546→    if (this.player.pos.y < PLAYER.killY) {
+   547→      this.damage(this.player.pos, false);
+   548→      if (this.player.hearts > 0) this.player.reposition(level.spawn);
+   549→    }
+   550→
+   551→    // --- spikes ---
+   552→    for (const s of level.spikes) {
+   553→      if (Math.hypot(this.player.pos.x - s.x, this.player.pos.z - s.z) < s.r + 0.3) {
+   554→        if (this.player.pos.y < s.top + 1.2) {
+   555→          const spikePos = new THREE.Vector3(s.x, this.player.pos.y - 0.5, s.z);
+   556→          this.damage(spikePos, false);
+   557→        }
+   558→      }
+   559→    }
+   560→
+   561→    // --- shards ---
+   562→    let collected = -1;
+   563→    for (let i = 0; i < this.shards.length; i++) {
+   564→      const s = this.shards[i];
+   565→      s.update(dt, this.t);
+   566→      if (!s.taken && s.group.position.distanceTo(this.player.pos) < 1.5) collected = i;
+   567→    }
+   568→    if (collected >= 0) {
+   569→      this.shards[collected].collect(this.particles);
+   570→      this.audio.shard(collected);
+   571→      const count = this.shards.filter((s) => s.taken).length;
+   572→      store.set({ shards: count });
+   573→      store.pushToast(`ECHO SHARD ${count}/${GAME.shardsNeeded}`, 'gold');
+   574→      if (count >= GAME.shardsNeeded && this.gate && !this.gate.active) {
+   575→        this.gate.activate(this.particles);
+   576→        this.audio.gateOpen();
+   577→        store.set({ gateActive: true });
+   578→        store.pushToast('THE GATE AWAKENS — REACH THE GOLD LIGHT', 'gold');
+   579→        this.emitPulse(this.gate.group.position.clone().add(new THREE.Vector3(0, 2, 0)), 'gold');
+   580→      }
+   581→    }
+   582→
+   583→    // --- gate ---
+   584→    this.gate?.update(dt, this.t);
+   585→    if (this.gate?.active) {
+   586→      const d = Math.hypot(
+   587→        this.player.pos.x - this.gate.group.position.x,
+   588→        this.player.pos.z - this.gate.group.position.z,
+   589→      );
+   590→      if (d < 2.2 && Math.abs(this.player.pos.y - this.gate.group.position.y) < 3) {
+   591→        this.clearDepth();
+   592→        return;
+   593→      }
+   594→    }
+   595→
+   596→    // --- hunters ---
+   597→    let alert = 0;
+   598→    for (const h of this.hunters) {
+   599→      const hit = h.update(dt, this.t, this.player.pos, 1);
+   600→      if (hit && this.player.invuln <= 0) this.damage(h.pos, true);
+   601→      if (h.state === 'alert') {
+   602→        const prox = 1 - Math.min(1, h.pos.distanceTo(this.player.pos) / 30);
+   603→        alert = Math.max(alert, prox);
+   604→      }
+   605→    }
+   606→    this.alertLevel = alert;
+   607→    this.audio.setAlert(alert);
+   608→
+   609→    // --- fx ---
+   610→    this.updateAmbient(dt);
+   611→
+   612→    // --- camera ---
+   613→    this.rig.update(dt, this.camera, this.player.pos, this.player.vel, level.colliders, this.reduceFx);
+   614→
+   615→    // --- HUD vitals (throttled) ---
+   616→    this.vitalsTimer -= dt;
+   617→    if (this.vitalsTimer <= 0) {
+   618→      this.vitalsTimer = 0.09;
+   619→      const st = useGameStore.getState();
+   620→      st.set({
+   621→        pulseReady: 1 - Math.min(1, this.pulseCd / WAVE.cooldown),
+   622→        dashReady: this.player.dashReady ? 1 : 0,
+   623→        alert,
+   624→        runTime: this.t - this.runStart,
+   625→        gateDir: this.gate?.active ? this.gateAngle() : null,
+   626→      });
+   627→    }
+   628→  }
+   629→
+   630→  private pulseCd = 0;
+   631→
+   632→  private tryPulse(): void {
+   633→    if (this.pulseCd > 0) return;
+   634→    this.pulseCd = WAVE.cooldown;
+   635→    this.emitPulse(this.player.pos.clone(), 'teal');
+   636→  }
+   637→
+   638→  private gateAngle(): number {
+   639→    if (!this.gate) return 0;
+   640→    const dx = this.gate.group.position.x - this.player.pos.x;
+   641→    const dz = this.gate.group.position.z - this.player.pos.z;
+   642→    return Math.atan2(dx, dz) + this.rig.yaw;
+   643→  }
+   644→
+   645→  private clearDepth(): void {
+   646→    this.phase = 'cleared';
+   647→    this.fadeTarget = 1;
+   648→    this.lastRunTime = this.t - this.runStart;
+   649→    this.audio.cleared();
+   650→    useGameStore.getState().set({ phase: 'cleared', lastRunTime: this.lastRunTime, alert: 0 });
+   651→    this.audio.setAlert(0);
+   652→    if (this.gate) {
+   653→      this.particles.burst(
+   654→        new THREE.Vector3(this.gate.group.position.x, this.gate.group.position.y + 2, this.gate.group.position.z),
+   655→        80,
+   656→        10,
+   657→        { color: COLORS.gate, life: 1.6, size: 0.6 },
+   658→      );
+   659→    }
+   660→  }
+   661→
+   662→  private lastRunTime = 0;
+   663→
+   664→  private updateFrozen(dt: number): void {
+   665→    // world suspended; only the abyss keeps whispering
+   666→    this.audio.update(dt);
+   667→  }
+   668→
+   669→  private updateAmbient(dt: number): void {
+   670→    this.audio.update(dt);
+   671→    this.particles.update(dt);
+   672→    this.updateWaves();
+   673→    for (const s of this.shards) s.update(dt, this.t);
+   674→    this.gate?.update(dt, this.t);
+   675→  }
+   676→
+   677→  private updateWaves(): void {
+   678→    const speed = WAVE.speed;
+   679→    for (let i = this.waves.length - 1; i >= 0; i--) {
+   680→      const w = this.waves[i];
+   681→      const age = this.t - w.t0;
+   682→      const radius = age * speed;
+   683→      if (radius > 110 || age > 4.2) {
+   684→        w.mesh.removeFromParent();
+   685→        w.mat.dispose();
+   686→        this.waves.splice(i, 1);
+   687→        continue;
+   688→      }
+   689→      // the shell is a launch cue only — hand over to the geometry band
+   690→      w.mesh.visible = radius < 26;
+   691→      w.mesh.scale.setScalar(Math.max(0.01, radius));
+   692→      w.mat.uniforms.uAge.value = age;
+   693→    }
+   694→  }
+   695→
+   696→  /* ================= perf ================= */
+   697→
+   698→  private adaptDpr(dt: number): void {
+   699→    this.dprCheck += dt;
+   700→    if (this.dprCheck < 2) return;
+   701→    this.dprCheck = 0;
+   702→    const target = Math.min(window.devicePixelRatio || 1, 2);
+   703→    if (this.frameEma > 21 && this.dpr > 1) {
+   704→      this.dpr = Math.max(1, this.dpr - 0.25);
+   705→      this.applyDpr();
+   706→    } else if (this.frameEma < 13.5 && this.dpr < target) {
+   707→      this.dpr = Math.min(target, this.dpr + 0.25);
+   708→      this.applyDpr();
+   709→    }
+   710→  }
+   711→
+   712→  private applyDpr(): void {
+   713→    this.renderer.setPixelRatio(this.dpr);
+   714→    this.composer.setPixelRatio(this.dpr);
+   715→    this.particles.setPixelRatio(this.dpr);
+   716→    this.resize();
+   717→  }
+   718→
+   719→  private resize(): void {
+   720→    const w = this.canvas.clientWidth || window.innerWidth;
+   721→    const h = this.canvas.clientHeight || window.innerHeight;
+   722→    this.renderer.setSize(w, h, false);
+   723→    this.composer.setSize(w, h);
+   724→    this.camera.aspect = w / h;
+   725→    this.camera.updateProjectionMatrix();
+   726→    this.dpr = this.renderer.getPixelRatio();
+   727→  }
+   728→
+   729→  private rigPos(): THREE.Vector3 {
+   730→    return this.rig.currentPos;
+   731→  }
+   732→  private rigLook(): THREE.Vector3 {
+   733→    return this.rig.currentLook;
+   734→  }
+   735→
+   736→  /** current player position (for debug/verification) */
+   737→  get playerPos(): THREE.Vector3 {
+   738→    return this.player.pos;
+   739→  }
+   740→
+   741→  get phaseName(): string {
+   742→    return this.phase;
+   743→  }
+   744→
+   745→  /** expose shard/taken state for verification */
+   746→  get shardTaken(): boolean[] {
+   747→    return this.shards.map((s) => s.taken);
+   748→  }
+   749→
+   750→  /** compact state for automated verification */
+   751→  get debugState(): object {
+   752→    return {
+   753→      depth: this.depth,
+   754→      hearts: this.player.hearts,
+   755→      gateActive: this.gate?.active ?? false,
+   756→      gatePos: this.gate ? this.gate.group.position.toArray().map((v) => Math.round(v * 10) / 10) : null,
+   757→      hunters: this.hunters.map((h) => h.state),
+   758→      shardPos: this.shards.filter((s) => !s.taken).map((s) => s.group.position.toArray().map((v) => Math.round(v * 10) / 10)),
+   759→      shardsTaken: this.shards.filter((s) => s.taken).length,
+   760→      time: Math.round(this.t * 100) / 100,
+   761→      matTime: this.level ? Math.round((this.level.material.uniforms.uTime.value as number) * 100) / 100 : -1,
+   762→      pulses: (this.pulseUniform?.value ?? []).map((p) => [p.x, p.y, p.z, Math.round(p.w * 100) / 100]).filter((p) => p[3] >= 0),
+   763→      camPos: this.camera.position.toArray().map((v) => Math.round(v * 10) / 10),
+   764→    };
+   765→  }
+   766→
+   767→  dispose(): void {
+   768→    this.disposed = true;
+   769→    cancelAnimationFrame(this.raf);
+   770→    window.removeEventListener('resize', this.onResize);
+   771→    document.removeEventListener('visibilitychange', this.onVisibility);
+   772→    this.input.dispose();
+   773→    this.clearLevelObjects();
+   774→    this.player.dispose(this.scene);
+   775→    this.particles.dispose();
+   776→    this.dust.dispose();
+   777→    this.audio.dispose();
+   778→    this.composer.dispose();
+   779→    this.renderer.dispose();
+   780→    if (activeEngine === this) activeEngine = null;
+   781→  }
+   782→}
+   783→
+   784→const ZERO = new THREE.Vector3();
+   785→const waveGeo = new THREE.SphereGeometry(1, 40, 26);
+   786→
