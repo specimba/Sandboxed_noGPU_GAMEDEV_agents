@@ -1,8 +1,9 @@
 'use client';
 
 import { create } from 'zustand';
+import type { Tier } from './run';
 
-export type Phase = 'loading' | 'error' | 'title' | 'playing' | 'paused' | 'dead';
+export type Phase = 'loading' | 'error' | 'title' | 'playing' | 'paused' | 'reward' | 'dead';
 
 export interface Toast {
   id: number;
@@ -14,7 +15,19 @@ export interface Banner {
   id: number;
   text: string;
   sub: string;
-  kind: 'wave' | 'warden' | 'overdrive';
+  kind: 'wave' | 'warden' | 'overdrive' | 'room' | 'boss';
+}
+
+export interface BoonChoice {
+  id: string;
+  name: string;
+  desc: string;
+  tier: Tier;
+}
+
+export interface MetaState {
+  dawn: number;
+  unlocked: Record<string, boolean>;
 }
 
 interface GameState {
@@ -32,13 +45,22 @@ interface GameState {
   shardsMax: number;
   embers: number;
 
-  /** 0..1 dash readiness */
   dashReady: number;
-  /** 0..1 overdrive charge; active shows remaining duration */
   overdrive: number;
   overdriveActive: boolean;
-  /** 0..1 sun rekindle energy */
   sun: number;
+
+  /** run structure */
+  roomLabel: string;
+  boonsTaken: string[];
+  boonChoices: BoonChoice[];
+  bossBar: { name: string; frac: number } | null;
+  won: boolean;
+  dawnEarned: number;
+
+  /** meta (persists) */
+  dawn: number;
+  unlocked: Record<string, boolean>;
 
   banner: Banner | null;
   muted: boolean;
@@ -74,6 +96,16 @@ export const useGameStore = create<GameState>()((set) => ({
   overdrive: 0,
   overdriveActive: false,
   sun: 0,
+
+  roomLabel: '',
+  boonsTaken: [],
+  boonChoices: [],
+  bossBar: null,
+  won: false,
+  dawnEarned: 0,
+
+  dawn: 0,
+  unlocked: {},
 
   banner: null,
   muted: false,
@@ -121,6 +153,29 @@ export function loadBest(): BestRecord {
 export function saveBest(rec: BestRecord): void {
   try {
     window.localStorage.setItem('hollowsun.best', JSON.stringify(rec));
+  } catch {
+    /* storage unavailable */
+  }
+}
+
+const META_KEY = 'hollowsun.meta';
+
+export function loadMeta(): MetaState {
+  try {
+    const raw = window.localStorage.getItem(META_KEY);
+    if (raw) {
+      const o = JSON.parse(raw) as Partial<MetaState>;
+      return { dawn: o.dawn ?? 0, unlocked: o.unlocked ?? {} };
+    }
+  } catch {
+    /* storage unavailable */
+  }
+  return { dawn: 0, unlocked: {} };
+}
+
+export function saveMeta(m: MetaState): void {
+  try {
+    window.localStorage.setItem(META_KEY, JSON.stringify(m));
   } catch {
     /* storage unavailable */
   }

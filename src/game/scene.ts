@@ -3,7 +3,7 @@ import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
-import { ARENA, COLORS } from './constants';
+import { ARENA, BIOMES, COLORS } from './constants';
 import { makeGlowTexture } from './fx';
 
 /**
@@ -25,6 +25,8 @@ const FLOOR_FRAG = /* glsl */ `
 uniform float uTime;
 uniform float uIgnite;      // 0..1 sun energy
 uniform vec2 uPlayer;
+uniform vec3 uCold;         // biome grid cold color
+uniform vec3 uHot;          // biome grid hot color
 uniform vec4 uRings[10];    // x, z, t0, unused — kill pulses on the floor
 varying vec3 vWorld;
 
@@ -69,8 +71,8 @@ void main() {
   float heat = (1.0 - smoothstep(0.0, 12.0 + uIgnite * 24.0, dCenter)) * (0.14 + uIgnite * 0.55);
   float flick = 0.85 + 0.15 * sin(uTime * 3.1 + cell.x * 2.0 + cell.y * 1.4);
 
-  vec3 cold = vec3(0.059, 0.227, 0.235);  // teal
-  vec3 hot = vec3(1.0, 0.62, 0.28);       // gold-orange
+  vec3 cold = uCold;
+  vec3 hot = uHot;
   vec3 lineCol = mix(cold, hot, clamp(heat * 1.5, 0.0, 1.0));
   float lineA = 0.15 + heat * 0.85 + ring * 1.4;
 
@@ -137,6 +139,11 @@ export class Scene {
   private starRing!: THREE.Mesh;
   private sunGroup!: THREE.Group;
   private shells: THREE.Mesh[] = [];
+  private starLight: THREE.PointLight;
+  private tgtCold = new THREE.Color(BIOMES[0].grid);
+  private tgtHot = new THREE.Color(BIOMES[0].hot);
+  private tgtFog = new THREE.Color(BIOMES[0].fog);
+  private tgtSun = new THREE.Color(BIOMES[0].sun);
   private time = 0;
   private ringCursor = 0;
 
@@ -155,9 +162,9 @@ export class Scene {
     this.camera.position.set(0, 24, 16);
 
     this.scene.add(new THREE.AmbientLight(0x33383f, 0.55));
-    const starLight = new THREE.PointLight(0xffc766, 30, 90, 1.6);
-    starLight.position.set(0, 3, 0);
-    this.scene.add(starLight);
+    this.starLight = new THREE.PointLight(0xffc766, 30, 90, 1.6);
+    this.starLight.position.set(0, 3, 0);
+    this.scene.add(this.starLight);
 
     this.buildFloor();
     this.buildWall();
@@ -185,6 +192,8 @@ export class Scene {
         uTime: { value: 0 },
         uIgnite: { value: 0 },
         uPlayer: { value: new THREE.Vector2(0, 12) },
+        uCold: { value: new THREE.Color(BIOMES[0].grid) },
+        uHot: { value: new THREE.Color(BIOMES[0].hot) },
         uRings: { value: Array.from({ length: 10 }, () => new THREE.Vector4(0, 0, -1, 0)) },
       },
     });
@@ -401,6 +410,15 @@ export class Scene {
 
   update(dt: number): void {
     this.time += dt;
+    // biome palette ease
+    const k = Math.min(1, dt * 1.6);
+    (this.floorMat.uniforms.uCold.value as THREE.Color).lerp(this.tgtCold, k);
+    (this.floorMat.uniforms.uHot.value as THREE.Color).lerp(this.tgtHot, k);
+    (this.scene.fog as THREE.FogExp2).color.lerp(this.tgtFog, k);
+    (this.scene.background as THREE.Color).lerp(this.tgtFog, k);
+    (this.starCore.material as THREE.MeshBasicMaterial).color.lerp(this.tgtSun, k);
+    this.starLight.color.lerp(this.tgtSun, k);
+
     this.floorMat.uniforms.uTime.value = this.time;
     this.dustMat.uniforms.uTime.value = this.time;
     this.sun.update(dt, this.time);
@@ -408,6 +426,15 @@ export class Scene {
       s.rotation.y += s.userData.spin * dt;
       s.rotation.x += s.userData.spin * 0.6 * dt;
     }
+  }
+
+  /** biome palette target (lerped in update) */
+  setBiome(i: number): void {
+    const b = BIOMES[Math.min(BIOMES.length - 1, Math.max(0, i))];
+    this.tgtCold.set(b.grid);
+    this.tgtHot.set(b.hot);
+    this.tgtFog.set(b.fog);
+    this.tgtSun.set(b.sun);
   }
 
   render(): void {

@@ -3,10 +3,22 @@ import {
   FOE,
   OVERDRIVE,
   PLAYER,
+  RUN,
   SCORE,
   SHARD,
   WAVES,
+  type Elite,
 } from './constants';
+import {
+  baseMods,
+  bossHp,
+  bossScore,
+  eliteChance,
+  isBossRoom,
+  roomBudget,
+  type BoonDef,
+  type Mods,
+} from './run';
 
 /**
  * HOLLOW SUN simulation — pure 2D math, zero rendering imports.
@@ -25,6 +37,10 @@ export interface SimEvents {
   onGraze(x: number, z: number): void;
   onHurt(x: number, z: number): void;
   onDash(x: number, z: number): void;
+  onRecall(x: number, z: number): void;
+  onShieldBreak(x: number, z: number): void;
+  onBossPhase(x: number, z: number, phase: number): void;
+  onRevive(x: number, z: number): void;
   onWardenSpawn(x: number, z: number): void;
   onWardenDie(x: number, z: number): void;
   onWaveStart(n: number): void;
@@ -45,6 +61,7 @@ interface Shard {
   targetId: number; // foe id while fly/chain (-1 none)
   bounces: number;
   flown: number; // straight-flight distance, forces the return leg
+  boost: number; // recall speed boost timer
   hitCd: Map<number, number>;
 }
 
@@ -58,10 +75,13 @@ interface Foe {
   hp: number;
   maxHp: number;
   r: number;
+  elite: Elite;
+  shieldUp: boolean;
+  boss: boolean;
   spawnT: number; // fade-in, harmless while > 0
-  state: number; // kind-specific FSM
+  state: number; // kind-specific FSM; boss = phase 1..3
   timer: number;
-  tx: number; // striker locked dash target
+  tx: number; // striker locked dash target; boss = escort-spawned flag
   tz: number;
   dx: number; // striker dash dir
   dz: number;
@@ -98,22 +118,31 @@ function clampArena(x: number, z: number, pad: number): { x: number; z: number }
 
 export class Sim {
   readonly events: SimEvents;
+  /** every build modifier (meta + boons) lives here */
+  mods: Mods;
+
+  // run context (drives budgets, elites, boss stats)
+  biome = 0;
+  room = 1;
 
   // ember
   px = 0;
   pz = 0;
   pvx = 0;
   pvz = 0;
-  embers = PLAYER.embers;
+  embers = 3;
+  maxEmbers = 3;
   invuln = 0;
   dashT = 0;
   dashCd = 0;
   dashDx = 0;
   dashDz = 0;
+  reviveUsed = false;
 
   // shards
   shards: Shard[] = [];
   throwCd = 0;
+  private dashHit = new Set<number>();
 
   // foes & bullets
   foes: Foe[] = [];
@@ -142,8 +171,9 @@ export class Sim {
   time = 0;
   over = false;
 
-  constructor(events: SimEvents) {
+  constructor(events: SimEvents, mods?: Partial<Mods>) {
     this.events = events;
+    this.mods = { ...baseMods(), ...mods };
     this.reset();
   }
 
@@ -152,19 +182,24 @@ export class Sim {
     this.pz = 12;
     this.pvx = 0;
     this.pvz = 0;
-    this.embers = PLAYER.embers;
+    this.maxEmbers = this.mods.maxEmbers;
+    this.embers = this.mods.maxEmbers;
     this.invuln = 1;
     this.dashT = 0;
     this.dashCd = 0;
+    this.reviveUsed = false;
+    this.dashHit.clear();
+    this.biome = 0;
+    this.room = 1;
     this.shards = [];
-    for (let i = 0; i < SHARD.startCount; i++) this.addShard();
+    for (let i = 0; i < SHARD.startCount + this.mods.startShards; i++) this.addShard();
     this.throwCd = 0;
     this.foes = [];
     this.bullets = [];
     this.marks = [];
-    this.wave = 0;
-    this.waveState = 'intermission';
-    this.intermissionT = 1.6;
+    this.wave = 1;
+    this.waveState = 'idle';
+    this.intermissionT = 0;
     this.spawnQueue = [];
     this.spawnT = 0;
     this.wardensKilled = 0;
@@ -189,8 +224,37 @@ export class Sim {
       targetId: -1,
       bounces: 0,
       flown: 0,
+      boost: 0,
       hitCd: new Map(),
     });
+  }
+
+  /* ---------------------------------------------------------------- */
+  /* run rooms                                                        */
+  /* ---------------------------------------------------------------- */
+
+  /** begin a specific run room (combat 1-2, boss = roomsPerBiome) */
+  startRoom(biome: number, room: number): void {
+    this.biome = biome;
+    this.room = room;
+    this.foes.length = 0;
+    this.bullets.length = 0;
+    this.marks.length = 0;
+    this.spawnQueue.length = 0;
+    this.invuln = Math.max(this.invuln, 0.8);
+    this.wave = biome * RUN.roomsPerBiome + room;
+    this.waveState = 'active';
+    this.spawnT = 0.5;
+    if (isBossRoom(room)) {
+      // boss + small escort fodder
+      const escort: FoeKind[] = biome === 0 ? ['drifter', 'drifter'] : ['drifter', 'striker'];
+      this.spawnQueue = escort;
+      this.marks.push({ x: this.px + 10, z: this.pz, t: 1.6, kind: 'warden' });
+      this.events.onWaveStart(this.wave);
+    } else {
+      this.spawnQueue = this.buildWaveQueue(this.wave, roomBudget(biome, room));
+      this.events.onWaveStart(this.wave);
+    }
   }
 
   get shardCount(): number {
@@ -207,6 +271,21 @@ export class Sim {
 
   get waveActive(): boolean {
     return this.waveState === 'active';
+  }
+
+  /* ---- modded tuning getters ---- */
+
+  private get shardSpeed(): number {
+    return SHARD.speed * this.mods.shardSpeed;
+  }
+  private get maxBounces(): number {
+    return SHARD.maxBounces + this.mods.bounces;
+  }
+  private get grazeR(): number {
+    return PLAYER.grazeRadius * this.mods.graze;
+  }
+  private get odDuration(): number {
+    return OVERDRIVE.duration + this.mods.odDuration;
   }
 
   /** advance the simulation; enemyDt already carries the Overdrive time scale */
@@ -248,6 +327,17 @@ export class Sim {
     this.dashCd = Math.max(0, this.dashCd - dt);
 
     if (wantDash && this.dashCd <= 0 && this.dashT <= 0) {
+      // dash-recall: airborne shards whip home at 1.5× speed
+      let recalled = false;
+      for (const s of this.shards) {
+        if (s.state !== 'orbit') {
+          s.state = 'return';
+          s.targetId = -1;
+          s.boost = 1;
+          recalled = true;
+        }
+      }
+      if (recalled) this.events.onRecall(this.px, this.pz);
       let dx = moveX;
       let dz = -moveY;
       const len = Math.hypot(dx, dz);
@@ -270,7 +360,8 @@ export class Sim {
       this.dashDx = dx;
       this.dashDz = dz;
       this.dashT = PLAYER.dashTime;
-      this.dashCd = PLAYER.dashCooldown;
+      this.dashCd = PLAYER.dashCooldown * this.mods.dashCd;
+      this.dashHit.clear();
       this.events.onDash(this.px, this.pz);
     }
 
@@ -279,8 +370,9 @@ export class Sim {
       this.pvx = this.dashDx * PLAYER.dashSpeed;
       this.pvz = this.dashDz * PLAYER.dashSpeed;
     } else {
-      const ax = moveX * PLAYER.accel;
-      const az = -moveY * PLAYER.accel;
+      const spd = this.mods.speed;
+      const ax = moveX * PLAYER.accel * spd;
+      const az = -moveY * PLAYER.accel * spd;
       this.pvx += (ax - PLAYER.drag * this.pvx) * dt;
       this.pvz += (az - PLAYER.drag * this.pvz) * dt;
     }
@@ -290,13 +382,40 @@ export class Sim {
     const c = clampArena(this.px, this.pz, PLAYER.radius);
     this.px = c.x;
     this.pz = c.z;
+
+    // dash strike: dashing through a foe burns it
+    if (this.dashT > 0) {
+      for (const f of this.foes) {
+        if (f.spawnT > 0 || this.dashHit.has(f.id)) continue;
+        const dd = Math.hypot(f.x - this.px, f.z - this.pz);
+        if (dd < f.r + PLAYER.radius + 0.35) {
+          this.dashHit.add(f.id);
+          const dl = Math.hypot(f.x - this.px, f.z - this.pz) || 1;
+          const kx = ((f.x - this.px) / dl) * 14 * this.mods.dashKnock;
+          const kz = ((f.z - this.pz) / dl) * 14 * this.mods.dashKnock;
+          const dead = this.damageFoe(f, this.mods.dashStrike);
+          if (!dead) {
+            f.vx += kx;
+            f.vz += kz;
+          }
+        }
+      }
+    }
   }
 
   private hurt(): void {
     if (this.invuln > 0 || this.dashT > 0 || this.over) return;
     this.embers -= 1;
-    this.invuln = PLAYER.invulnTime;
     this.chain = 0;
+    if (this.embers <= 0 && this.mods.revive && !this.reviveUsed) {
+      // SECOND DAWN — the shrine remembers you
+      this.reviveUsed = true;
+      this.embers = 1;
+      this.invuln = 2.5;
+      this.events.onRevive(this.px, this.pz);
+      return;
+    }
+    this.invuln = PLAYER.invulnTime;
     this.events.onHurt(this.px, this.pz);
     if (this.embers <= 0) {
       this.over = true;
@@ -322,10 +441,11 @@ export class Sim {
       s.z = this.pz + dirZ * 1.2;
       s.bounces = 0;
       s.flown = 0;
+      s.boost = 0;
       s.hitCd.clear();
       // always launch with full velocity along the aim direction; steering corrects from there
-      s.vx = dirX * SHARD.speed;
-      s.vz = dirZ * SHARD.speed;
+      s.vx = dirX * this.shardSpeed;
+      s.vz = dirZ * this.shardSpeed;
 
       // aim magnetism: snap to a foe near the aim point
       let best: Foe | null = null;
@@ -347,9 +467,30 @@ export class Sim {
       }
     }
     if (launched) {
-      this.throwCd = SHARD.throwCooldown;
+      this.throwCd = SHARD.throwCooldown * this.mods.throwCd;
       this.events.onThrow(this.px, this.pz);
     }
+  }
+
+  /** a chosen boon reshapes the build; immediate effects apply here too */
+  applyBoon(b: BoonDef): void {
+    const prevMax = this.mods.maxEmbers;
+    b.apply(this.mods);
+    if (this.mods.maxEmbers > prevMax) {
+      this.maxEmbers = this.mods.maxEmbers;
+      this.embers = Math.min(this.maxEmbers, this.embers + 1); // heal 1
+    }
+  }
+
+  /** QA hook: wipe the room (browser verification only) — bypasses boss floors */
+  debugClearRoom(): void {
+    for (const f of this.foes.slice()) {
+      f.state = 3;
+      f.spawnT = 0;
+      this.damageFoe(f, 999);
+    }
+    this.spawnQueue.length = 0;
+    this.marks.length = 0;
   }
 
   private foeById(id: number): Foe | null {
@@ -382,10 +523,12 @@ export class Sim {
         const d = Math.hypot(dx, dz);
         if (d < SHARD.catchRadius) {
           s.state = 'orbit';
+          s.boost = 0;
           this.events.onCatch(s.x, s.z);
-          this.addOverdrive(OVERDRIVE.catchCharge);
+          this.addOverdrive(OVERDRIVE.catchCharge + this.mods.odCatch);
           continue;
         }
+        s.boost = Math.max(0, s.boost - dt);
         const want = Math.atan2(dx, dz);
         this.steer(s, want, dt);
         s.x += s.vx * dt;
@@ -407,7 +550,7 @@ export class Sim {
         this.steer(s, want, dt);
       } else if (s.targetId < 0) {
         // straight flight: after enough distance with nothing hit, arc home
-        s.flown += SHARD.speed * dt;
+        s.flown += this.shardSpeed * dt;
         if (s.flown > 46) {
           s.state = 'return';
           continue;
@@ -434,29 +577,50 @@ export class Sim {
       const pd = Math.hypot(this.px - s.x, this.pz - s.z);
       if (s.state === 'return' && pd < SHARD.catchRadius) {
         s.state = 'orbit';
+        s.boost = 0;
         this.events.onCatch(s.x, s.z);
-        this.addOverdrive(OVERDRIVE.catchCharge);
+        this.addOverdrive(OVERDRIVE.catchCharge + this.mods.odCatch);
         continue;
       }
-      if (pd < SHARD.catchRadius * 0.7 && s.bounces > SHARD.maxBounces) {
+      if (pd < SHARD.catchRadius * 0.7 && s.bounces > this.maxBounces) {
         s.state = 'orbit';
+        s.boost = 0;
         this.events.onCatch(s.x, s.z);
         continue;
       }
 
       // contact with foes
-      const dmg = SHARD.damage * (this.odActive ? OVERDRIVE.damageMult : 1);
+      const dmg = (1 + (SHARD.damage - 1) + (this.mods.dmg - 1)) * (this.odActive ? OVERDRIVE.damageMult : 1);
       for (const f of this.foes) {
         if (f.spawnT > 0) continue;
         if ((s.hitCd.get(f.id) ?? 0) > 0) continue;
         const dd = Math.hypot(f.x - s.x, f.z - s.z);
         if (dd < f.r + 0.55) {
           s.hitCd.set(f.id, SHARD.hitCooldown);
+          // SHIELDED elite: first hit only strips the halo
+          if (f.shieldUp) {
+            f.shieldUp = false;
+            this.events.onShieldBreak(f.x, f.z);
+            continue;
+          }
           const killed = this.damageFoe(f, dmg);
+          if (!killed) {
+            // knockback along the shard's travel
+            const sl = Math.hypot(s.vx, s.vz) || 1;
+            f.vx += (s.vx / sl) * 9;
+            f.vz += (s.vz / sl) * 9;
+          }
+          // SEARING CHAIN: splash around every shard impact
+          if (this.mods.splash > 0) {
+            for (const o of this.foes) {
+              if (o === f || o.spawnT > 0 || o.shieldUp) continue;
+              if (Math.hypot(o.x - f.x, o.z - f.z) < 3.5) this.damageFoe(o, this.mods.splash);
+            }
+          }
           if (killed) continue;
           // ricochet to the next foe
           s.bounces += 1;
-          if (s.bounces <= SHARD.maxBounces) {
+          if (s.bounces <= this.maxBounces) {
             this.chain += 1;
             this.chainT = SCORE.multDecay;
             const next = this.findChainTarget(f, s);
@@ -484,8 +648,9 @@ export class Sim {
     while (delta < -Math.PI) delta += TAU;
     const maxTurn = SHARD.turnRate * dt;
     const ang = cur + Math.max(-maxTurn, Math.min(maxTurn, delta));
-    s.vx = Math.sin(ang) * SHARD.speed;
-    s.vz = Math.cos(ang) * SHARD.speed;
+    const sp = this.shardSpeed * (s.boost > 0 ? 1.5 : 1);
+    s.vx = Math.sin(ang) * sp;
+    s.vz = Math.cos(ang) * sp;
   }
 
   private findChainTarget(from: Foe, s: Shard): Foe | null {
@@ -508,19 +673,36 @@ export class Sim {
   /* ------------------------------------------------------------------ */
 
   private damageFoe(f: Foe, dmg: number): boolean {
+    // BOSS PHASE FLOOR: a warden hangs on by a thread until its final phase
+    // has played — burst builds can never skip the learning curve
+    if (f.boss && f.state < 3) {
+      const floor = f.state === 1 ? f.maxHp * 0.34 : 0.5;
+      if (f.hp - dmg < floor) {
+        f.hp = Math.max(floor, 0.5);
+        return false;
+      }
+    }
     f.hp -= dmg;
     if (f.hp > 0) return false;
-    // score
-    const base =
-      f.kind === 'drifter' ? SCORE.drifter : f.kind === 'striker' ? SCORE.striker : f.kind === 'weaver' ? SCORE.weaver : WAVES.wardenScore;
+    // score: elites pay ×1.5, bosses scale by biome
+    let base = f.kind === 'drifter' ? SCORE.drifter : f.kind === 'striker' ? SCORE.striker : f.kind === 'weaver' ? SCORE.weaver : WAVES.wardenScore;
+    if (f.boss) base = bossScore(this.biome);
+    if (f.elite) base *= 1.5;
     this.score += Math.round((base * this.mult) / 5) * 5;
-    this.addOverdrive(OVERDRIVE.killCharge);
+    this.addOverdrive(OVERDRIVE.killCharge + this.mods.odOnKill + (f.elite ? 3 : 0));
     if (f.kind === 'warden') {
       this.wardensKilled += 1;
       this.events.onWardenDie(f.x, f.z);
       if (this.shardCount < SHARD.maxCount) {
         this.addShard();
         this.events.onShardGain();
+      }
+    }
+    if (f.elite === 'split') {
+      // SPLITTER: two minis burst out
+      for (const side of [-1, 1]) {
+        const a = Math.random() * TAU;
+        this.spawnFoe('drifter', f.x + Math.cos(a) * 1.4 * side, f.z + Math.sin(a) * 1.4 * side, '', false, 1, 0.5);
       }
     }
     this.events.onKill(f.kind, f.x, f.z);
@@ -533,7 +715,7 @@ export class Sim {
     if (i >= 0) this.foes.splice(i, 1);
   }
 
-  private spawnFoe(kind: FoeKind, x: number, z: number): void {
+  private spawnFoe(kind: FoeKind, x: number, z: number, elite: Elite = '', boss = false, hpOverride?: number, rOverride?: number): void {
     const id = this.nextId++;
     let hp = 2;
     let r = 0.8;
@@ -544,9 +726,13 @@ export class Sim {
       hp = 3;
       r = 0.9;
     } else if (kind === 'warden') {
-      hp = WAVES.wardenHpBase + WAVES.wardenHpPerKill * this.wardensKilled;
+      hp = boss ? bossHp(this.biome) : WAVES.wardenHpBase;
       r = 2.2;
     }
+    if (hpOverride !== undefined) hp = hpOverride;
+    if (rOverride !== undefined) r = rOverride;
+    if (elite === 'shield') hp += 2;
+    if (elite === 'swift') hp = Math.max(1, hp - 1);
     this.foes.push({
       id,
       kind,
@@ -557,8 +743,11 @@ export class Sim {
       hp,
       maxHp: hp,
       r,
+      elite,
+      shieldUp: elite === 'shield',
+      boss,
       spawnT: kind === 'warden' ? 1.4 : 0.45,
-      state: 0,
+      state: boss ? 1 : 0, // boss phase
       timer: 0,
       tx: 0,
       tz: 0,
@@ -568,12 +757,20 @@ export class Sim {
       burstT: 0,
       patternAngle: Math.random() * TAU,
     });
-    if (kind === 'warden') this.events.onWardenSpawn(x, z);
+    if (kind === 'warden' && boss) this.events.onWardenSpawn(x, z);
+  }
+
+  private rollElite(): Elite {
+    if (Math.random() >= eliteChance(this.biome)) return '';
+    const roll = Math.random();
+    return roll < 0.34 ? 'swift' : roll < 0.67 ? 'shield' : 'split';
   }
 
   private updateFoes(dt: number): void {
-    const spdScale = Math.min(1.6, 1 + this.wave * 0.03);
+    const spdScale = Math.min(1.6, 1 + this.wave * 0.03) * 1; // per-foe swift handled below
     for (const f of this.foes) {
+      const swiftK = f.elite === 'swift' ? 1.55 : 1;
+      const eff = spdScale * swiftK;
       if (f.spawnT > 0) {
         f.spawnT -= dt;
         continue;
@@ -584,7 +781,7 @@ export class Sim {
 
       switch (f.kind) {
         case 'drifter': {
-          const sp = 4.3 * spdScale;
+          const sp = 4.3 * eff;
           f.vx += ((pdx / pd) * sp - f.vx) * Math.min(1, dt * 2.2);
           f.vz += ((pdz / pd) * sp - f.vz) * Math.min(1, dt * 2.2);
           break;
@@ -592,7 +789,7 @@ export class Sim {
         case 'striker': {
           if (f.state === 0) {
             // seek
-            const sp = 6 * spdScale;
+            const sp = 6 * eff;
             f.vx += ((pdx / pd) * sp - f.vx) * Math.min(1, dt * 2.5);
             f.vz += ((pdz / pd) * sp - f.vz) * Math.min(1, dt * 2.5);
             if (pd < 15) {
@@ -637,8 +834,8 @@ export class Sim {
           const tangX = -pdz / pd;
           const tangZ = pdx / pd;
           const radial = pd > 21 ? -0.8 : pd < 15 ? 0.8 : 0;
-          const wantVx = tangX * 5 * spdScale + (pdx / pd) * radial * 5;
-          const wantVz = tangZ * 5 * spdScale + (pdz / pd) * radial * 5;
+          const wantVx = tangX * 5 * eff + (pdx / pd) * radial * 5;
+          const wantVz = tangZ * 5 * eff + (pdz / pd) * radial * 5;
           f.vx += (wantVx - f.vx) * Math.min(1, dt * 2.4);
           f.vz += (wantVz - f.vz) * Math.min(1, dt * 2.4);
           if (f.burstLeft > 0) {
@@ -662,13 +859,26 @@ export class Sim {
           // slow menacing drift toward the ember
           f.vx += ((pdx / pd) * 1.7 - f.vx) * Math.min(1, dt * 1.2);
           f.vz += ((pdz / pd) * 1.7 - f.vz) * Math.min(1, dt * 1.2);
+
+          if (f.boss) {
+            // phase escalation on hp thresholds
+            const frac = f.hp / f.maxHp;
+            const wantPhase = frac > 0.66 ? 1 : frac > 0.33 ? 2 : 3;
+            if (wantPhase > f.state) {
+              f.state = wantPhase;
+              f.timer = Math.max(f.timer, 0.9); // breath before the new pattern
+              this.events.onBossPhase(f.x, f.z, wantPhase);
+            }
+          }
+
+          const interval = f.boss ? 2.6 * (f.state === 1 ? 1 : f.state === 2 ? 0.75 : 0.55) : 2.6;
+          const ringN = f.boss ? 12 + f.state * 3 : 14;
           f.timer -= dt;
           if (f.timer <= 0) {
-            f.timer = 2.6;
+            f.timer = interval;
             f.patternAngle += 0.37;
-            const n = 14;
-            for (let i = 0; i < n; i++) {
-              const a = (i / n) * TAU + f.patternAngle;
+            for (let i = 0; i < ringN; i++) {
+              const a = (i / ringN) * TAU + f.patternAngle * (f.boss && f.state === 3 ? 1.9 : 1);
               this.bullets.push({
                 x: f.x + Math.sin(a) * f.r,
                 z: f.z + Math.cos(a) * f.r,
@@ -677,6 +887,13 @@ export class Sim {
                 life: FOE.bulletLife,
                 grazed: false,
               });
+            }
+            // The Hollow Choir: escorts in phase 3
+            if (f.boss && this.biome === 2 && f.state === 3 && f.tx < 1) {
+              f.tx = 1;
+              const a1 = Math.random() * TAU;
+              this.marks.push({ x: Math.sin(a1) * 20, z: Math.cos(a1) * 20, t: 0.9, kind: 'striker' });
+              this.marks.push({ x: -Math.sin(a1) * 20, z: -Math.cos(a1) * 20, t: 0.9, kind: 'striker' });
             }
           }
           break;
@@ -736,7 +953,7 @@ export class Sim {
           this.bullets.splice(i, 1);
           continue;
         }
-      } else if (!b.grazed && d < PLAYER.grazeRadius + FOE.bulletRadius) {
+      } else if (!b.grazed && d < this.grazeR + FOE.bulletRadius) {
         b.grazed = true;
         this.addOverdrive(OVERDRIVE.grazeCharge);
         this.score += SCORE.graze;
@@ -755,7 +972,7 @@ export class Sim {
       m.t -= dt;
       if (m.t <= 0) {
         this.marks.splice(i, 1);
-        this.spawnFoe(m.kind, m.x, m.z);
+        this.spawnFoe(m.kind, m.x, m.z, m.kind === 'warden' ? '' : this.rollElite(), m.kind === 'warden');
       }
     }
   }
@@ -764,9 +981,8 @@ export class Sim {
   /* waves                                                               */
   /* ------------------------------------------------------------------ */
 
-  private buildWaveQueue(n: number): FoeKind[] {
-    const isWarden = n % WAVES.wardenEvery === 0;
-    let points = Math.round(WAVES.budgetBase + WAVES.budgetPerWave * n) * (isWarden ? 0.5 : 1);
+  private buildWaveQueue(n: number, budget: number): FoeKind[] {
+    let points = budget;
     const q: FoeKind[] = [];
     while (points >= 1) {
       const roll = Math.random();
@@ -781,34 +997,19 @@ export class Sim {
         points -= 1;
       }
     }
-    // deterministic floor so late waves always escalate
+    // deterministic floor so later rooms always escalate
     if (n >= 3 && !q.includes('weaver')) q.push('weaver');
     if (n >= 2 && !q.includes('striker')) q.push('striker');
-    if (isWarden) q.push('warden');
-    // shuffle the fodder but keep the warden mid-queue
     for (let i = q.length - 1; i > 0; i--) {
-      if (q[i] === 'warden') continue;
       const j = Math.floor(Math.random() * (i + 1));
-      if (q[j] === 'warden') continue;
       [q[i], q[j]] = [q[i], q[j]];
     }
     return q;
   }
 
-  private startWave(n: number): void {
-    this.wave = n;
-    this.waveState = 'active';
-    this.spawnQueue = this.buildWaveQueue(n);
-    this.spawnT = 0.4;
-    this.events.onWaveStart(n);
-  }
-
   private updateWave(dt: number): void {
-    if (this.waveState === 'intermission') {
-      this.intermissionT -= dt;
-      if (this.intermissionT <= 0) this.startWave(this.wave + 1);
-      return;
-    }
+    void dt;
+    if (this.waveState !== 'active') return;
     if (this.spawnQueue.length > 0) {
       this.spawnT -= dt;
       if (this.spawnT <= 0) {
@@ -833,8 +1034,8 @@ export class Sim {
         }
       }
     } else if (this.marks.length === 0 && this.foes.length === 0) {
-      this.waveState = 'intermission';
-      this.intermissionT = WAVES.intermission;
+      // room cleared — the engine decides what comes next (shrine / boss / next biome)
+      this.waveState = 'idle';
       this.events.onWaveClear(this.wave);
     }
   }
@@ -852,7 +1053,7 @@ export class Sim {
     if (this.odCharge >= OVERDRIVE.max) {
       this.odCharge = 0;
       this.odActive = true;
-      this.odT = OVERDRIVE.duration;
+      this.odT = this.odDuration;
       this.events.onOverdriveStart();
     }
   }

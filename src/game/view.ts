@@ -57,6 +57,9 @@ export class View {
   private markPool: MarkView[] = [];
   private markCursor = 0;
 
+  private haloPool: MarkView[] = [];
+  private haloUsed = 0;
+
   private telegraphs: { line: THREE.Line; mat: THREE.LineBasicMaterial }[] = [];
 
   private reticle: THREE.Group;
@@ -138,6 +141,18 @@ export class View {
       mesh.renderOrder = 6;
       scene.add(mesh);
       this.markPool.push({ mesh, mat });
+    }
+
+    // ---- elite halos (readability: ring = affix) ----
+    const haloGeo = new THREE.RingGeometry(0.8, 0.94, 36);
+    haloGeo.rotateX(-Math.PI / 2);
+    for (let i = 0; i < 12; i++) {
+      const mat = new THREE.MeshBasicMaterial({ color: 0xffe9a0, transparent: true, opacity: 0.7, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide });
+      const mesh = new THREE.Mesh(haloGeo, mat);
+      mesh.visible = false;
+      mesh.renderOrder = 6;
+      scene.add(mesh);
+      this.haloPool.push({ mesh, mat });
     }
 
     // ---- striker telegraph lines ----
@@ -234,9 +249,20 @@ export class View {
       const spawnK = f.spawnT > 0 ? 1 - Math.max(0, f.spawnT) / (f.kind === 'warden' ? 1.4 : 0.45) : 1;
       const pop = f.kind === 'warden' ? 0.35 : 0.15;
       const sc = Math.max(0.02, spawnK) * (1 + pop * (1 - spawnK));
-      v.group.scale.setScalar(sc);
+      v.group.scale.setScalar(sc * (f.elite === 'swift' ? 0.85 : 1));
       v.mesh.rotation.y += dt * (f.kind === 'warden' ? 0.7 : 1.8);
       if (f.kind === 'drifter') v.mesh.rotation.x += dt * 1.1;
+
+      // elite halo — the affix is the ring (VISUAL_AUDIO.md color law)
+      if (f.elite && f.spawnT <= 0 && this.haloUsed < this.haloPool.length) {
+        const h = this.haloPool[this.haloUsed++];
+        h.mesh.visible = true;
+        h.mesh.position.set(f.x, 0.16, f.z);
+        const haloR = (f.r + 0.55) * (f.elite === 'swift' ? 0.85 : 1);
+        h.mesh.scale.setScalar(haloR);
+        h.mat.color.set(f.elite === 'swift' ? 0xffffff : f.elite === 'shield' ? 0xffe9a0 : 0xff8aa0);
+        h.mat.opacity = 0.55 + 0.25 * Math.sin(this.time * 6 + f.id);
+      }
 
       // striker telegraph line while aiming
       if (f.kind === 'striker' && f.state === 1) {
@@ -283,6 +309,8 @@ export class View {
       v.mat.opacity = 0.25 + 0.6 * k * (0.6 + 0.4 * Math.sin(this.time * 22));
     }
     for (let i = this.markCursor; i < this.markPool.length; i++) this.markPool[i].mesh.visible = false;
+    for (let i = this.haloUsed; i < this.haloPool.length; i++) this.haloPool[i].mesh.visible = false;
+    this.haloUsed = 0;
 
     // warden arriving: extra dread particles
     for (const f of sim.foes) {

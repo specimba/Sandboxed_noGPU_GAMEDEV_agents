@@ -177,3 +177,23 @@ Stage Summary:
 - HOLLOW SUN is live at / — ECHOVOID fully removed. Commit: this one (see git log). tsc + eslint clean, dev server green.
 - The honest failure this round: I previously reported HOLLOW SUN as shipped when it wasn't in the repo at all. This task shipped it for real with browser evidence at every step.
 - Backlog: warden spiral escort patterns, sun burn-stage, chain-route preview, biome palettes.
+---
+Task ID: 9 (roguelite expansion, Steps 0-6)
+Agent: lead (Z.ai Code) running the role pipeline: Tech Lead → Game Designer → Combat Engineer → AI Engineer → Art Director → Tech Lead integration
+Task: Transform HOLLOW SUN from wave-survival into a run-based roguelite with hub meta-progression, boons, elites, biome bosses — preserving architecture contract and QA pipeline.
+
+Work Log:
+- Step 0 (Tech Lead): docs/ARCHITECTURE_AUDIT.md — system map, boundary rulings (run logic pure in sim/run.ts, orchestration in engine, palettes as uniforms, meta in store), risk list, success metrics.
+- Step 1 (Designer): docs/references/ teardowns ×8 (Dead Cells, Isaac, Morta, Hades, Katana ZERO/HM, Hollow Knight, Ghostrunner, Noita) each with psychology/implementation/adaptation/differences; docs/megabonk-lessons.md (web-verified facts: 1.3M copies/2wk, 117k CCU, $8, 94%) with binding pitch/length/ttfd/clip answers.
+- Steps 2-5: docs/RUN_STRUCTURE.md (3 biomes × 3 rooms, dawn economy, Shrine of Dawn meta ladder), docs/COMBAT_SPEC.md (dash-recall, dash strike, knockback, 12 boons, rarity weights), docs/ENEMIES_BOSSES.md (3 elite affixes, boss chassis + per-biome temperament, 3 phases), docs/VISUAL_AUDIO.md (color law, light-budget laws, biome palettes, drone roots).
+- Step 6 implementation: src/game/run.ts NEW pure module (Mods, 12 boons, rollBoons tiered, SHRINE_UPGRADES, dawnEarned, room/boss helpers); sim.ts extended (mods-driven tuning getters, startRoom, elite affixes swift/shield/split + minis, boss chassis with per-biome hp/name/score + 3-phase escalation + Hollow Choir escorts, shard knockback, Searing splash, dash strike + dash-recall, Second Dawn revive, applyBoon, debugClearRoom QA hook); engine.ts run sequencing (reward phase, advanceRoom, biome palette/audio switches, finishRun dawn banking, buyUpgrade, boss-bar/room-label/boon-pip HUD emit); scene.ts parameterized uCold/uHot + setBiome lerp (zero shader recompiles); view.ts elite halo rings (ring = affix); audio.ts biome drone roots + recall/shieldBreak/bossPhase/revive/shrine; store.ts meta persistence (hollowsun.meta) + reward phase + run stats; UI: reward shrine cards (1-3/H keys), death screen with dawn line + victory variant, title Shrine of Dawn panel with purchase buttons.
+- QA pipeline:
+  * headless sim drive (scripts/simdrive.ts, bun): bot clears full run — 5/5 PASS after two real fixes the drive exposed: (1) bosses could be one-frame burst-killed, skipping phase learning curve → BOSS PHASE FLOOR (hangs on at 34%/0.5hp until phase 3), (2) floor boundary 0.33 vs `> 0.33` comparison jumped phase 1→3 with one event → 0.34.
+  * browser (agent-browser): title → run → spawns → kill chain → reward shrine UI (tiered cards render) → boon applies (odCatch 6 verified) → boss room (WARDEN OF ASH/GLASS bars, radial patterns) → biome palettes ASH→GLASS(violet)→HEART(white-gold) with zero shader recompiles → elite halos visible and readable → death → +114 dawn banked → shrine purchase (114→84, kinsight) → persistence across reload ✓. 0 console errors. (Flaky async eval timers caused two false alarms mid-QA; synchronous step-through cleared the game — no real-path soft-lock: every room clear immediately exits 'playing'.)
+  * light budget: biome palettes live inside the existing min(col,1.15) floor cap; no new bloom contributors (halos are thin rings); screenshots .qa/rg-*.png.
+  * tsc + eslint clean.
+
+Stage Summary:
+- HOLLOW SUN is now a complete roguelite loop: run (9 rooms / 3 biome bosses) → boon builds (12 boons × stacking) → death/victory → dawn embers → Shrine of Dawn meta (6 permanent unlocks incl. revive) → faster next run. Pitch per megabonk-lessons: "bend living shards of light through ricochet geometry to rekindle a dying star."
+- Key decisions: run logic stays pure (run.ts + sim mods struct — headless-verifiable); elites are affixes on existing kits (Megabonk scope rule); boss phases are floor-protected (learning curve guaranteed); color law preserved (affix = ring, never recolor).
+- Roadmap next: chain-route preview line, biome 2+ bosses with distinct kits, win-streak mutators, Steam packaging via Tauri (roadmap only).

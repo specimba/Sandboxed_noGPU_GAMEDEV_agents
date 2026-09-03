@@ -83,7 +83,28 @@ export const WAVES = {
   wardenHpBase: 34,
   wardenHpPerKill: 13,
   wardenScore: 500,
+  /** per-biome boss hp (room 3 of each biome) */
+  bossHp: [34, 47, 60],
 };
+
+export const RUN = {
+  biomes: ['ASHFALL VESTIBULE', 'GLASS HOLLOW', 'THE HEART'] as const,
+  bossNames: ['WARDEN OF ASH', 'WARDEN OF GLASS', 'THE HOLLOW CHOIR'] as const,
+  roomsPerBiome: 3, // rooms 1-2 combat, room 3 = boss
+  dawnPerRoom: 8,
+  dawnPerBoss: 30,
+  dawnPerScore: 0.01,
+  dawnWinBonus: 100,
+};
+
+/** biome palettes — grid cold/hot, fog, sun tint (see VISUAL_AUDIO.md) */
+export const BIOMES = [
+  { grid: 0x0f3a3c, hot: 0xffb35c, fog: 0x02030a, sun: 0xffc766 }, // ashfall
+  { grid: 0x2a1236, hot: 0xff5c8a, fog: 0x07030c, sun: 0xff9a76 }, // glass hollow
+  { grid: 0x35333c, hot: 0xfff0d0, fog: 0x090910, sun: 0xfff0c8 }, // the heart
+] as const;
+
+export type Elite = '' | 'swift' | 'shield' | 'split';
 
 export const SCORE = {
   drifter: 50,

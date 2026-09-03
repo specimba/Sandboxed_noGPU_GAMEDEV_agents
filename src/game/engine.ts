@@ -4,17 +4,27 @@ import {
   FEEL,
   OVERDRIVE,
   PLAYER,
-  SHARD,
-  WAVES,
+  RUN,
   starEnergy,
 } from './constants';
 import { AudioEngine } from './audio';
 import { CameraRig } from './cameraRig';
 import { ParticlePool, RingPool } from './fx';
 import { Input } from './input';
+import {
+  BOONS,
+  SHRINE_UPGRADES,
+  biomeName,
+  bossName,
+  dawnEarned,
+  isBossRoom,
+  metaMods,
+  rollBoons,
+  type BoonDef,
+} from './run';
 import { Scene } from './scene';
 import { Sim, type FoeKind, type SimEvents } from './sim';
-import { loadBest, saveBest, useGameStore } from './store';
+import { loadBest, loadMeta, saveBest, saveMeta, useGameStore } from './store';
 import { View } from './view';
 
 /**
@@ -60,6 +70,14 @@ export class Engine {
   private ndc = new THREE.Vector2();
   private disposed = false;
 
+  // run progression
+  private runBiome = 0;
+  private runRoom = 1;
+  private roomsCleared = 0;
+  private bossesKilled = 0;
+  private boonsTaken: Record<string, number> = {};
+  private lastBoonChoices: BoonDef[] = [];
+
   constructor(canvas: HTMLCanvasElement) {
     // eslint-disable-next-line @typescript-eslint/no-this-alias
     active = this;
@@ -72,10 +90,13 @@ export class Engine {
     this.sim = new Sim(this.makeEvents());
 
     const best = loadBest();
+    const meta = loadMeta();
     this.store.getState().set({
       phase: 'title',
       best: best.score,
       bestWave: best.wave,
+      dawn: meta.dawn,
+      unlocked: meta.unlocked,
       muted: false,
       touch: 'ontouchstart' in window || navigator.maxTouchPoints > 0,
     });
@@ -103,17 +124,32 @@ export class Engine {
 
   begin(): void {
     if (this.store.getState().phase !== 'title' && this.store.getState().phase !== 'dead') return;
+    this.startRun();
+  }
+
+  private startRun(): void {
     this.audio.unlock();
     this.audio.uiClick();
+    // stack the shrine into a fresh build
+    this.sim.mods = metaMods(this.store.getState().unlocked);
     this.sim.reset();
+    this.runBiome = 0;
+    this.runRoom = 1;
+    this.roomsCleared = 0;
+    this.bossesKilled = 0;
+    this.boonsTaken = {};
+    this.lastBoonChoices = [];
     this.deathT = -1;
     this.hitstop = 0;
     this.slowT = 0;
+    this.scene.setBiome(0);
+    this.audio.setBiome(0);
     this.rig.engage(this.sim.px, this.sim.pz);
+    this.sim.startRoom(0, 1);
     this.store.getState().set({
       phase: 'playing',
       score: 0,
-      wave: 0,
+      wave: 1,
       embers: this.sim.embers,
       shards: this.sim.shardCount,
       mult: 1,
@@ -121,18 +157,103 @@ export class Engine {
       overdriveActive: false,
       sun: 0,
       banner: null,
+      boonsTaken: [],
+      bossBar: null,
+      won: false,
+      dawnEarned: 0,
+      roomLabel: `${biomeName(0)} · ROOM 1`,
     });
   }
 
   restart(): void {
-    if (this.store.getState().phase !== 'paused' && this.store.getState().phase !== 'dead') return;
-    this.audio.uiClick();
-    this.sim.reset();
-    this.deathT = -1;
-    this.hitstop = 0;
-    this.slowT = 0;
-    this.rig.snap(this.sim.px, this.sim.pz);
-    this.store.getState().set({ phase: 'playing', banner: null, mult: 1 });
+    const p = this.store.getState().phase;
+    if (p !== 'paused' && p !== 'dead') return;
+    this.startRun();
+  }
+
+  /* ---- reward shrine ---- */
+
+  private openReward(): void {
+    const depth = this.runBiome * RUN.roomsPerBiome + this.runRoom;
+    this.lastBoonChoices = rollBoons(this.boonsTaken, 3, depth);
+    this.store.getState().set({
+      phase: 'reward',
+      boonChoices: this.lastBoonChoices.map((b) => ({ id: b.id, name: b.name, desc: b.desc, tier: b.tier })),
+    });
+  }
+
+  chooseBoon(i: number): void {
+    if (this.store.getState().phase !== 'reward') return;
+    const def = this.lastBoonChoices[i];
+    if (!def) return;
+    this.sim.applyBoon(def);
+    this.boonsTaken[def.id] = (this.boonsTaken[def.id] ?? 0) + 1;
+    this.store.getState().pushToast(`+ ${def.name}`, 'gold');
+    this.audio.shrine();
+    this.advanceRoom();
+  }
+
+  chooseHeal(): void {
+    if (this.store.getState().phase !== 'reward') return;
+    if (this.sim.embers < this.sim.maxEmbers) {
+      this.sim.embers += 1;
+      this.store.getState().pushToast('EMBER MENDED', 'gold');
+    } else {
+      this.store.getState().pushToast('ALREADY FULL', 'info');
+    }
+    this.audio.shrine();
+    this.advanceRoom();
+  }
+
+  private advanceRoom(): void {
+    this.runRoom += 1;
+    if (this.runRoom > RUN.roomsPerBiome) {
+      this.runBiome += 1;
+      this.runRoom = 1;
+      this.scene.setBiome(this.runBiome);
+      this.audio.setBiome(this.runBiome);
+      this.store.getState().showBanner(biomeName(this.runBiome), 'DEEPER INTO THE DEAD STAR', 'room');
+    }
+    this.sim.startRoom(this.runBiome, this.runRoom);
+    this.store.getState().set({
+      phase: 'playing',
+      boonChoices: [],
+      bossBar: null,
+      roomLabel: `${biomeName(this.runBiome)} · ${isBossRoom(this.runRoom) ? 'BOSS' : 'ROOM ' + this.runRoom}`,
+    });
+  }
+
+  /* ---- shrine of dawn (hub meta) ---- */
+
+  buyUpgrade(id: string): void {
+    const st = this.store.getState();
+    const up = SHRINE_UPGRADES.find((u) => u.id === id);
+    if (!up || st.unlocked[id] || st.dawn < up.cost) return;
+    const meta = { dawn: st.dawn - up.cost, unlocked: { ...st.unlocked, [id]: true } };
+    saveMeta(meta);
+    this.store.getState().set(meta);
+    this.audio.shrine();
+    this.store.getState().pushToast(`${up.name} UNLOCKED`, 'gold');
+  }
+
+  /** bank dawn + best at run end (death or victory) */
+  private finishRun(won: boolean): void {
+    const dawn = dawnEarned(this.sim.score, this.roomsCleared, this.bossesKilled, won);
+    const st = this.store.getState();
+    const meta = { dawn: st.dawn + dawn, unlocked: st.unlocked };
+    saveMeta(meta);
+    const rec = { score: this.sim.score, wave: this.sim.wave };
+    const best = { score: Math.max(rec.score, st.best), wave: Math.max(rec.wave, st.bestWave) };
+    saveBest(best);
+    this.store.getState().set({
+      dawn: meta.dawn,
+      dawnEarned: dawn,
+      won,
+      best: best.score,
+      bestWave: best.wave,
+      sun: won ? 1 : starEnergy(this.sim.score),
+      ...(won ? { phase: 'dead' as const } : {}),
+    });
   }
 
   pause(): void {
@@ -241,24 +362,59 @@ export class Engine {
       onWardenSpawn: (x, z) => {
         this.audio.wardenSpawn();
         this.rig.addShake(0.4);
-        this.store.getState().showBanner('THE WARDEN', 'IT KEEPS THE LIGHT', 'warden');
+        this.store.getState().showBanner(bossName(this.runBiome), 'IT KEEPS THE LIGHT', 'boss');
       },
       onWardenDie: (x, z) => {
         this.audio.wardenDie();
         this.rings.fire(x, z, 24, 0.9, 0xffc766);
         this.scene.floorPulse(x, z);
-        this.store.getState().pushToast('WARDEN FELLED — SHARD OF THE SUN +1', 'gold');
+        this.bossesKilled += 1;
+        this.store.getState().pushToast(`${bossName(this.runBiome)} FELLED — SHARD OF THE SUN +1`, 'gold');
       },
       onWaveStart: (n) => {
-        this.audio.waveStart(n);
-        const warden = n % WAVES.wardenEvery === 0;
-        this.store.getState().showBanner(`WAVE ${n}`, warden ? 'SOMETHING STIRS IN THE DARK' : 'THEY HEARD YOU', 'wave');
-        this.store.getState().set({ wave: n });
+        void n;
+        const st = this.store.getState();
+        if (isBossRoom(this.runRoom)) {
+          // boss banner fires from onWardenSpawn
+        } else {
+          st.showBanner(`ROOM ${this.runRoom}`, biomeName(this.runBiome), 'room');
+        }
       },
-      onWaveClear: (n) => {
+      onWaveClear: () => {
         this.audio.waveClear();
-        this.store.getState().pushToast(`WAVE ${n} CLEARED`, 'gold');
-        this.store.getState().set({ sun: starEnergy(this.sim.score) });
+        this.roomsCleared += 1;
+        const st = this.store.getState();
+        st.set({ sun: starEnergy(this.sim.score) });
+        if (this.runBiome === 2 && isBossRoom(this.runRoom)) {
+          // THE HEART rekindles — run won
+          this.finishRun(true);
+          return;
+        }
+        st.pushToast(isBossRoom(this.runRoom) ? 'WARDEN FELLED' : 'ROOM CLEARED', 'gold');
+        this.openReward();
+      },
+      onRecall: (x, z) => {
+        this.audio.recall();
+        this.fx.burst(x, z, 26, 12, { color: SHARD_C, life: 0.4, size: 0.5, up: 0.2 });
+      },
+      onShieldBreak: (x, z) => {
+        this.audio.shieldBreak();
+        this.fx.burst(x, z, 60, 14, { color: GOLD_C, life: 0.5, size: 0.5, up: 0.3 });
+        this.rings.fire(x, z, 3.2, 0.35, 0xffe9a0);
+      },
+      onBossPhase: (x, z, phase) => {
+        this.audio.bossPhase();
+        this.rig.addShake(0.35);
+        this.hitstop = Math.min(FEEL.hitstopMax, this.hitstop + 0.12);
+        this.rings.fire(x, z, 14 + phase * 4, 0.8, 0xff7a2d);
+        this.store.getState().pushToast(`THE WARDEN RAGES — PHASE ${phase}`, 'red');
+      },
+      onRevive: (x, z) => {
+        this.audio.revive();
+        this.rig.addShake(0.5);
+        this.fx.burst(x, z, 300, 20, { color: EMBER_C, life: 1.1, size: 0.6, spiral: 16, up: 0.4 });
+        this.rings.fire(x, z, 18, 0.9, 0xffe9bd);
+        this.store.getState().showBanner('SECOND DAWN', 'THE SHRINE REMEMBERS YOU', 'overdrive');
       },
       onOverdriveStart: () => {
         this.audio.overdriveStart();
@@ -275,13 +431,7 @@ export class Engine {
         this.deathT = 1.35;
         this.fx.burst(this.sim.px, this.sim.pz, 700, 24, { color: EMBER_C, life: 1.6, size: 0.55, spiral: 18, up: 0.5 });
         this.rings.fire(this.sim.px, this.sim.pz, 26, 1.1, 0xffe9bd);
-        // commit best
-        const s = this.store.getState();
-        const rec = { score: this.sim.score, wave: this.sim.wave };
-        if (rec.score > s.best || rec.wave > s.bestWave) {
-          saveBest({ score: Math.max(rec.score, s.best), wave: Math.max(rec.wave, s.bestWave) });
-          this.store.getState().set({ best: Math.max(rec.score, s.best), bestWave: Math.max(rec.wave, s.bestWave) });
-        }
+        this.finishRun(false);
       },
       onSpawnMark: (x, z) => {
         this.rings.fire(x, z, 2.2, 0.8, 0xff2d4e);
@@ -310,7 +460,7 @@ export class Engine {
       return;
     }
 
-    if (phase === 'paused' || phase === 'dead') {
+    if (phase === 'paused' || phase === 'dead' || phase === 'reward') {
       this.scene.render();
       return;
     }
@@ -400,6 +550,11 @@ export class Engine {
     this.hudT += dtReal;
     if (this.hudT > 0.085) {
       this.hudT = 0;
+      const boss = this.sim.foes.find((f) => f.boss);
+      const boonLabels = Object.entries(this.boonsTaken).map(([id, n]) => {
+        const def = BOONS.find((b) => b.id === id);
+        return def ? (n > 1 ? `${def.name.split(' ')[0]}×${n}` : def.name.split(' ')[0]) : '';
+      }).filter(Boolean);
       this.store.getState().set({
         score: this.sim.score,
         mult: this.sim.mult,
@@ -411,6 +566,9 @@ export class Engine {
         overdrive: this.sim.odActive ? Math.max(0, this.sim.odT / OVERDRIVE.duration) : this.sim.odCharge / OVERDRIVE.max,
         overdriveActive: this.sim.odActive,
         sun: energy,
+        roomLabel: `${biomeName(this.runBiome)} · ${isBossRoom(this.runRoom) ? 'BOSS' : 'ROOM ' + this.runRoom}`,
+        bossBar: boss ? { name: bossName(this.runBiome), frac: Math.max(0, boss.hp / boss.maxHp) } : null,
+        boonsTaken: boonLabels,
       });
     }
 
@@ -472,3 +630,4 @@ const FOE_C = new THREE.Color(0xff5a3c);
 const WARDEN_C = new THREE.Color(0xff7a2d);
 const EMBER_C = new THREE.Color(0xffe9bd);
 const WHITE_C = new THREE.Color(0xffffff);
+const GOLD_C = new THREE.Color(0xffe9a0);

@@ -6,7 +6,6 @@ export default function Hud() {
   const phase = useGameStore((s) => s.phase);
   const score = useGameStore((s) => s.score);
   const best = useGameStore((s) => s.best);
-  const wave = useGameStore((s) => s.wave);
   const enemiesLeft = useGameStore((s) => s.enemiesLeft);
   const mult = useGameStore((s) => s.mult);
   const shards = useGameStore((s) => s.shards);
@@ -18,6 +17,9 @@ export default function Hud() {
   const sun = useGameStore((s) => s.sun);
   const banner = useGameStore((s) => s.banner);
   const toasts = useGameStore((s) => s.toasts);
+  const roomLabel = useGameStore((s) => s.roomLabel);
+  const bossBar = useGameStore((s) => s.bossBar);
+  const boonsTaken = useGameStore((s) => s.boonsTaken);
 
   if (phase === 'loading' || phase === 'error' || phase === 'title') return null;
 
@@ -38,14 +40,32 @@ export default function Hud() {
         </div>
       </div>
 
-      {/* top left — wave */}
+      {/* top left — room strip */}
       <div className="absolute left-4 top-4 flex flex-col gap-1">
-        <span className="hs-tracking text-sm text-amber-100/90 sm:text-base">WAVE {String(wave).padStart(2, '0')}</span>
+        <span className="hs-tracking text-[10px] text-amber-200/70 sm:text-xs">{roomLabel}</span>
         {playing && enemiesLeft > 0 && (
           <span className="hs-tracking text-[10px] text-red-300/80 sm:text-xs">{enemiesLeft} REMAIN</span>
         )}
         <span className="hs-tracking text-[10px] text-amber-100/35">BEST {best.toLocaleString()}</span>
+        {boonsTaken.length > 0 && (
+          <span className="hs-tracking max-w-40 text-[9px] leading-4 text-amber-300/60 sm:max-w-52 sm:text-[10px]">
+            {boonsTaken.join(' · ')}
+          </span>
+        )}
       </div>
+
+      {/* boss bar */}
+      {bossBar && (
+        <div className="absolute left-1/2 top-16 w-72 -translate-x-1/2 sm:w-96">
+          <div className="hs-tracking mb-1 text-center text-[10px] text-orange-200/90">{bossBar.name}</div>
+          <div className="h-2 w-full overflow-hidden rounded-full bg-white/10">
+            <div
+              className="h-full rounded-full bg-gradient-to-r from-red-700 via-orange-500 to-amber-300 transition-all duration-150"
+              style={{ width: `${Math.round(bossBar.frac * 100)}%`, boxShadow: '0 0 14px rgba(255,120,50,0.8)' }}
+            />
+          </div>
+        </div>
+      )}
 
       {/* top right — sun rekindle */}
       <div className="absolute right-4 top-4 flex flex-col items-end gap-1">
@@ -119,11 +139,19 @@ export default function Hud() {
         </div>
       </div>
 
-      {/* wave / warden banner */}
+      {/* room / boss banner */}
       {banner && (
         <div key={banner.id} className="hs-banner absolute left-1/2 top-1/3 flex -translate-x-1/2 flex-col items-center gap-2">
           <span
-            className={`hs-tracking text-3xl font-bold sm:text-5xl ${banner.kind === 'warden' ? 'text-orange-300' : banner.kind === 'overdrive' ? 'text-amber-100' : 'text-amber-50'}`}
+            className={`hs-tracking text-3xl font-bold sm:text-5xl ${
+              banner.kind === 'boss'
+                ? 'text-orange-300'
+                : banner.kind === 'overdrive'
+                  ? 'text-amber-100'
+                  : banner.kind === 'room'
+                    ? 'text-amber-50'
+                    : 'text-amber-50'
+            }`}
             style={{ textShadow: '0 0 30px rgba(255,150,60,0.6)' }}
           >
             {banner.text}

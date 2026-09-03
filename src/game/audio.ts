@@ -69,6 +69,46 @@ export class AudioEngine {
     }
   }
 
+  /* biome drone root: A1 → C#2 → E2 */
+  setBiome(b: number): void {
+    if (!this.ctx) return;
+    const ratios = [1, 1.26, 1.5];
+    const r = ratios[Math.min(ratios.length - 1, Math.max(0, b))];
+    const bases = [55, 55.4, 82.4];
+    for (let i = 0; i < 3 && i < this.droneOscs.length; i++) {
+      this.droneOscs[i].frequency.setTargetAtTime(bases[i] * r, this.ctx.currentTime, 0.6);
+    }
+  }
+
+  recall(): void {
+    this.noise(0.18, 0.12, 'bandpass', 2600, 900);
+    this.tone(980, 0.12, 'sine', 0.1, 620);
+  }
+
+  shieldBreak(): void {
+    this.tone(1480, 0.2, 'triangle', 0.18, 740);
+    this.noise(0.12, 0.12, 'highpass', 5200);
+  }
+
+  bossPhase(): void {
+    // rising fifth + swell — the warden breathes
+    this.tone(196, 0.5, 'sawtooth', 0.2, 294);
+    this.tone(98, 0.6, 'sawtooth', 0.16, 147);
+    this.noise(0.55, 0.18, 'lowpass', 900, 2400);
+  }
+
+  revive(): void {
+    for (let i = 0; i < 5; i++) {
+      this.tone(PENTATONIC[4 + (i % 5)] ?? 440, 0.4, 'triangle', 0.12, undefined, i * 0.08);
+    }
+  }
+
+  shrine(): void {
+    this.tone(523.25, 0.3, 'triangle', 0.12);
+    this.tone(659.26, 0.4, 'triangle', 0.1, undefined, 0.1);
+    this.tone(783.99, 0.5, 'triangle', 0.08, undefined, 0.2);
+  }
+
   /* ---------------------------------------------------------------- */
   /* ambience                                                          */
   /* ---------------------------------------------------------------- */
