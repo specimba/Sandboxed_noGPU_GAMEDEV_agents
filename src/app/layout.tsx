@@ -14,17 +14,17 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "ECHOVOID — Sing to the Void",
+  title: "HOLLOW SUN — The Last Ember",
   description:
-    "An original 3D descent: the world is pitch black, and only your echo pulses reveal it — for a breath. Collect shards, wake the gate, but the Listeners hunt by sound. Three.js/WebGL, no downloads.",
-  keywords: ["browser game", "WebGL", "Three.js", "echolocation", "3D game", "ECHOVOID"],
-  authors: [{ name: "ECHOVOID" }],
+    "An original arena shooter inside a dead star: throw living shards of light that ricochet between enemies and return like boomerangs. Graze fire to charge Overdrive — every point rekindles the cracked sun. Three.js/WebGL, no downloads.",
+  keywords: ["browser game", "WebGL", "Three.js", "twin-stick", "arena shooter", "HOLLOW SUN"],
+  authors: [{ name: "HOLLOW SUN" }],
   icons: {
     icon: "https://z-cdn.chatglm.cn/z-ai/static/logo.svg",
   },
   openGraph: {
-    title: "ECHOVOID",
-    description: "See with sound. Survive what listens. Descend forever.",
+    title: "HOLLOW SUN",
+    description: "The world is built out of light. Rekindle the dead star.",
     type: "website",
   },
 };
@@ -34,7 +34,7 @@ export const viewport: Viewport = {
   initialScale: 1,
   maximumScale: 1,
   userScalable: false,
-  themeColor: "#030508",
+  themeColor: "#02030a",
 };
 
 export default function RootLayout({

@@ -51,6 +51,7 @@ void main() {
 
   vec4 hc = hexCoords(p * 0.62);
   float edge = smoothstep(0.46, 0.40, hexDist(hc.xy));
+  vec2 cell = hc.zw;
 
   // kill pulse rings sweeping across the grid
   float ring = 0.0;
@@ -65,13 +66,13 @@ void main() {
   }
 
   // ignition heat: strongest at the star, spreads with energy
-  float heat = (1.0 - smoothstep(0.0, 14.0 + uIgnite * 26.0, dCenter)) * (0.18 + uIgnite * 0.95);
-  float flick = 0.85 + 0.15 * sin(uTime * 3.1 + hc.z.x * 2.0 + hc.z.y * 1.4);
+  float heat = (1.0 - smoothstep(0.0, 12.0 + uIgnite * 24.0, dCenter)) * (0.14 + uIgnite * 0.55);
+  float flick = 0.85 + 0.15 * sin(uTime * 3.1 + cell.x * 2.0 + cell.y * 1.4);
 
   vec3 cold = vec3(0.059, 0.227, 0.235);  // teal
   vec3 hot = vec3(1.0, 0.62, 0.28);       // gold-orange
   vec3 lineCol = mix(cold, hot, clamp(heat * 1.5, 0.0, 1.0));
-  float lineA = 0.16 + heat * 1.35 + ring * 1.5;
+  float lineA = 0.15 + heat * 0.85 + ring * 1.4;
 
   // ember light puddle under the player
   float pd = distance(p, uPlayer);
@@ -80,9 +81,10 @@ void main() {
 
   // the star's well: dark sink at the very center + molten core ring
   float well = smoothstep(3.4, 1.2, dCenter);
-  lineA += well * (0.4 + uIgnite * 1.4);
+  lineA += well * (0.35 + uIgnite * 0.6);
 
   vec3 col = lineCol * edge * lineA * flick;
+  col = min(col, vec3(1.15));  // keep the grid luminous, never white
   // swallow everything at the arena rim
   col *= 1.0 - smoothstep(ARENA_RADIUS - 4.0, ARENA_RADIUS + 1.0, dCenter);
   col *= 1.0 - smoothstep(14.0, 34.0, length(vWorld - cameraPosition) * 0.35);
@@ -107,7 +109,7 @@ void main() {
   float fade = smoothstep(0.0, 0.55, vUv.y) * (1.0 - smoothstep(0.62, 1.0, vUv.y));
   float side = smoothstep(0.0, 0.42, vUv.x) * (1.0 - smoothstep(0.58, 1.0, vUv.x));
   float breathe = 0.75 + 0.25 * sin(uTime * 1.7 + uSeed * 12.0);
-  vec3 col = vec3(1.0, 0.78, 0.42) * fade * side * (0.14 + uEnergy * 0.85) * breathe;
+  vec3 col = vec3(1.0, 0.78, 0.42) * fade * side * (0.10 + uEnergy * 0.45) * breathe;
   gl_FragColor = vec4(col, 1.0);
 }
 `;
@@ -125,7 +127,7 @@ export class Scene {
   readonly camera: THREE.PerspectiveCamera;
   readonly composer: EffectComposer;
   readonly bloom: UnrealBloomPass;
-  readonly floorMat!: THREE.ShaderMaterial;
+  floorMat!: THREE.ShaderMaterial;
   readonly sun: SunRig;
   private dustMat!: THREE.ShaderMaterial;
   private rayMats: THREE.ShaderMaterial[] = [];

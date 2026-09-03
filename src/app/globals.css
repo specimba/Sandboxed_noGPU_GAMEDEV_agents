@@ -122,32 +122,51 @@
 }
 
 /* ============================================================
-   ECHOVOID — game layer styles
+   HOLLOW SUN — game layer styles
    ============================================================ */
 
 html, body {
   overflow: hidden;
   overscroll-behavior: none;
-  background: #030508;
+  background: #02030a;
 }
 
-/* title screen expanding echo rings */
-@keyframes evRing {
-  0%   { transform: translate(-50%, -50%) scale(1);   opacity: 0.9; }
-  100% { transform: translate(-50%, -50%) scale(9);   opacity: 0; }
+.hs-tracking {
+  letter-spacing: 0.22em;
 }
+
+/* title flicker — a dying star's last light */
+@keyframes hsFlicker {
+  0%, 100% { opacity: 1; }
+  92% { opacity: 1; }
+  94% { opacity: 0.72; }
+  96% { opacity: 1; }
+  97.5% { opacity: 0.85; }
+}
+.hs-flicker { animation: hsFlicker 4.2s infinite; }
+
+/* threat / ready pulse */
+@keyframes hsPulse {
+  0%, 100% { opacity: 0.5; }
+  50% { opacity: 1; }
+}
+.hs-pulse { animation: hsPulse 0.9s ease-in-out infinite; }
+
+/* wave banner */
+@keyframes hsBanner {
+  0% { opacity: 0; transform: translate(-50%, 14px) scale(0.96); }
+  14% { opacity: 1; transform: translate(-50%, 0) scale(1); }
+  80% { opacity: 1; }
+  100% { opacity: 0; transform: translate(-50%, -10px) scale(1.02); }
+}
+.hs-banner { animation: hsBanner 2.2s ease-out forwards; }
 
 /* toast entrance */
-@keyframes evToastIn {
+@keyframes hsToastIn {
   from { opacity: 0; transform: translateY(8px); }
-  to   { opacity: 1; transform: translateY(0); }
+  to { opacity: 1; transform: translateY(0); }
 }
-
-/* listener-threat pulse */
-@keyframes evPulse {
-  0%, 100% { opacity: 0.35; }
-  50%      { opacity: 1; }
-}
+.hs-toast { animation: hsToastIn 0.22s ease-out; }
 
 /* slim scrollbars inside overlays */
 ::-webkit-scrollbar { width: 8px; height: 8px; }
@@ -157,5 +176,5 @@ html, body {
 
 /* reduced motion: kill decorative animation */
 @media (prefers-reduced-motion: reduce) {
-  .ev-ring, .ev-toast { animation: none !important; }
+  .hs-flicker, .hs-pulse, .hs-banner, .hs-toast { animation: none !important; }
 }

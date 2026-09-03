@@ -13,12 +13,8 @@ export default function GameCanvas() {
     let engine: Engine | null = null;
     try {
       engine = new Engine(canvas);
-      useGameStore.getState().set({
-        touch: 'ontouchstart' in window || navigator.maxTouchPoints > 0,
-      });
-      (window as unknown as Record<string, unknown>).__echovoidStore = useGameStore;
     } catch (err) {
-      console.error('[ECHOVOID] WebGL init failed:', err);
+      console.error('[HOLLOW SUN] WebGL init failed:', err);
       useGameStore.getState().set({ phase: 'error', webglError: true });
     }
     return () => engine?.dispose();
@@ -28,7 +24,7 @@ export default function GameCanvas() {
     <canvas
       ref={ref}
       className="absolute inset-0 block h-full w-full"
-      aria-label="ECHOVOID — 3D game viewport"
+      aria-label="HOLLOW SUN — 3D game viewport"
     />
   );
 }

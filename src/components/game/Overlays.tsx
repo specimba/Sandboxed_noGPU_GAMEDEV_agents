@@ -2,126 +2,100 @@
 
 import { getEngine } from '@/game/engine';
 import { useGameStore } from '@/game/store';
-import { depthRoman } from '@/game/constants';
-
-function Panel({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="absolute inset-0 z-30 flex items-center justify-center bg-black/70 backdrop-blur-[3px]">
-      <div className="relative w-[min(92vw,420px)] border border-white/15 bg-black/70 p-8 font-mono">
-        {children}
-      </div>
-    </div>
-  );
-}
-
-function Btn({
-  label,
-  onClick,
-  accent,
-}: {
-  label: string;
-  onClick: () => void;
-  accent?: boolean;
-}) {
-  return (
-    <button
-      onClick={onClick}
-      className="w-full border px-4 py-2.5 text-[11px] tracking-[0.35em] transition-all focus:outline-none focus-visible:ring-1 focus-visible:ring-white/50"
-      style={{
-        borderColor: accent ? 'rgba(255,210,122,0.6)' : 'rgba(255,255,255,0.2)',
-        color: accent ? '#ffd27a' : 'rgba(255,255,255,0.8)',
-      }}
-      onMouseEnter={(e) => (e.currentTarget.style.background = accent ? 'rgba(255,210,122,0.08)' : 'rgba(255,255,255,0.06)')}
-      onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
-    >
-      {label}
-    </button>
-  );
-}
-
-function fmtTime(s: number): string {
-  const m = Math.floor(s / 60);
-  const r = Math.floor(s % 60);
-  return `${m}:${String(r).padStart(2, '0')}`;
-}
 
 export default function Overlays() {
   const phase = useGameStore((s) => s.phase);
-  const depth = useGameStore((s) => s.depth);
-  const shards = useGameStore((s) => s.shards);
-  const deaths = useGameStore((s) => s.deaths);
-  const lastRunTime = useGameStore((s) => s.lastRunTime);
+  const webglError = useGameStore((s) => s.webglError);
+  const score = useGameStore((s) => s.score);
+  const best = useGameStore((s) => s.best);
+  const bestWave = useGameStore((s) => s.bestWave);
+  const wave = useGameStore((s) => s.wave);
   const muted = useGameStore((s) => s.muted);
-  const reduceFx = useGameStore((s) => s.reduceFx);
 
   if (phase === 'paused') {
     return (
-      <Panel>
-        <div className="mb-6 text-center text-lg tracking-[0.5em] text-white/90">SUSPENDED</div>
-        <div className="flex flex-col gap-2.5">
-          <Btn label="RESUME" onClick={() => getEngine()?.resume()} accent />
-          <Btn label="RESTART DEPTH" onClick={() => getEngine()?.restartDepth()} />
-          <Btn label={muted ? 'SOUND — OFF' : 'SOUND — ON'} onClick={() => getEngine()?.toggleMute()} />
-          <Btn label={reduceFx ? 'REDUCED FX — ON' : 'REDUCED FX — OFF'} onClick={() => getEngine()?.toggleReduceFx()} />
-          <Btn label="ABANDON TO SURFACE" onClick={() => getEngine()?.quitToTitle()} />
+      <div className="absolute inset-0 z-30 flex items-center justify-center bg-black/60 backdrop-blur-[2px]">
+        <div className="flex flex-col items-center gap-3 text-center">
+          <h2 className="hs-tracking text-2xl text-amber-50 sm:text-3xl" style={{ textShadow: '0 0 24px rgba(255,190,90,0.4)' }}>
+            THE EMBER RESTS
+          </h2>
+          <button
+            type="button"
+            onClick={() => getEngine()?.resume()}
+            className="hs-tracking w-56 border border-amber-200/50 px-6 py-3 text-sm text-amber-100 transition-all hover:border-amber-200 hover:bg-amber-200/10"
+          >
+            RESUME
+          </button>
+          <button
+            type="button"
+            onClick={() => getEngine()?.restart()}
+            className="hs-tracking w-56 border border-amber-200/25 px-6 py-3 text-sm text-amber-100/80 transition-all hover:border-amber-200/60 hover:bg-amber-200/5"
+          >
+            RESTART RUN
+          </button>
+          <button
+            type="button"
+            onClick={() => getEngine()?.toggleMute()}
+            className="hs-tracking w-56 border border-amber-200/25 px-6 py-3 text-sm text-amber-100/80 transition-all hover:border-amber-200/60 hover:bg-amber-200/5"
+          >
+            SOUND — {muted ? 'OFF' : 'ON'}
+          </button>
+          <button
+            type="button"
+            onClick={() => getEngine()?.abandon()}
+            className="hs-tracking w-56 border border-red-400/25 px-6 py-3 text-xs text-red-200/80 transition-all hover:border-red-400/60 hover:bg-red-400/5"
+          >
+            ABANDON TO TITLE
+          </button>
+          <p className="hs-tracking mt-2 text-[10px] text-white/30">ESC — RESUME</p>
         </div>
-        <div className="mt-6 text-center text-[9px] tracking-[0.3em] text-white/35">ESC TO RESUME</div>
-      </Panel>
+      </div>
     );
   }
 
   if (phase === 'dead') {
+    const isBest = score >= best && score > 0;
     return (
-      <Panel>
-        <div className="mb-2 text-center text-lg tracking-[0.45em] text-red-300/90" style={{ textShadow: '0 0 20px rgba(255,59,78,0.4)' }}>
-          CONSUMED
-        </div>
-        <div className="mb-6 text-center text-[10px] leading-relaxed tracking-[0.25em] text-white/50">
-          THE VOID TOOK YOUR LIGHT AT DEPTH {depthRoman(depth)}
-        </div>
-        <div className="mb-6 flex justify-around border-y border-white/10 py-4 text-center">
-          <div>
-            <div className="text-xl text-white/90">{depthRoman(depth)}</div>
-            <div className="mt-1 text-[8px] tracking-[0.3em] text-white/40">DEPTH</div>
+      <div className="absolute inset-0 z-30 flex items-center justify-center bg-black/70 backdrop-blur-[2px]">
+        <div className="flex flex-col items-center gap-4 text-center">
+          <h2
+            className="hs-tracking text-3xl font-bold text-red-200 sm:text-4xl"
+            style={{ textShadow: '0 0 30px rgba(255,60,60,0.5)' }}
+          >
+            THE EMBER FADES
+          </h2>
+          <div className="hs-tracking flex flex-col gap-1 text-sm text-amber-100/85">
+            <span className="text-3xl font-bold tabular-nums text-amber-100 sm:text-4xl">{score.toLocaleString()}</span>
+            <span className="text-[10px] text-amber-200/60">
+              WAVE {wave} · BEST {best.toLocaleString()} · WAVE {bestWave}
+            </span>
+            {isBest && <span className="hs-pulse mt-1 text-xs text-amber-300">★ BRIGHTEST EMBER YET ★</span>}
           </div>
-          <div>
-            <div className="text-xl text-amber-200/90">{shards}/3</div>
-            <div className="mt-1 text-[8px] tracking-[0.3em] text-white/40">SHARDS</div>
-          </div>
-          <div>
-            <div className="text-xl text-white/90">{deaths}</div>
-            <div className="mt-1 text-[8px] tracking-[0.3em] text-white/40">DEATHS</div>
-          </div>
+          <button
+            type="button"
+            onClick={() => getEngine()?.restart()}
+            className="hs-tracking mt-2 border border-amber-200/60 bg-black/40 px-10 py-4 text-sm text-amber-100 transition-all hover:border-amber-200 hover:bg-amber-200/10 hover:shadow-[0_0_30px_rgba(255,190,90,0.35)]"
+          >
+            REKINDLE
+          </button>
+          <p className="hs-tracking text-[10px] text-white/30">ENTER — REKINDLE</p>
         </div>
-        <Btn label="RETURN TO THE DARK" onClick={() => getEngine()?.respawn()} accent />
-      </Panel>
+      </div>
     );
   }
 
-  if (phase === 'cleared') {
+  if (phase === 'error') {
     return (
-      <Panel>
-        <div
-          className="mb-2 text-center text-lg tracking-[0.45em] text-amber-200"
-          style={{ textShadow: '0 0 25px rgba(255,210,122,0.5)' }}
-        >
-          DEPTH {depthRoman(depth)} CLEARED
+      <div className="absolute inset-0 z-30 flex items-center justify-center bg-black p-6 text-center">
+        <div className="flex max-w-md flex-col gap-3">
+          <h2 className="hs-tracking text-xl text-red-300">THE DARK CONSUMES ALL LIGHT</h2>
+          <p className="text-sm text-white/60">
+            {webglError
+              ? 'WebGL could not start on this device or browser. Try a hardware-accelerated browser (Chrome / Edge / Safari) with hardware acceleration enabled.'
+              : 'Something went wrong while waking the star.'}
+          </p>
         </div>
-        <div className="mb-6 text-center text-[10px] tracking-[0.3em] text-white/50">
-          THE GATE SWALLOWS YOU — DEEPER STILL
-        </div>
-        <div className="mb-6 flex justify-around border-y border-white/10 py-4 text-center">
-          <div>
-            <div className="text-xl text-white/90">{fmtTime(lastRunTime)}</div>
-            <div className="mt-1 text-[8px] tracking-[0.3em] text-white/40">TIME</div>
-          </div>
-          <div>
-            <div className="text-xl text-amber-200/90">{shards}/3</div>
-            <div className="mt-1 text-[8px] tracking-[0.3em] text-white/40">SHARDS</div>
-          </div>
-        </div>
-        <Btn label="DESCEND ▼" onClick={() => getEngine()?.descend()} accent />
-      </Panel>
+      </div>
     );
   }
 

@@ -1,125 +1,103 @@
 'use client';
 
-import { useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { getEngine } from '@/game/engine';
 import { useGameStore } from '@/game/store';
 
-/**
- * Touch controls: left virtual joystick, right action buttons.
- * Camera look is handled by dragging on the canvas itself (Input class).
- */
+/** touch: left virtual stick + THROW / DASH buttons */
 export default function TouchControls() {
   const touch = useGameStore((s) => s.touch);
   const phase = useGameStore((s) => s.phase);
   const stickRef = useRef<HTMLDivElement | null>(null);
-  const knobRef = useRef<HTMLDivElement | null>(null);
-  const activeId = useRef<number | null>(null);
+  const [knob, setKnob] = useState({ x: 0, y: 0, active: false });
+  const stickId = useRef<number>(-1);
 
-  if (!touch || phase !== 'playing') return null;
+  useEffect(() => {
+    if (!touch || phase !== 'playing') {
+      getEngine()?.setTouchMove(0, 0);
+    }
+  }, [touch, phase]);
 
-  const setMove = (x: number, y: number) => {
-    const engine = getEngine();
-    if (!engine) return;
-    engine.input.touchMoveX = x;
-    engine.input.touchMoveY = y;
+  if (!touch || (phase !== 'playing' && phase !== 'paused')) return null;
+
+  const startStick = (e: React.PointerEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    stickId.current = e.pointerId;
+    (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
+    moveStick(e);
   };
 
-  const handleStart = (e: React.TouchEvent) => {
-    e.preventDefault();
-    const t = e.changedTouches[0];
-    if (!t) return;
-    activeId.current = t.identifier;
-  };
-  const handleMove = (e: React.TouchEvent) => {
-    e.preventDefault();
-    for (const t of Array.from(e.changedTouches)) {
-      if (t.identifier !== activeId.current) continue;
-      const el = stickRef.current;
-      if (!el) return;
-      const r = el.getBoundingClientRect();
-      const cx = r.left + r.width / 2;
-      const cy = r.top + r.height / 2;
-      let dx = (t.clientX - cx) / (r.width / 2);
-      let dy = (t.clientY - cy) / (r.height / 2);
-      const len = Math.hypot(dx, dy);
-      if (len > 1) {
-        dx /= len;
-        dy /= len;
-      }
-      setMove(dx, -dy);
-      if (knobRef.current) {
-        knobRef.current.style.transform = `translate(${dx * 28}px, ${dy * 28}px)`;
-      }
+  const moveStick = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (stickId.current !== e.pointerId || !stickRef.current) return;
+    const rect = stickRef.current.getBoundingClientRect();
+    const cx = rect.left + rect.width / 2;
+    const cy = rect.top + rect.height / 2;
+    let dx = (e.clientX - cx) / (rect.width / 2);
+    let dy = (e.clientY - cy) / (rect.height / 2);
+    const len = Math.hypot(dx, dy);
+    if (len > 1) {
+      dx /= len;
+      dy /= len;
+    }
+    setKnob({ x: dx * 34, y: dy * 34, active: true });
+    const dead = 0.16;
+    const mag = Math.hypot(dx, dy);
+    if (mag < dead) {
+      getEngine()?.setTouchMove(0, 0);
+    } else {
+      const k = Math.min(1, (mag - dead) / (1 - dead)) / mag;
+      getEngine()?.setTouchMove(dx * k, -dy * k);
     }
   };
-  const handleEnd = () => {
-    activeId.current = null;
-    setMove(0, 0);
-    if (knobRef.current) knobRef.current.style.transform = 'translate(0,0)';
+
+  const endStick = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (stickId.current !== e.pointerId) return;
+    stickId.current = -1;
+    setKnob({ x: 0, y: 0, active: false });
+    getEngine()?.setTouchMove(0, 0);
   };
 
-  const pulse = () => getEngine()?.input.queuePulse();
-  const dash = () => getEngine()?.input.queueDash();
-
   return (
-    <div className="absolute inset-0 z-20 font-mono" style={{ pointerEvents: 'none' }}>
+    <div className="pointer-events-none absolute inset-0 z-20 select-none">
       {/* joystick */}
       <div
         ref={stickRef}
-        className="absolute bottom-8 left-6 flex h-28 w-28 items-center justify-center rounded-full border border-white/20 bg-white/5"
-        style={{ pointerEvents: 'auto', touchAction: 'none' }}
-        onTouchStart={handleStart}
-        onTouchMove={handleMove}
-        onTouchEnd={handleEnd}
-        onTouchCancel={handleEnd}
-        aria-label="movement joystick"
+        className="pointer-events-auto absolute bottom-20 left-6 h-28 w-28 touch-none rounded-full border border-amber-200/25 bg-black/30 backdrop-blur-[2px]"
+        onPointerDown={startStick}
+        onPointerMove={moveStick}
+        onPointerUp={endStick}
+        onPointerCancel={endStick}
+        aria-label="Movement stick"
       >
         <div
-          ref={knobRef}
-          className="h-12 w-12 rounded-full border border-white/30 bg-white/15"
-          style={{ transition: 'transform 0.05s' }}
+          className="absolute left-1/2 top-1/2 h-12 w-12 -translate-x-1/2 -translate-y-1/2 rounded-full border border-amber-200/50 bg-amber-200/15 transition-transform"
+          style={{ transform: `translate(calc(-50% + ${knob.x}px), calc(-50% + ${knob.y}px))`, opacity: knob.active ? 0.95 : 0.6 }}
         />
       </div>
 
       {/* action buttons */}
-      <div className="absolute bottom-8 right-6 flex items-end gap-3" style={{ pointerEvents: 'auto' }}>
+      <div className="pointer-events-auto absolute bottom-24 right-6 flex flex-col items-center gap-3">
         <button
-          className="flex h-14 w-14 items-center justify-center rounded-full border border-white/25 bg-white/5 text-[9px] tracking-[0.15em] text-white/80"
-          style={{ touchAction: 'none' }}
-          onTouchStart={(e) => {
+          type="button"
+          onPointerDown={(e) => {
             e.preventDefault();
-            dash();
+            getEngine()?.queueDash();
           }}
-          aria-label="dash"
+          className="h-16 w-16 touch-none rounded-full border border-sky-300/40 bg-sky-950/40 text-[10px] tracking-widest text-sky-100/90 backdrop-blur-[2px] active:bg-sky-400/20"
+          aria-label="Dash"
         >
           DASH
         </button>
         <button
-          className="flex h-14 w-14 items-center justify-center rounded-full border border-white/25 bg-white/5 text-[9px] tracking-[0.15em] text-white/80"
-          style={{ touchAction: 'none' }}
-          onTouchStart={(e) => {
+          type="button"
+          onPointerDown={(e) => {
             e.preventDefault();
-            const engine = getEngine();
-            if (engine) engine.input.touchJumpHeld = true;
+            getEngine()?.queueThrow();
           }}
-          onTouchEnd={() => {
-            const engine = getEngine();
-            if (engine) engine.input.touchJumpHeld = false;
-          }}
-          aria-label="jump and hover"
+          className="h-20 w-20 touch-none rounded-full border border-amber-200/50 bg-amber-950/40 text-xs tracking-widest text-amber-100 backdrop-blur-[2px] active:bg-amber-300/25"
+          aria-label="Throw shards"
         >
-          JUMP
-        </button>
-        <button
-          className="flex h-20 w-20 items-center justify-center rounded-full border border-amber-200/50 bg-amber-200/10 text-[10px] tracking-[0.2em] text-amber-100"
-          style={{ touchAction: 'none', boxShadow: '0 0 18px rgba(255,210,122,0.25)' }}
-          onTouchStart={(e) => {
-            e.preventDefault();
-            pulse();
-          }}
-          aria-label="echo pulse"
-        >
-          ECHO
+          THROW
         </button>
       </div>
     </div>

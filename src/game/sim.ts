@@ -321,7 +321,11 @@ export class Sim {
       s.x = this.px + dirX * 1.2;
       s.z = this.pz + dirZ * 1.2;
       s.bounces = 0;
+      s.flown = 0;
       s.hitCd.clear();
+      // always launch with full velocity along the aim direction; steering corrects from there
+      s.vx = dirX * SHARD.speed;
+      s.vz = dirZ * SHARD.speed;
 
       // aim magnetism: snap to a foe near the aim point
       let best: Foe | null = null;
@@ -340,8 +344,6 @@ export class Sim {
       } else {
         s.state = 'fly';
         s.targetId = -1;
-        s.vx = dirX * SHARD.speed;
-        s.vz = dirZ * SHARD.speed;
       }
     }
     if (launched) {
@@ -395,6 +397,10 @@ export class Sim {
       let target: Foe | null = null;
       if (s.targetId >= 0) target = this.foeById(s.targetId);
       if (target && target.spawnT > 0) target = null;
+      if (!target && s.targetId >= 0) {
+        // target died mid-flight — fall back to straight flight, then return
+        s.targetId = -1;
+      }
 
       if (target) {
         const want = Math.atan2(target.x - s.x, target.z - s.z);

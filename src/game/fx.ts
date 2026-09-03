@@ -187,6 +187,12 @@ export class ParticlePool {
         const dx = -p.x;
         const dz = -p.z;
         const d = Math.hypot(dx, dz) || 1;
+        // die at the star — they feed it, they don't stack on it
+        if (d < 2.6) {
+          p.active = false;
+          alp[i] = 0;
+          continue;
+        }
         const pull = p.spiral * dt;
         p.vx += (dx / d) * pull - (dz / d) * pull * 0.85;
         p.vz += (dz / d) * pull + (dx / d) * pull * 0.85;
@@ -205,7 +211,7 @@ export class ParticlePool {
       col[i * 3] = p.r;
       col[i * 3 + 1] = p.g;
       col[i * 3 + 2] = p.b;
-      alp[i] = k * k * 0.95;
+      alp[i] = k * k * 0.8;
       siz[i] = p.size * (0.5 + k * 0.7);
     }
     this.posAttr.needsUpdate = true;

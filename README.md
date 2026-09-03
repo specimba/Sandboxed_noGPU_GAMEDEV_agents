@@ -1,10 +1,38 @@
-# NEXUS ARMOR — Original Browser Tank Combat
+# HOLLOW SUN — The Last Ember
 
-> **Instant-play, original-IP tactical tank combat for modern browsers.** Angle your armor, hold the line, and earn every unlock — no downloads, no accounts, no pay-to-win.
+> **An arena of pure light inside a dead star.** Throw living shards that ricochet between enemies and return like boomerangs. Graze enemy fire to charge Overdrive — the world slows to 0.55×, your damage doubles. Every point you score rekindles the cracked sun: cracks widen, god-rays grow, the hex floor ignites. Every 5th wave, a Warden arrives — kill it and your shard count grows, permanently.
 
-NEXUS ARMOR distills what makes big vehicle-combat games compelling (armor angles, positioning, loadout identity, visible progression) into 3–8 minute PvE missions that run on Chromebook-class hardware. Built with **TypeScript + Three.js (WebGL)** on Next.js, with 100% procedural assets (models, textures, and audio are synthesized in-browser — nothing to download).
+Original IP, 100% procedural (geometry, materials, audio — zero asset files), TypeScript + Three.js/WebGL on Next.js. Bloom does the heavy lifting; the world is built out of light, not geometry.
 
 ---
+
+## Play (development)
+
+```bash
+bun install
+bun run dev        # http://localhost:3000
+```
+
+No backend needed — best score/wave persist in localStorage.
+
+## Controls
+
+| Input | Action |
+|---|---|
+| `W` `A` `S` `D` / arrows | Drift |
+| **Mouse** | Aim (ground-plane raycast) |
+| **Left click** / `F` | Throw shards of light |
+| `Shift` / `Space` | Dash (i-frames) |
+| `Esc` / `P` | Pause (fully freezes the simulation) |
+| Touch | Left stick drifts · THROW / DASH buttons (auto-aim) |
+
+## The Loop
+
+1. **Throw** — all orbiting shards launch, ricochet up to 5 times between foes, and boomerang back. Each bounce: +0.5× score multiplier and the next note of a pentatonic ladder.
+2. **Graze** — skim red fire without touching it to charge Overdrive.
+3. **Overdrive** — at full charge the world slows, your shards hit twice as hard.
+4. **Rekindle** — score feeds the sun: cracks, god-rays, floor ignition. Survive Warden waves for permanent shards.
+
 
 ## Play (development)
 

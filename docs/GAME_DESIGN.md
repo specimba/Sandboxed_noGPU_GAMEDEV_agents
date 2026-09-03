@@ -1,113 +1,109 @@
-# ECHOVOID — Game Design & Engineering Record
+# HOLLOW SUN — Game Design & Engineering Record
 
 ## 1. Product Vision
 
-**ECHOVOID** is a browser-native 3D descent where **seeing costs being heard**.
-You are a wisp of light falling into a bottomless abyss. The world is pitch
-black; every *echo pulse* you sing expands as a visible shockwave that paints
-the cavern for a few heartbeats — but the **Listeners** hunt by sound: a pulse
-emitted very close stuns them, a pulse emitted near summons them to its origin.
-Collect three Echo Shards to wake the golden Gate and descend deeper, forever.
+**HOLLOW SUN** is a browser-native arena shooter built around one image:
+**the world is made of light, not geometry.** You are the last ember inside a
+dead star. Your weapons are **living shards of light** that ricochet between
+enemies and return like boomerangs. Enemies fire red light you must **graze**
+to charge **Overdrive**. Every point you score **visibly rekindles the cracked
+star** at the arena's heart — cracks widen, god-rays grow, the hex floor grid
+ignites outward. Every 5th wave a **Warden** arrives; killing it permanently
+grows your shard count for the run.
 
-One-line pitch: **"See with sound. Survive what listens. Descend forever."**
+Direction: Geometry Wars / Nex Machina — readable, kinetic, light-driven —
+reached with zero asset files (all geometry, materials, and audio procedural).
 
-Original IP. No tanks, no shooting, no driving, no combat-as-usual — the core
-mechanic *is* perception itself.
-
-## 2. Why this concept (capability-benchmark alignment)
-
-The brief asked for a concept that showcases what Three.js + the environment
-can do, with a memorable core mechanic rather than generic action. Echolocation
-was chosen because it makes every showcase requirement *diegetic* — the tech
-serves the fantasy instead of decorating it:
-
-| Requirement | How ECHOVOID showcases it |
-| --- | --- |
-| Immersive 3D environments | Seeded procedural abyss: winding hex-pillar paths, stalactites, drifting rocks, monolith ring, the far-off Heart |
-| Lighting & shaders | Custom GLSL multi-pulse wavefront reveal (ring-buffer of 8 pulses shared across materials), fresnel rim materials, HDR bloom via `UnrealBloomPass`, ACES tone mapping, vignette/dread/fade post pass |
-| Physics | Momentum movement, gravity, hover, coyote time, jump buffering, dash, sphere-vs-AABB collision, knockback |
-| Animation | Bobbing shards, spinning gate, drifting listeners, camera damping, FOV kick, shake, particle trails/bursts |
-| Particles | 3,200-mote reactive dust field (pushed by the wavefront in the vertex shader), pooled 700-particle CPU system |
-| Camera work | Damped orbit follow, velocity auto-align, segment-vs-AABB camera collision, title attract orbit, cinematic fly-in |
-| Audio | 100% synthesized WebAudio: sonar ping through a feedback-delay "cave echo" bus, chimes scheduled at physical wavefront-arrival delay, threat heartbeat, depth-mood drone, wind, distant void-calls |
-| Interaction & UI | Zustand-bridged HUD (depth, shards, light, pulse/dash cooldowns, threat readout, gate compass), title/pause/death/clear overlays, toasts, touch joystick + buttons |
-
-## 3. Core loop
+## 2. Core Loop
 
 ```
-PULSE to see (risk: listeners hear)
-  → REVEAL the world for a breath
-    → NAVIGATE pillars, avoid spikes & listeners
-      → COLLECT 3 echo shards (amber breadcrumbs)
-        → GATE awakens (gold wave reveals the way)
-          → DESCEND → deeper, darker, more listeners → repeat
+drift (WASD) → throw shards (click/F) → ricochet chains (auto-seek next foe)
+     ↑                                        │
+     │                                        ├─ chain multiplier climbs
+     │                                        │   (pentatonic pitch climbs too)
+graze red fire ──→ Overdrive ──→ world 0.55×, damage ×2
+     │
+score ──→ sun energy ──→ cracks / god-rays / floor ignition (visible power)
+wave clear ──→ harder wave … every 5th: WARDEN ──→ kill = +1 permanent shard
 ```
 
-Risk/reward kernel: **every pulse is information and danger at once.**
-Close pulse (<11u) = stun. Near pulse (<30u) = they come. Silence = safety =
-blindness. The player composes their own tension.
+Session shape: die in 2–6 minutes early on; a good run reaches Warden II/III
+with 4–5 shards and a visibly burning sun. One more run.
 
-## 4. Technical architecture
+## 3. The Numbers (binding)
 
-- **Next.js 16 + TypeScript**, single user-visible route `/`; game mounts as a
-  client component (`GameCanvas`) with `ssr: false`.
-- **Engine** (`src/game/`): `engine.ts` orchestrator owns renderer, composer,
-  phase machine (`title → flying → playing ⇄ paused`, `dead`, `cleared`),
-  pulse scheduling (wavefront hits fire at `t + distance/waveSpeed`), level
-  lifecycle, adaptive device-pixel-ratio (EMA frame-time hysteresis).
-- **Levels** (`level.ts`): mulberry32-seeded random-walk path + branch stubs;
-  all static geometry merged into ONE draw call with per-vertex `color` +
-  `aGlow` attributes; colliders (AABBs), spike zones, shard/gate/spawn/hunter
-  anchors derived from the same data.
-- **React bridge**: `store.ts` (zustand) — engine pushes throttled vitals
-  (~11 Hz) + discrete events; UI components read selectors; UI calls engine
-  via `getEngine()` singleton.
-- **Persistence**: `localStorage` best-depth (versioned key `echovoid.best`).
-- **Graceful degradation**: WebGL init failure → in-UI "SILENCE" message;
-  WebAudio failure → silent play; `prefers-reduced-motion` CSS guard +
-  in-game Reduced FX toggle; adaptive DPR keeps frame times in budget.
+| Domain | Value | Why |
+|---|---|---|
+| Arena radius | 34 u | fits the 55° camera at h=24; wall ring readable |
+| Ember accel / max speed | 130 / 17 u·s⁻¹ | drag 7.5 → responsive, drift-y stop |
+| Dash | 36 u·s⁻¹ × 0.14 s, cd 1.05 s | escapes striker dash (27) with margin |
+| Embers (HP) | 3, invuln 1.2 s | three mistakes; graze gives agency back |
+| Shard speed / turn | 47 u·s⁻¹ / 26 rad·s⁻¹ | homing feel; turn circle ≈ 1.8 u |
+| Shard damage | 1 (2 in Overdrive) | drifter 2 hp = two-tap, weaver 3 |
+| Bounces per throw | ≤ 5, chain seek radius 27 | chains feel earned, not automatic |
+| Throw cooldown | 0.5 s | all-shard volleys, 1.5 s full recycle |
+| Chain multiplier | 1 + 0.5 × bounces (cap ×5.5), decays 3.2 s | rewards planning the ricochet route |
+| Graze radius | 2.3 u, +8 OD per bullet | safe-ish; contact is 1.05 u |
+| Overdrive | 100 charge → 5 s, world 0.55×, dmg ×2, +0.35 s per graze | the moment the screen belongs to you |
+| Bullet speed | 11.5 u·s⁻¹ (weaver burst 3 × 0.13 s) | dodgeable at 17 u·s⁻¹ |
+| Warden | 34 + 13×kills hp, r 2.2, 14-bullet ring / 2.6 s | bullet-hell punctuation |
+| Waves | budget 4 + 2.6·N pts (drifter 1 / striker 2 / weaver 3) | linear ramp, ~15 s early waves |
+| Scores | drifter 50 / striker 80 / weaver 120 / warden 500, ×mult | chain-first scoring |
+| Sun energy | √(score / 5200), capped 1 | early wins visible, late game still moves |
+| Juice | hitstop 55 ms kill / 220 ms warden, trauma² shake, FOV kick 2.2° | per the feel bible |
 
-## 5. Difficulty & progression
+## 4. Signature Systems
 
-- Depth N: `13 + min(2N, 9)` path nodes, `2 + N` listeners (cap 6), listener
-  speed `5.6 + 0.45·(N−1)`, spike chance `0.18 + 0.035·N`, darker drone mood.
-- +1 light (max 3) per successful descent; death restores light but keeps you
-  in the depth; shards persist through death; best depth persisted locally.
-- Endless structure: no final level — the score *is* depth.
+- **Boomerang shards** (`sim.ts`): orbit → fly (aim-magnet 9 u) → chain
+  (seek next foe) → return (homing) → orbit. Per-foe re-hit cooldown 0.2 s.
+  Wall impact reflects the shard inward — light bounces.
+- **Sun rekindling** (`scene.ts`): one `uIgnite` uniform drives floor heat
+  radius, crack opacity, god-ray brightness, star scale, ring opacity.
+  Score is literally light.
+- **Kill bursts** (`fx.ts`): 170–900 additive particles spawned per kill,
+  pulled into a spiral toward the star (tangential + radial force), dying at
+  its surface — the arena visibly *feeds* the sun.
+- **Pentatonic ricochets** (`audio.ts`): every bounce plays the next note of a
+  pentatonic ladder (C4→A5); a good chain plays a melody and stacks ×0.5.
+- **Overdrive**: sim splits time into player-dt and enemy-dt; enemies and
+  bullets run at 0.55× while you stay at 1.0. Ambience pitches down, bloom
+  lifts, camera pulls back.
 
-## 6. Acceptance criteria for the vertical slice — all verified in-browser
+## 5. Architecture
 
-- [x] Title screen with live attract mode (auto-pulses reveal the world)
-- [x] Begin → camera fly-in → playable in under 3s (real hardware)
-- [x] Pulse reveals world with physical wavefront timing + echo audio
-- [x] Movement: WASD drift, jump/hover, dash, camera orbit/zoom, collision
-- [x] 3 shards → gate awakens (gold pulse + compass) → enter → depth cleared
-- [x] Descend → regenerated harder level (hunters 3→4 verified)
-- [x] Void-fall & spike & listener damage; death overlay; respawn
-- [x] Pause (Esc), sound toggle, reduced-FX toggle, abandon to title
-- [x] Best-depth persistence across reloads
-- [x] Touch controls (joystick + ECHO/JUMP/DASH) on touch devices
-- [x] Responsive from 390px portrait to desktop; no console errors
+```
+src/game/
+  constants.ts   every binding number above
+  sim.ts         pure 2D simulation — zero rendering imports
+  engine.ts      fixed 60 Hz timestep, hitstop, time-split, phases, events
+  scene.ts       renderer, hex-grid floor shader, cracked sun, shells, bloom
+  view.ts        pooled sim→scene sync (foes, shards, bullets, telegraphs)
+  fx.ts          4096-particle pool (spiral bursts), shockwave rings
+  cameraRig.ts   follow + trauma² shake + FOV kicks + title dive
+  audio.ts       all-synth WebAudio (drone, pads, ladder, heartbeat)
+  input.ts / store.ts / rng.ts
+src/components/game/  GameCanvas, TitleScreen, Hud, Overlays, TouchControls
+```
 
-## 7. Backlog (prioritized)
+Fixed-timestep loop: accumulator + 5-step panic clamp. Sim emits 15 typed
+events; engine routes them to fx/audio/store. React reads a zustand store at
+~12 Hz for HUD; banners/toasts are event-driven.
 
-**Critical (next build)**
-- Listener damage telegraph (brief wind-up flash before contact)
-- Options: mouse sensitivity & invert Y
-- Gamepad support
+## 6. QA Record (agent-browser, this build)
 
-**High**
-- Second enemy archetype (blind but sound-immune "Crawler" that forces dash use)
-- Moving/rotating platforms; crumbling pillars
-- Depth-based biome palettes (teal → violet → crimson abyss)
-- Ghost-run leaderboard (local, seed-fixed daily depth)
+- Title → BEGIN → camera dive → wave 1 banner → spawn telegraphs → foes. ✅
+- Throw → bounce → kill → spiral burst → floor pulse → score ×chain. ✅
+  (Found & fixed: magnetized shards launched with zero velocity → miss;
+   dead-target shards never returned home.)
+- Death (3 embers) → slow-mo → "THE EMBER FADES" → REKINDLE restart. ✅
+- Overdrive trigger → banner + world-slow + bloom lift. ✅
+- Pause (Esc) freezes sim; resume/restart/sound/abandon all wired. ✅
+- Best score/wave persisted (localStorage `hollowsun.best`). ✅
+- 0 console errors on fresh load; `tsc` + `eslint` clean. ✅
 
-**Medium**
-- Speedrun timer + splits overlay
-- Screenshot mode (hide HUD, free camera)
-- Web Audio optional master-volume slider
+## 7. Backlog (next candidates)
 
-**Experimental**
-- Microphone mode: your real voice is the pulse (WebAudio analyser gate)
-- PvP "duet": two wisps share one abyss; your pulses reveal the world to
-  each other — and attract listeners to each other
+- Warden spiral pattern + escort spawns (data exists in constants)
+- Second sun stage: rekindled sun starts burning foes near center
+- Chain-route preview line (ghost arc of the planned ricochet)
+- Biome palettes per 5 waves; endless mode leaderboards
