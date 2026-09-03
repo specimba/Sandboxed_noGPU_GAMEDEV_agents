@@ -90,6 +90,19 @@ export class AudioEngine {
     this.noise(0.12, 0.12, 'highpass', 5200);
   }
 
+  /** bulwark armor clang — dull metal, not the shimmer of a shield break */
+  block(): void {
+    this.tone(196, 0.14, 'square', 0.14, 148);
+    this.tone(1244, 0.05, 'sine', 0.08);
+    this.noise(0.07, 0.12, 'highpass', 2800);
+  }
+
+  /** caster lance — heavy charged whoosh */
+  heavyShot(): void {
+    this.noise(0.26, 0.2, 'bandpass', 700, 180);
+    this.tone(150, 0.22, 'sawtooth', 0.12, 62);
+  }
+
   bossPhase(): void {
     // rising fifth + swell — the warden breathes
     this.tone(196, 0.5, 'sawtooth', 0.2, 294);

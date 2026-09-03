@@ -69,6 +69,12 @@ export const FOE = {
   bulletRadius: 0.34,
   bulletLife: 7,
   contactRadius: 1.05,
+  /** caster heavy shot — slower to dodge but huge and fast */
+  heavySpeed: 21,
+  heavyRadius: 0.52,
+  heavyLife: 5,
+  /** bulwark frontal-armor cone (half-angle, rad) */
+  bulwarkCone: 1.05,
 };
 
 export const WAVES = {
@@ -110,6 +116,8 @@ export const SCORE = {
   drifter: 50,
   striker: 80,
   weaver: 120,
+  caster: 140,
+  bulwark: 220,
   graze: 5,
   multPerBounce: 0.5, // chain multiplier: 1 + bounces * 0.5
   multDecay: 3.2, // seconds without a ricochet resets the chain

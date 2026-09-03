@@ -11,6 +11,7 @@ export default function Hud() {
   const shards = useGameStore((s) => s.shards);
   const shardsMax = useGameStore((s) => s.shardsMax);
   const embers = useGameStore((s) => s.embers);
+  const embersMax = useGameStore((s) => s.embersMax);
   const dashReady = useGameStore((s) => s.dashReady);
   const overdrive = useGameStore((s) => s.overdrive);
   const overdriveActive = useGameStore((s) => s.overdriveActive);
@@ -18,6 +19,7 @@ export default function Hud() {
   const banner = useGameStore((s) => s.banner);
   const toasts = useGameStore((s) => s.toasts);
   const roomLabel = useGameStore((s) => s.roomLabel);
+  const mutatorLabel = useGameStore((s) => s.mutatorLabel);
   const bossBar = useGameStore((s) => s.bossBar);
   const boonsTaken = useGameStore((s) => s.boonsTaken);
 
@@ -43,6 +45,9 @@ export default function Hud() {
       {/* top left — room strip */}
       <div className="absolute left-4 top-4 flex flex-col gap-1">
         <span className="hs-tracking text-[10px] text-amber-200/70 sm:text-xs">{roomLabel}</span>
+        {mutatorLabel && playing && (
+          <span className="hs-tracking text-[10px] text-red-300/90 sm:text-xs">◆ {mutatorLabel}</span>
+        )}
         {playing && enemiesLeft > 0 && (
           <span className="hs-tracking text-[10px] text-red-300/80 sm:text-xs">{enemiesLeft} REMAIN</span>
         )}
@@ -82,7 +87,7 @@ export default function Hud() {
       {/* bottom left — embers (hp) */}
       <div className="absolute bottom-5 left-4 flex items-center gap-2">
         <span className="hs-tracking mr-1 text-[10px] text-amber-100/50">EMBERS</span>
-        {[0, 1, 2].map((i) => (
+        {Array.from({ length: embersMax }).map((_, i) => (
           <span
             key={i}
             className="inline-block h-3 w-3 rotate-45 rounded-[2px] transition-all"

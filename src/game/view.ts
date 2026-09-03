@@ -13,6 +13,8 @@ const FOE_GEO: Record<FoeKind, THREE.BufferGeometry> = {
   drifter: new THREE.OctahedronGeometry(0.85, 0),
   striker: new THREE.TetrahedronGeometry(0.95, 0),
   weaver: new THREE.TorusGeometry(0.66, 0.17, 8, 26).rotateX(Math.PI / 2),
+  caster: new THREE.ConeGeometry(0.72, 1.7, 5).rotateX(Math.PI / 2), // a turret that lances
+  bulwark: new THREE.BoxGeometry(1.7, 1.5, 1.7), // a slab that walks
   warden: new THREE.IcosahedronGeometry(2.2, 0),
 };
 
@@ -20,6 +22,8 @@ const FOE_COL: Record<FoeKind, number> = {
   drifter: COLORS.foe,
   striker: 0xff6a3d,
   weaver: 0xff2d6e,
+  caster: 0xc9ff6a,
+  bulwark: 0xe0a95c,
   warden: COLORS.warden,
 };
 
@@ -27,6 +31,7 @@ interface FoeView {
   group: THREE.Group;
   mesh: THREE.Mesh;
   glow: THREE.Sprite;
+  plate: THREE.Mesh; // bulwark frontal armor
   kind: FoeKind;
 }
 
@@ -36,6 +41,7 @@ interface MarkView {
 }
 
 const MAX_BULLETS = 340;
+const MAX_HEAVY = 60;
 
 export class View {
   private scene: THREE.Scene;
@@ -53,6 +59,10 @@ export class View {
   private bulletGeo = new THREE.BufferGeometry();
   private bulletPos = new THREE.BufferAttribute(new Float32Array(MAX_BULLETS * 3), 3);
   private bulletPoints: THREE.Points;
+
+  private heavyGeo = new THREE.BufferGeometry();
+  private heavyPos = new THREE.BufferAttribute(new Float32Array(MAX_HEAVY * 3), 3);
+  private heavyPoints: THREE.Points;
 
   private markPool: MarkView[] = [];
   private markCursor = 0;
@@ -99,6 +109,7 @@ export class View {
     }
 
     // ---- foes ----
+    const plateGeo = new THREE.BoxGeometry(2.3, 1.7, 0.22);
     for (let i = 0; i < 40; i++) {
       const group = new THREE.Group();
       const mat = new THREE.MeshBasicMaterial({ color: COLORS.foe, transparent: true, opacity: 0.95, fog: true });
@@ -107,9 +118,17 @@ export class View {
       const glow = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.glowTex, color: COLORS.foe, blending: THREE.AdditiveBlending, depthWrite: false, opacity: 0.4, fog: false }));
       glow.scale.setScalar(3);
       group.add(glow);
+      // bulwark frontal plate — brighter than the body, reads as the block zone
+      const plate = new THREE.Mesh(
+        plateGeo,
+        new THREE.MeshBasicMaterial({ color: 0xffe2a8, transparent: true, opacity: 0.92, fog: true }),
+      );
+      plate.position.set(0, 0, 1.05);
+      plate.visible = false;
+      group.add(plate);
       group.visible = false;
       scene.add(group);
-      this.foePool.push({ group, mesh, glow, kind: 'drifter' });
+      this.foePool.push({ group, mesh, glow, plate, kind: 'drifter' });
     }
 
     // ---- bullets (one draw call) ----
@@ -130,6 +149,25 @@ export class View {
     this.bulletPoints.frustumCulled = false;
     this.bulletPoints.renderOrder = 9;
     scene.add(this.bulletPoints);
+
+    // ---- heavy bullets (caster lances) — separate buffer, bigger & acid-pale
+    this.heavyPos.setUsage(THREE.DynamicDrawUsage);
+    this.heavyGeo.setAttribute('position', this.heavyPos);
+    this.heavyGeo.setDrawRange(0, 0);
+    const hMat = new THREE.PointsMaterial({
+      color: 0xd6ff8a,
+      size: 1.7,
+      sizeAttenuation: true,
+      transparent: true,
+      opacity: 0.95,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      map: this.glowTex,
+    });
+    this.heavyPoints = new THREE.Points(this.heavyGeo, hMat);
+    this.heavyPoints.frustumCulled = false;
+    this.heavyPoints.renderOrder = 9;
+    scene.add(this.heavyPoints);
 
     // ---- spawn telegraph marks ----
     const markGeo = new THREE.RingGeometry(0.78, 1.0, 40);
@@ -244,14 +282,23 @@ export class View {
         (v.glow.material as THREE.SpriteMaterial).color.set(FOE_COL[f.kind]);
         v.glow.scale.setScalar(f.kind === 'warden' ? 7.5 : 3);
       }
+      v.plate.visible = f.kind === 'bulwark' && f.spawnT <= 0;
       v.group.visible = true;
       v.group.position.set(f.x, f.kind === 'warden' ? 2.4 : 1.0, f.z);
-      const spawnK = f.spawnT > 0 ? 1 - Math.max(0, f.spawnT) / (f.kind === 'warden' ? 1.4 : 0.45) : 1;
+      const spawnK = f.spawnT > 0 ? 1 - Math.max(0, f.spawnT) / (f.kind === 'warden' ? 1.4 : f.kind === 'bulwark' ? 0.7 : 0.45) : 1;
       const pop = f.kind === 'warden' ? 0.35 : 0.15;
       const sc = Math.max(0.02, spawnK) * (1 + pop * (1 - spawnK));
       v.group.scale.setScalar(sc * (f.elite === 'swift' ? 0.85 : 1));
-      v.mesh.rotation.y += dt * (f.kind === 'warden' ? 0.7 : 1.8);
+      if (f.kind === 'bulwark') {
+        // the plate must read true — group yaw = armor facing, no spin
+        v.group.rotation.y = f.face;
+        v.mesh.rotation.y = 0;
+      } else {
+        v.group.rotation.y = 0;
+        v.mesh.rotation.y += dt * (f.kind === 'warden' ? 0.7 : f.kind === 'caster' ? 0.5 : 1.8);
+      }
       if (f.kind === 'drifter') v.mesh.rotation.x += dt * 1.1;
+      if (f.kind === 'caster' && f.state === 1) v.mesh.rotation.x += dt * 6; // charging drill spin
 
       // elite halo — the affix is the ring (VISUAL_AUDIO.md color law)
       if (f.elite && f.spawnT <= 0 && this.haloUsed < this.haloPool.length) {
@@ -264,17 +311,19 @@ export class View {
         h.mat.opacity = 0.55 + 0.25 * Math.sin(this.time * 6 + f.id);
       }
 
-      // striker telegraph line while aiming
-      if (f.kind === 'striker' && f.state === 1) {
+      // striker / caster telegraph lines while aiming
+      if ((f.kind === 'striker' && f.state === 1) || (f.kind === 'caster' && f.state === 1)) {
         const t = this.telegraphs.find((l) => !l.line.visible);
         if (t) {
           const pos = t.line.geometry.getAttribute('position') as THREE.BufferAttribute;
           pos.setXYZ(0, f.x, 0.9, f.z);
+          const dur = f.kind === 'striker' ? 0.55 : 0.5;
           const dl = Math.hypot(f.tx - f.x, f.tz - f.z) || 1;
-          const grow = 1 - Math.max(0, f.timer) / 0.55;
+          const grow = 1 - Math.max(0, f.timer) / dur;
           pos.setXYZ(1, f.x + ((f.tx - f.x) / dl) * dl * Math.min(1, grow * 1.4), 0.9, f.z + ((f.tz - f.z) / dl) * dl * Math.min(1, grow * 1.4));
           pos.needsUpdate = true;
           t.line.visible = true;
+          (t.mat.color as THREE.Color).set(f.kind === 'caster' ? 0xc9ff6a : 0xff6a3d);
           t.mat.opacity = 0.25 + 0.55 * grow * (0.7 + 0.3 * Math.sin(this.time * 30));
         }
       }
@@ -287,14 +336,21 @@ export class View {
       }
     }
 
-    // bullets
-    const n = Math.min(sim.bullets.length, MAX_BULLETS);
-    for (let i = 0; i < n; i++) {
+    // bullets — light and heavy split into their own draw calls
+    let n = 0;
+    let hn = 0;
+    for (let i = 0; i < sim.bullets.length; i++) {
       const b = sim.bullets[i];
-      this.bulletPos.setXYZ(i, b.x, 1.0, b.z);
+      if (b.heavy) {
+        if (hn < MAX_HEAVY) this.heavyPos.setXYZ(hn++, b.x, 1.0, b.z);
+      } else {
+        if (n < MAX_BULLETS) this.bulletPos.setXYZ(n++, b.x, 1.0, b.z);
+      }
     }
     this.bulletGeo.setDrawRange(0, n);
     this.bulletPos.needsUpdate = true;
+    this.heavyGeo.setDrawRange(0, hn);
+    this.heavyPos.needsUpdate = true;
 
     // spawn marks
     this.markCursor = 0;
@@ -340,7 +396,7 @@ export class View {
   }
 
   dispose(): void {
-    this.scene.remove(this.playerGroup, this.bulletPoints, this.reticle);
+    this.scene.remove(this.playerGroup, this.bulletPoints, this.heavyPoints, this.reticle);
     for (const s of this.shardViews) this.scene.remove(s.mesh);
     for (const f of this.foePool) this.scene.remove(f.group);
     for (const m of this.markPool) this.scene.remove(m.mesh);

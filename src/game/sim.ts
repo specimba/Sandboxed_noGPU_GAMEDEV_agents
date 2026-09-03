@@ -9,15 +9,19 @@ import {
   WAVES,
   type Elite,
 } from './constants';
+import { mulberry32, type Rng } from './rng';
 import {
   baseMods,
   bossHp,
   bossScore,
+  defaultRoomMods,
   eliteChance,
   isBossRoom,
+  rollMutator,
   roomBudget,
   type BoonDef,
   type Mods,
+  type RoomMutator,
 } from './run';
 
 /**
@@ -26,7 +30,7 @@ import {
  * Overdrive and the score→sun feedback all live here.
  */
 
-export type FoeKind = 'drifter' | 'striker' | 'weaver' | 'warden';
+export type FoeKind = 'drifter' | 'striker' | 'weaver' | 'caster' | 'bulwark' | 'warden';
 export type ShardState = 'orbit' | 'fly' | 'chain' | 'return';
 
 export interface SimEvents {
@@ -39,6 +43,8 @@ export interface SimEvents {
   onDash(x: number, z: number): void;
   onRecall(x: number, z: number): void;
   onShieldBreak(x: number, z: number): void;
+  onBlock(x: number, z: number): void;
+  onHeavyShot(x: number, z: number): void;
   onBossPhase(x: number, z: number, phase: number): void;
   onRevive(x: number, z: number): void;
   onWardenSpawn(x: number, z: number): void;
@@ -88,6 +94,7 @@ interface Foe {
   burstLeft: number; // weaver burst queue
   burstT: number;
   patternAngle: number; // warden radial offset
+  face: number; // bulwark armor facing
 }
 
 interface Bullet {
@@ -97,6 +104,7 @@ interface Bullet {
   vz: number;
   life: number;
   grazed: boolean;
+  heavy: boolean; // caster shots: bigger, faster, dodge me
 }
 
 export interface SpawnMark {
@@ -171,10 +179,21 @@ export class Sim {
   time = 0;
   over = false;
 
+  // seeded run
+  seed = 0;
+  rng: Rng = Math.random;
+  mutator: RoomMutator = { id: '', name: '', desc: '', mods: defaultRoomMods() };
+
   constructor(events: SimEvents, mods?: Partial<Mods>) {
     this.events = events;
     this.mods = { ...baseMods(), ...mods };
     this.reset();
+  }
+
+  /** every run of the same seed descends the same star */
+  setSeed(seed: number): void {
+    this.seed = seed >>> 0;
+    this.rng = mulberry32(this.seed);
   }
 
   reset(): void {
@@ -211,6 +230,7 @@ export class Sim {
     this.odT = 0;
     this.time = 0;
     this.over = false;
+    this.mutator = { id: '', name: '', desc: '', mods: defaultRoomMods() };
   }
 
   addShard(): void {
@@ -243,17 +263,32 @@ export class Sim {
     this.spawnQueue.length = 0;
     this.invuln = Math.max(this.invuln, 0.8);
     this.wave = biome * RUN.roomsPerBiome + room;
+    // room weather — deterministic per seed
+    this.mutator = rollMutator(this.rng, this.wave);
     this.waveState = 'active';
     this.spawnT = 0.5;
     if (isBossRoom(room)) {
       // boss + small escort fodder
-      const escort: FoeKind[] = biome === 0 ? ['drifter', 'drifter'] : ['drifter', 'striker'];
+      const escort: FoeKind[] = biome === 0 ? ['drifter', 'drifter'] : biome === 1 ? ['drifter', 'striker'] : ['caster', 'drifter'];
       this.spawnQueue = escort;
       this.marks.push({ x: this.px + 10, z: this.pz, t: 1.6, kind: 'warden' });
       this.events.onWaveStart(this.wave);
     } else {
-      this.spawnQueue = this.buildWaveQueue(this.wave, roomBudget(biome, room));
+      const budget = Math.round(roomBudget(biome, room) * (1 + this.mutator.mods.budget));
+      this.spawnQueue = this.buildWaveQueue(this.wave, budget);
       this.events.onWaveStart(this.wave);
+    }
+    if (this.mutator.mods.glassRain) {
+      // the room opens under a collapsing ring of glass — banner buys you the read
+      const n = 16;
+      for (let i = 0; i < n; i++) {
+        const a = (i / n) * TAU + this.rng() * 0.2;
+        const r = 25;
+        const x = Math.sin(a) * r;
+        const z = Math.cos(a) * r;
+        const d = Math.hypot(x, z) || 1;
+        this.bullets.push({ x, z, vx: (-x / d) * 8.5, vz: (-z / d) * 8.5, life: 6, grazed: false, heavy: false });
+      }
     }
   }
 
@@ -276,7 +311,7 @@ export class Sim {
   /* ---- modded tuning getters ---- */
 
   private get shardSpeed(): number {
-    return SHARD.speed * this.mods.shardSpeed;
+    return SHARD.speed * this.mods.shardSpeed * this.mutator.mods.shardSpeed;
   }
   private get maxBounces(): number {
     return SHARD.maxBounces + this.mods.bounces;
@@ -390,6 +425,15 @@ export class Sim {
         const dd = Math.hypot(f.x - this.px, f.z - this.pz);
         if (dd < f.r + PLAYER.radius + 0.35) {
           this.dashHit.add(f.id);
+          // dashing into the bulwark's shield face clangs off — go around
+          if (f.kind === 'bulwark') {
+            const dl2 = Math.hypot(f.x - this.px, f.z - this.pz) || 1;
+            const dot = ((f.x - this.px) / dl2) * Math.sin(f.face) + ((f.z - this.pz) / dl2) * Math.cos(f.face);
+            if (dot < -Math.cos(FOE.bulwarkCone)) {
+              this.events.onBlock(f.x, f.z);
+              continue;
+            }
+          }
           const dl = Math.hypot(f.x - this.px, f.z - this.pz) || 1;
           const kx = ((f.x - this.px) / dl) * 14 * this.mods.dashKnock;
           const kz = ((f.z - this.pz) / dl) * 14 * this.mods.dashKnock;
@@ -434,7 +478,7 @@ export class Sim {
       if (s.state !== 'orbit') continue;
       launched = true;
       // slight fan so simultaneous shards don't stack
-      const ang = Math.atan2(aimX - this.px, aimZ - this.pz) + (Math.random() - 0.5) * 0.24;
+      const ang = Math.atan2(aimX - this.px, aimZ - this.pz) + (this.rng() - 0.5) * 0.24;
       const dirX = Math.sin(ang);
       const dirZ = Math.cos(ang);
       s.x = this.px + dirX * 1.2;
@@ -597,6 +641,33 @@ export class Sim {
         const dd = Math.hypot(f.x - s.x, f.z - s.z);
         if (dd < f.r + 0.55) {
           s.hitCd.set(f.id, SHARD.hitCooldown);
+          // BULWARK frontal armor — light ricochets off the plate, no damage,
+          // but the ricochet still chains. Backstab it or bend around.
+          if (f.kind === 'bulwark') {
+            const al = Math.hypot(s.vx, s.vz) || 1;
+            const dot = (s.vx / al) * Math.sin(f.face) + (s.vz / al) * Math.cos(f.face);
+            if (dot < -Math.cos(FOE.bulwarkCone)) {
+              this.events.onBlock(f.x, f.z);
+              s.bounces += 1;
+              if (s.bounces <= this.maxBounces) {
+                this.chain += 1;
+                this.chainT = SCORE.multDecay;
+                const next = this.findChainTarget(f, s);
+                this.events.onBounce(f.x, f.z, this.chain);
+                if (next) {
+                  s.targetId = next.id;
+                  s.state = 'chain';
+                } else {
+                  s.state = 'return';
+                  s.targetId = -1;
+                }
+              } else {
+                s.state = 'return';
+                s.targetId = -1;
+              }
+              continue;
+            }
+          }
           // SHIELDED elite: first hit only strips the halo
           if (f.shieldUp) {
             f.shieldUp = false;
@@ -684,11 +755,11 @@ export class Sim {
     }
     f.hp -= dmg;
     if (f.hp > 0) return false;
-    // score: elites pay ×1.5, bosses scale by biome
-    let base = f.kind === 'drifter' ? SCORE.drifter : f.kind === 'striker' ? SCORE.striker : f.kind === 'weaver' ? SCORE.weaver : WAVES.wardenScore;
+    // score: elites pay ×1.5, bosses scale by biome, mutators sweeten the pot
+    let base = f.kind === 'warden' ? WAVES.wardenScore : SCORE[f.kind];
     if (f.boss) base = bossScore(this.biome);
     if (f.elite) base *= 1.5;
-    this.score += Math.round((base * this.mult) / 5) * 5;
+    this.score += Math.round((base * this.mult * this.mutator.mods.score) / 5) * 5;
     this.addOverdrive(OVERDRIVE.killCharge + this.mods.odOnKill + (f.elite ? 3 : 0));
     if (f.kind === 'warden') {
       this.wardensKilled += 1;
@@ -701,7 +772,7 @@ export class Sim {
     if (f.elite === 'split') {
       // SPLITTER: two minis burst out
       for (const side of [-1, 1]) {
-        const a = Math.random() * TAU;
+        const a = this.rng() * TAU;
         this.spawnFoe('drifter', f.x + Math.cos(a) * 1.4 * side, f.z + Math.sin(a) * 1.4 * side, '', false, 1, 0.5);
       }
     }
@@ -725,6 +796,12 @@ export class Sim {
     } else if (kind === 'weaver') {
       hp = 3;
       r = 0.9;
+    } else if (kind === 'caster') {
+      hp = 2;
+      r = 0.85;
+    } else if (kind === 'bulwark') {
+      hp = 6;
+      r = 1.3;
     } else if (kind === 'warden') {
       hp = boss ? bossHp(this.biome) : WAVES.wardenHpBase;
       r = 2.2;
@@ -733,6 +810,7 @@ export class Sim {
     if (rOverride !== undefined) r = rOverride;
     if (elite === 'shield') hp += 2;
     if (elite === 'swift') hp = Math.max(1, hp - 1);
+    if (kind === 'bulwark' && elite === 'shield') elite = ''; // the plate IS the shield
     this.foes.push({
       id,
       kind,
@@ -746,28 +824,29 @@ export class Sim {
       elite,
       shieldUp: elite === 'shield',
       boss,
-      spawnT: kind === 'warden' ? 1.4 : 0.45,
+      spawnT: kind === 'warden' ? 1.4 : kind === 'bulwark' ? 0.7 : 0.45,
       state: boss ? 1 : 0, // boss phase
-      timer: 0,
+      timer: kind === 'caster' ? 1.2 + this.rng() * 0.8 : 0,
       tx: 0,
       tz: 0,
       dx: 0,
       dz: 0,
       burstLeft: 0,
       burstT: 0,
-      patternAngle: Math.random() * TAU,
+      patternAngle: this.rng() * TAU,
+      face: Math.atan2(this.px - x, this.pz - z), // armor starts facing the ember
     });
     if (kind === 'warden' && boss) this.events.onWardenSpawn(x, z);
   }
 
   private rollElite(): Elite {
-    if (Math.random() >= eliteChance(this.biome)) return '';
-    const roll = Math.random();
+    if (this.rng() >= eliteChance(this.biome)) return '';
+    const roll = this.rng();
     return roll < 0.34 ? 'swift' : roll < 0.67 ? 'shield' : 'split';
   }
 
   private updateFoes(dt: number): void {
-    const spdScale = Math.min(1.6, 1 + this.wave * 0.03) * 1; // per-foe swift handled below
+    const spdScale = Math.min(1.6, 1 + this.wave * 0.03) * this.mutator.mods.foeSpeed; // per-foe swift handled below
     for (const f of this.foes) {
       const swiftK = f.elite === 'swift' ? 1.55 : 1;
       const eff = spdScale * swiftK;
@@ -855,6 +934,65 @@ export class Sim {
           }
           break;
         }
+        case 'caster': {
+          if (f.state === 0) {
+            // hold the 16..23 band, slow strafe — then lock, telegraph, lance
+            const tangX = -pdz / pd;
+            const tangZ = pdx / pd;
+            const radial = pd > 23 ? -0.7 : pd < 16 ? 0.7 : 0;
+            const wantVx = tangX * 3.4 * eff + (pdx / pd) * radial * 4;
+            const wantVz = tangZ * 3.4 * eff + (pdz / pd) * radial * 4;
+            f.vx += (wantVx - f.vx) * Math.min(1, dt * 2.2);
+            f.vz += (wantVz - f.vz) * Math.min(1, dt * 2.2);
+            f.timer -= dt;
+            if (f.timer <= 0) {
+              f.state = 1;
+              f.timer = 0.5;
+              f.tx = this.px; // locked at telegraph start — move!
+              f.tz = this.pz;
+            }
+          } else if (f.state === 1) {
+            f.vx *= Math.max(0, 1 - dt * 6);
+            f.vz *= Math.max(0, 1 - dt * 6);
+            f.timer -= dt;
+            if (f.timer <= 0) {
+              f.state = 2;
+              f.timer = 0.1;
+            }
+          } else {
+            f.timer -= dt;
+            if (f.timer <= 0) {
+              f.state = 0;
+              f.timer = 2.0 + this.rng() * 1.1;
+              const a = Math.atan2(f.tx - f.x, f.tz - f.z);
+              this.bullets.push({
+                x: f.x + Math.sin(a) * (f.r + 0.4),
+                z: f.z + Math.cos(a) * (f.r + 0.4),
+                vx: Math.sin(a) * FOE.heavySpeed,
+                vz: Math.cos(a) * FOE.heavySpeed,
+                life: FOE.heavyLife,
+                grazed: false,
+                heavy: true,
+              });
+              this.events.onHeavyShot(f.x, f.z);
+            }
+          }
+          break;
+        }
+        case 'bulwark': {
+          // slow armored advance; the plate turns toward you at 1.1 rad/s —
+          // outrun its facing and hit the naked back
+          const sp = 2.1 * eff;
+          f.vx += ((pdx / pd) * sp - f.vx) * Math.min(1, dt * 1.6);
+          f.vz += ((pdz / pd) * sp - f.vz) * Math.min(1, dt * 1.6);
+          const wantFace = Math.atan2(pdx, pdz);
+          let fd = wantFace - f.face;
+          while (fd > Math.PI) fd -= TAU;
+          while (fd < -Math.PI) fd += TAU;
+          const maxTurn = 1.1 * dt;
+          f.face += Math.max(-maxTurn, Math.min(maxTurn, fd));
+          break;
+        }
         case 'warden': {
           // slow menacing drift toward the ember
           f.vx += ((pdx / pd) * 1.7 - f.vx) * Math.min(1, dt * 1.2);
@@ -886,12 +1024,13 @@ export class Sim {
                 vz: Math.cos(a) * 8.5,
                 life: FOE.bulletLife,
                 grazed: false,
+                heavy: false,
               });
             }
             // The Hollow Choir: escorts in phase 3
             if (f.boss && this.biome === 2 && f.state === 3 && f.tx < 1) {
               f.tx = 1;
-              const a1 = Math.random() * TAU;
+              const a1 = this.rng() * TAU;
               this.marks.push({ x: Math.sin(a1) * 20, z: Math.cos(a1) * 20, t: 0.9, kind: 'striker' });
               this.marks.push({ x: -Math.sin(a1) * 20, z: -Math.cos(a1) * 20, t: 0.9, kind: 'striker' });
             }
@@ -935,6 +1074,7 @@ export class Sim {
       vz: Math.cos(a) * FOE.bulletSpeed,
       life: FOE.bulletLife,
       grazed: false,
+      heavy: false,
     });
   }
 
@@ -944,16 +1084,17 @@ export class Sim {
       b.life -= dt;
       b.x += b.vx * dt;
       b.z += b.vz * dt;
+      const brad = b.heavy ? FOE.heavyRadius : FOE.bulletRadius;
       const dx = this.px - b.x;
       const dz = this.pz - b.z;
       const d = Math.hypot(dx, dz);
-      if (d < PLAYER.radius + FOE.bulletRadius) {
+      if (d < PLAYER.radius + brad) {
         if (this.invuln <= 0 && this.dashT <= 0) {
           this.hurt();
           this.bullets.splice(i, 1);
           continue;
         }
-      } else if (!b.grazed && d < this.grazeR + FOE.bulletRadius) {
+      } else if (!b.grazed && d < this.grazeR + brad) {
         b.grazed = true;
         this.addOverdrive(OVERDRIVE.grazeCharge);
         this.score += SCORE.graze;
@@ -985,11 +1126,17 @@ export class Sim {
     let points = budget;
     const q: FoeKind[] = [];
     while (points >= 1) {
-      const roll = Math.random();
-      if (n >= 3 && roll < 0.24 && points >= 3) {
+      const roll = this.rng();
+      if (n >= 5 && roll < 0.18 && points >= 4) {
+        q.push('bulwark');
+        points -= 4;
+      } else if (n >= 4 && roll < 0.4 && points >= 3) {
+        q.push('caster');
+        points -= 3;
+      } else if (n >= 3 && roll < 0.62 && points >= 3) {
         q.push('weaver');
         points -= 3;
-      } else if (n >= 2 && roll < 0.52 && points >= 2) {
+      } else if (n >= 2 && roll < 0.85 && points >= 2) {
         q.push('striker');
         points -= 2;
       } else {
@@ -1000,8 +1147,10 @@ export class Sim {
     // deterministic floor so later rooms always escalate
     if (n >= 3 && !q.includes('weaver')) q.push('weaver');
     if (n >= 2 && !q.includes('striker')) q.push('striker');
+    if (n >= 5 && !q.includes('caster')) q.push('caster');
+    if (n >= 8 && !q.includes('bulwark')) q.push('bulwark');
     for (let i = q.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
+      const j = Math.floor(this.rng() * (i + 1));
       [q[i], q[j]] = [q[i], q[j]];
     }
     return q;
@@ -1014,8 +1163,8 @@ export class Sim {
       this.spawnT -= dt;
       if (this.spawnT <= 0) {
         const interval = Math.max(WAVES.spawnIntervalMin, WAVES.spawnIntervalBase - WAVES.spawnIntervalPerWave * this.wave);
-        this.spawnT = interval * (0.7 + Math.random() * 0.6);
-        const batch = Math.min(this.spawnQueue.length, 1 + (this.wave > 4 && Math.random() < 0.4 ? 1 : 0));
+        this.spawnT = interval * (0.7 + this.rng() * 0.6);
+        const batch = Math.min(this.spawnQueue.length, 1 + (this.wave > 4 && this.rng() < 0.4 ? 1 : 0));
         for (let i = 0; i < batch; i++) {
           const kind = this.spawnQueue.shift();
           if (!kind) break;
@@ -1023,7 +1172,7 @@ export class Sim {
           let x = 0;
           let z = 0;
           for (let tries = 0; tries < 8; tries++) {
-            const a = Math.random() * TAU;
+            const a = this.rng() * TAU;
             const r = ARENA.radius - 2.5;
             x = Math.sin(a) * r;
             z = Math.cos(a) * r;

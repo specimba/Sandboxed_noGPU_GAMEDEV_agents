@@ -22,6 +22,7 @@ import {
   rollBoons,
   type BoonDef,
 } from './run';
+import { mulberry32 } from './rng';
 import { Scene } from './scene';
 import { Sim, type FoeKind, type SimEvents } from './sim';
 import { loadBest, loadMeta, saveBest, saveMeta, useGameStore } from './store';
@@ -43,6 +44,8 @@ const BURST: Record<FoeKind, number> = {
   drifter: 170,
   striker: 220,
   weaver: 280,
+  caster: 260,
+  bulwark: 420,
   warden: 900,
 };
 
@@ -130,7 +133,9 @@ export class Engine {
   private startRun(): void {
     this.audio.unlock();
     this.audio.uiClick();
-    // stack the shrine into a fresh build
+    // stack the shrine into a fresh build; every descent is numbered
+    const seed = (Date.now() ^ Math.floor(Math.random() * 0xffffff)) % 100000;
+    this.sim.setSeed(seed);
     this.sim.mods = metaMods(this.store.getState().unlocked);
     this.sim.reset();
     this.runBiome = 0;
@@ -151,6 +156,7 @@ export class Engine {
       score: 0,
       wave: 1,
       embers: this.sim.embers,
+      embersMax: this.sim.maxEmbers,
       shards: this.sim.shardCount,
       mult: 1,
       overdrive: 0,
@@ -161,6 +167,8 @@ export class Engine {
       bossBar: null,
       won: false,
       dawnEarned: 0,
+      seed,
+      mutatorLabel: this.sim.mutator.name,
       roomLabel: `${biomeName(0)} · ROOM 1`,
     });
   }
@@ -175,7 +183,9 @@ export class Engine {
 
   private openReward(): void {
     const depth = this.runBiome * RUN.roomsPerBiome + this.runRoom;
-    this.lastBoonChoices = rollBoons(this.boonsTaken, 3, depth);
+    // seeded draft: same seed → same offers
+    const draftRng = mulberry32((this.sim.seed ^ (depth * 0x9e3779b9)) >>> 0);
+    this.lastBoonChoices = rollBoons(this.boonsTaken, 3, depth, draftRng);
     this.store.getState().set({
       phase: 'reward',
       boonChoices: this.lastBoonChoices.map((b) => ({ id: b.id, name: b.name, desc: b.desc, tier: b.tier })),
@@ -189,6 +199,7 @@ export class Engine {
     this.sim.applyBoon(def);
     this.boonsTaken[def.id] = (this.boonsTaken[def.id] ?? 0) + 1;
     this.store.getState().pushToast(`+ ${def.name}`, 'gold');
+    this.store.getState().set({ embersMax: this.sim.maxEmbers });
     this.audio.shrine();
     this.advanceRoom();
   }
@@ -219,6 +230,8 @@ export class Engine {
       phase: 'playing',
       boonChoices: [],
       bossBar: null,
+      mutatorLabel: this.sim.mutator.name,
+      embersMax: this.sim.maxEmbers,
       roomLabel: `${biomeName(this.runBiome)} · ${isBossRoom(this.runRoom) ? 'BOSS' : 'ROOM ' + this.runRoom}`,
     });
   }
@@ -377,7 +390,9 @@ export class Engine {
         if (isBossRoom(this.runRoom)) {
           // boss banner fires from onWardenSpawn
         } else {
-          st.showBanner(`ROOM ${this.runRoom}`, biomeName(this.runBiome), 'room');
+          const mut = this.sim.mutator.name ? ` — ${this.sim.mutator.name}` : '';
+          st.showBanner(`ROOM ${this.runRoom}`, `${biomeName(this.runBiome)}${mut}`, 'room');
+          if (this.sim.mutator.name) st.pushToast(`${this.sim.mutator.name}: ${this.sim.mutator.desc}`, 'red');
         }
       },
       onWaveClear: () => {
@@ -401,6 +416,19 @@ export class Engine {
         this.audio.shieldBreak();
         this.fx.burst(x, z, 60, 14, { color: GOLD_C, life: 0.5, size: 0.5, up: 0.3 });
         this.rings.fire(x, z, 3.2, 0.35, 0xffe9a0);
+      },
+      onBlock: (x, z) => {
+        // light slamming into bulwark armor — a bright, cheap clang
+        this.audio.block();
+        this.rig.addShake(0.06);
+        this.fx.burst(x, z, 26, 11, { color: WHITE_C, life: 0.28, size: 0.42, up: 0.2 });
+        this.rings.fire(x, z, 2.4, 0.22, 0xfff4dc);
+      },
+      onHeavyShot: (x, z) => {
+        this.audio.heavyShot();
+        this.rig.addShake(0.12);
+        this.rings.fire(x, z, 3.0, 0.3, 0xc9ff6a);
+        this.fx.burst(x, z, 30, 10, { color: new THREE.Color(0xc9ff6a), life: 0.4, size: 0.5, up: 0.2 });
       },
       onBossPhase: (x, z, phase) => {
         this.audio.bossPhase();
@@ -562,6 +590,7 @@ export class Engine {
         enemiesLeft: this.sim.enemiesLeft,
         shards: this.sim.shardCount,
         embers: this.sim.embers,
+        embersMax: this.sim.maxEmbers,
         dashReady: Math.max(0, Math.min(1, 1 - this.sim.dashCd / PLAYER.dashCooldown)),
         overdrive: this.sim.odActive ? Math.max(0, this.sim.odT / OVERDRIVE.duration) : this.sim.odCharge / OVERDRIVE.max,
         overdriveActive: this.sim.odActive,

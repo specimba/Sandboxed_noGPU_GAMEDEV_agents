@@ -18,6 +18,8 @@ export default function Overlays() {
   const dawnEarned = useGameStore((s) => s.dawnEarned);
   const dawn = useGameStore((s) => s.dawn);
   const embers = useGameStore((s) => s.embers);
+  const embersMax = useGameStore((s) => s.embersMax);
+  const seed = useGameStore((s) => s.seed);
 
   // keyboard: 1-3 pick boons, H heals
   useEffect(() => {
@@ -62,7 +64,7 @@ export default function Overlays() {
           <button
             type="button"
             onClick={() => getEngine()?.chooseHeal()}
-            disabled={embers >= 3}
+            disabled={embers >= embersMax}
             className="hs-tracking border border-amber-200/40 px-6 py-2.5 text-xs text-amber-100/90 transition-all hover:border-amber-200 hover:bg-amber-200/10 disabled:opacity-30"
           >
             MEND AN EMBER · [H]
@@ -129,6 +131,7 @@ export default function Overlays() {
             <span className="text-[10px] text-amber-200/60">
               WAVE {wave} · BEST {best.toLocaleString()} · WAVE {bestWave}
             </span>
+            {seed > 0 && <span className="hs-tracking text-[10px] text-amber-200/40">SEED {seed}</span>}
             <span className="mt-1 text-xs text-amber-300">
               +{dawnEarned} DAWN EMBERS · {dawn.toLocaleString()} BANKED
             </span>

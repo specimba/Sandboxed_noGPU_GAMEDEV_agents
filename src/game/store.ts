@@ -44,6 +44,7 @@ interface GameState {
   shards: number;
   shardsMax: number;
   embers: number;
+  embersMax: number;
 
   dashReady: number;
   overdrive: number;
@@ -52,6 +53,8 @@ interface GameState {
 
   /** run structure */
   roomLabel: string;
+  mutatorLabel: string;
+  seed: number;
   boonsTaken: string[];
   boonChoices: BoonChoice[];
   bossBar: { name: string; frac: number } | null;
@@ -91,6 +94,7 @@ export const useGameStore = create<GameState>()((set) => ({
   shards: 3,
   shardsMax: 6,
   embers: 3,
+  embersMax: 3,
 
   dashReady: 1,
   overdrive: 0,
@@ -98,6 +102,8 @@ export const useGameStore = create<GameState>()((set) => ({
   sun: 0,
 
   roomLabel: '',
+  mutatorLabel: '',
+  seed: 0,
   boonsTaken: [],
   boonChoices: [],
   bossBar: null,

@@ -197,3 +197,27 @@ Stage Summary:
 - HOLLOW SUN is now a complete roguelite loop: run (9 rooms / 3 biome bosses) → boon builds (12 boons × stacking) → death/victory → dawn embers → Shrine of Dawn meta (6 permanent unlocks incl. revive) → faster next run. Pitch per megabonk-lessons: "bend living shards of light through ricochet geometry to rekindle a dying star."
 - Key decisions: run logic stays pure (run.ts + sim mods struct — headless-verifiable); elites are affixes on existing kits (Megabonk scope rule); boss phases are floor-protected (learning curve guaranteed); color law preserved (affix = ring, never recolor).
 - Roadmap next: chain-route preview line, biome 2+ bosses with distinct kits, win-streak mutators, Steam packaging via Tauri (roadmap only).
+
+---
+Task ID: 10 (base-game content: new foes, seeded runs, room mutators)
+Agent: lead (Z.ai Code)
+Task: Answer the "nearly 0 development to the base game" charge — grow the game under the roguelite layer with content you feel in the first 10 seconds: two new enemy families, seeded runs, per-room mutators; plus real HUD bugs found and fixed.
+
+Work Log:
+- Live audit first: agent-browser drove the ENTIRE existing run loop (rooms → boon drafts → biome bosses → victory → dawn banking) and confirmed it genuinely works; the real gap was base-game content, not wiring.
+- CASTER (acid-green cone, 3 budget pts, depth ≥4): holds the 16–23u band, locks the player at telegraph start (0.5s green line — dodgeable), lances a heavy shot (21u/s, r0.52, own draw call + acid palette). Telegraph reuses the striker line pool, color-switched.
+- BULWARK (bronze slab + white plate, 4 pts, depth ≥5): frontal armor cone (±1.05 rad) tracked at 1.1 rad/s. Frontal shards/dash clang off (onBlock: hp unchanged, chain STILL increments — armor feeds ricochet melodies); backstab takes full damage. View: group yaw = f.face, no spin, plate brighter than body (readability law: the block zone IS the bright thing).
+- Seeded runs: sim.setSeed(mulberry32) — every Math.random in sim replaced with this.rng() (queues, elites, mutators, splitters, spawns, choir, fan jitter); boon drafts seeded per room depth (seed ^ depth·φ). Seed shows in death/victory summary ("SEED 9024") — same seed = same star.
+- Room mutators (run.ts, deterministic per seed, 60% of rooms depth ≥3): SWIFT SHADOWS (+18% foe speed), THIN LIGHT (−15% shard speed), EMBER DROUGHT (−25% OD charge), GLASS RAIN (opening 16-bullet collapsing ring), RICH VEINS (score ×1.5, +30% budget). Banner sub + red HUD tag + toast announce them.
+- Composition: caster 3pts/bulwark 4pts in the budget weaver; deterministic floors caster@depth5, bulwark@depth8; boss escorts per biome (biome2 now fields a caster).
+- Bugs found & fixed during build: HUD ember pips hard-coded [0,1,2] while maxEmbers can reach 5 (ward + shrine) → dynamic Array.from(embersMax); reward heal button disabled at 3 instead of embersMax → fixed; both fed by new embersMax store field.
+- Audio: block() dull square clang vs shieldBreak shimmer; heavyShot() charged whoosh; onBlock/onHeavyShot routed with fx + micro-shake.
+- QA per contract:
+  * headless bun drive (.qa/headless-roguelite.ts): 106/106 PASS — seed determinism (same seed → same queue+mutator), mutator distribution (242/400), bulwark block/backstab (hp 6→6 blocked, chain 0→1; 6→5 backstab), caster lock/telegraph/heavy at exactly 21u/s, depth-7/8 composition floors, seeded draft reproducibility, full 9-room ladder to victory. (First run: 4 fails were test-side spawn-fade races — contact correctly ignored during 0.45–0.7s spawnT; tests fixed to burn the fade.)
+  * browser: reload → seeded run (SEED 9024 in HUD path) → manually staged bulwark+caster screenshots (silhouettes read instantly) → caster telegraph line + heavy lance verified in flight (1 heavy bullet) → GLASS HOLLOW room 1 rolled SWIFT SHADOWS with 2 casters in queue, ◆ tag in HUD → live frontal block (hp 6→6, chain 0→1) → death → THE EMBER FADES + SEED 9024 + +65 dawn. 0 console errors, 0 page errors.
+  * tsc clean (src), eslint clean. Light budget: +1 small Points draw call (heavy bullets, MAX 60), shared plate geometry, no new bloom contributors.
+
+Stage Summary:
+- The base game grew for real: 6 foe kinds (was 4), seeded reproducible descents, 5 room mutators, armor that teaches the ricochet fantasy (block → bounce → backstab).
+- Design keystone: bulwark turns the core mechanic into a skill check — light never dies on armor, it chain-sings off it.
+- All numbers live in constants/run.ts; all run logic stays pure (bun headless proves it every CI-style pass).

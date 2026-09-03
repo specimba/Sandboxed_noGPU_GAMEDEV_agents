@@ -1,4 +1,5 @@
 import { RUN, WAVES } from './constants';
+import type { Rng } from './rng';
 
 /**
  * HOLLOW SUN run layer — PURE TypeScript (no DOM, no three).
@@ -80,30 +81,92 @@ export const BOONS: BoonDef[] = [
   { id: 'patience', name: "SUN'S PATIENCE", desc: 'Overdrive lasts +2 s', tier: 'sun', maxStacks: 1, apply: (m) => { m.odDuration += 2; } },
 ];
 
-/** offer N distinct boons weighted by tier; respects maxStacks; depth raises rarity */
-export function rollBoons(taken: Record<string, number>, n: number, depth: number): BoonDef[] {
+/** offer N distinct boons weighted by tier; respects maxStacks; depth raises rarity.
+ *  pass an Rng for seeded runs — deterministic drafts per seed. */
+export function rollBoons(taken: Record<string, number>, n: number, depth: number, rng: Rng = Math.random): BoonDef[] {
   const out: BoonDef[] = [];
   const pool = BOONS.filter((b) => (taken[b.id] ?? 0) < (b.maxStacks ?? 99));
   const sunW = 0.05 + Math.min(0.06, depth * 0.012);
   const rareW = 0.33 + Math.min(0.06, depth * 0.012);
   for (let i = 0; i < n && pool.length > out.length; i++) {
-    const roll = Math.random();
+    const roll = rng();
     let cand = pool.filter((b) => b.tier === 'sun' && !out.includes(b));
     if (roll < sunW && cand.length > 0) {
-      out.push(cand[Math.floor(Math.random() * cand.length)]);
+      out.push(cand[Math.floor(rng() * cand.length)]);
       continue;
     }
     cand = pool.filter((b) => b.tier === 'rare' && !out.includes(b));
     if (roll < sunW + rareW && cand.length > 0) {
-      out.push(cand[Math.floor(Math.random() * cand.length)]);
+      out.push(cand[Math.floor(rng() * cand.length)]);
       continue;
     }
     cand = pool.filter((b) => b.tier === 'common' && !out.includes(b));
     if (cand.length === 0) cand = pool.filter((b) => !out.includes(b));
     if (cand.length === 0) break;
-    out.push(cand[Math.floor(Math.random() * cand.length)]);
+    out.push(cand[Math.floor(rng() * cand.length)]);
   }
   return out;
+}
+
+/* ------------------------------------------------------------------ */
+/* Room mutators — per-room weather that bends the rules               */
+/* ------------------------------------------------------------------ */
+
+export interface RoomMods {
+  foeSpeed: number; // multiplier
+  shardSpeed: number; // multiplier
+  odCharge: number; // multiplier on overdrive gains
+  budget: number; // extra budget fraction
+  score: number; // score multiplier
+  glassRain: boolean; // opening ring of bullets
+}
+
+export function defaultRoomMods(): RoomMods {
+  return { foeSpeed: 1, shardSpeed: 1, odCharge: 1, budget: 0, score: 1, glassRain: false };
+}
+
+interface MutatorDef {
+  id: string;
+  name: string;
+  desc: string;
+  minDepth: number;
+  weight: number;
+  apply(m: RoomMods): void;
+}
+
+const MUTATOR_DEFS: MutatorDef[] = [
+  { id: 'swiftshadows', name: 'SWIFT SHADOWS', desc: 'Foes drift 18% faster', minDepth: 3, weight: 3, apply: (m) => { m.foeSpeed *= 1.18; } },
+  { id: 'thinlight', name: 'THIN LIGHT', desc: 'Shards fly 15% slower', minDepth: 3, weight: 3, apply: (m) => { m.shardSpeed *= 0.85; } },
+  { id: 'drought', name: 'EMBER DROUGHT', desc: 'Overdrive charges 25% slower', minDepth: 4, weight: 2, apply: (m) => { m.odCharge *= 0.75; } },
+  { id: 'glassrain', name: 'GLASS RAIN', desc: 'The room opens under a bullet ring', minDepth: 4, weight: 2, apply: (m) => { m.glassRain = true; } },
+  { id: 'richveins', name: 'RICH VEINS', desc: 'Score ×1.5 — the dark pays better', minDepth: 5, weight: 2, apply: (m) => { m.score *= 1.5; m.budget += 0.3; } },
+];
+
+export interface RoomMutator {
+  id: string;
+  name: string;
+  desc: string;
+  mods: RoomMods;
+}
+
+/** deterministic per seed: 60% of rooms past depth 2 carry a mutator */
+export function rollMutator(rng: Rng, depth: number): RoomMutator {
+  if (depth < 3 || rng() >= 0.6) {
+    return { id: '', name: '', desc: '', mods: defaultRoomMods() };
+  }
+  const pool = MUTATOR_DEFS.filter((m) => depth >= m.minDepth);
+  let total = 0;
+  for (const m of pool) total += m.weight;
+  let roll = rng() * total;
+  for (const m of pool) {
+    roll -= m.weight;
+    if (roll <= 0) {
+      const mods = defaultRoomMods();
+      m.apply(mods);
+      return { id: m.id, name: m.name, desc: m.desc, mods };
+    }
+  }
+  return { id: '', name: '', desc: '', mods: defaultRoomMods() };
 }
 
 /* ------------------------------------------------------------------ */
