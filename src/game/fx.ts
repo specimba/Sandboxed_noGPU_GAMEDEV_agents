@@ -52,7 +52,8 @@ varying vec3 vC;
 varying float vA;
 void main() {
   float d = length(gl_PointCoord - 0.5);
-  float a = smoothstep(0.5, 0.06, d) * vA;
+  // crisp core with a tight falloff — sparks, not blobs
+  float a = smoothstep(0.5, 0.16, d) * vA;
   gl_FragColor = vec4(vC * a, a);
 }
 `;

@@ -123,6 +123,9 @@
 
 /* ============================================================
    HOLLOW SUN — game layer styles
+   EMBER RITE — instrument panel of a dead-star temple.
+   Charcoal glass, bone type, hairline gold engraving.
+   One gold accent (#ffc766) for STATE only. Restraint is the design.
    ============================================================ */
 
 html, body {
@@ -135,13 +138,175 @@ html, body {
   letter-spacing: 0.22em;
 }
 
+/* — glass panel plate + hairline border (square, engraved) — */
+.hs-panel {
+  background: rgba(12, 9, 7, 0.78);
+  border: 1px solid rgba(255, 196, 120, 0.22);
+  border-radius: 2px;
+  backdrop-filter: blur(10px) saturate(0.85);
+  -webkit-backdrop-filter: blur(10px) saturate(0.85);
+}
+
+/* — viewfinder corner brackets: 10px L-strokes in gold @ 30%.
+      ::before/::after give TL+BR; drop <span class="hs-c" /> inside
+      for TR+BL. Brightens on hover; --lurk shows corners on hover only. — */
+.hs-frame {
+  position: relative;
+}
+.hs-frame::before,
+.hs-frame::after,
+.hs-frame > .hs-c::before,
+.hs-frame > .hs-c::after {
+  content: '';
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  border: 0 solid rgba(255, 199, 102, 0.3);
+  pointer-events: none;
+  transition: border-color 0.18s ease, opacity 0.18s ease;
+}
+.hs-frame::before { top: -1px; left: -1px; border-top-width: 1px; border-left-width: 1px; }
+.hs-frame::after { right: -1px; bottom: -1px; border-right-width: 1px; border-bottom-width: 1px; }
+.hs-frame > .hs-c { display: block; }
+.hs-frame > .hs-c::before { top: -1px; right: -1px; border-top-width: 1px; border-right-width: 1px; }
+.hs-frame > .hs-c::after { bottom: -1px; left: -1px; border-bottom-width: 1px; border-left-width: 1px; }
+.hs-frame:hover::before,
+.hs-frame:hover::after,
+.hs-frame:hover > .hs-c::before,
+.hs-frame:hover > .hs-c::after {
+  border-color: rgba(255, 199, 102, 0.85);
+}
+.hs-frame--lurk::before,
+.hs-frame--lurk::after,
+.hs-frame--lurk > .hs-c::before,
+.hs-frame--lurk > .hs-c::after { opacity: 0; }
+.hs-frame--lurk:hover::before,
+.hs-frame--lurk:hover::after,
+.hs-frame--lurk:hover > .hs-c::before,
+.hs-frame--lurk:hover > .hs-c::after { opacity: 1; }
+
+/* — hairline rule with diamond end-caps (--bare strips the diamonds) — */
+.hs-hairline {
+  position: relative;
+  display: block;
+  height: 1px;
+  min-width: 16px;
+  background: linear-gradient(
+    to right,
+    rgba(255, 196, 120, 0.04),
+    rgba(255, 196, 120, 0.28) 50%,
+    rgba(255, 196, 120, 0.04)
+  );
+}
+.hs-hairline::before,
+.hs-hairline::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  width: 5px;
+  height: 5px;
+  background: rgba(255, 199, 102, 0.55);
+  transform: translateY(-50%) rotate(45deg);
+}
+.hs-hairline::before { left: 0; }
+.hs-hairline::after { right: 0; }
+.hs-hairline--bare::before,
+.hs-hairline--bare::after { display: none; }
+
+/* — segmented meter cell — */
+.hs-seg {
+  flex: 1 1 0%;
+  min-width: 0;
+  background: rgba(242, 230, 207, 0.07);
+  box-shadow: inset 0 0 0 1px rgba(255, 196, 120, 0.08);
+  transition: background 0.15s ease, opacity 0.15s ease;
+}
+.hs-seg--on {
+  background: linear-gradient(180deg, #ffd98f 0%, #e79a36 100%);
+  box-shadow: inset 0 0 3px rgba(255, 244, 214, 0.35);
+}
+.hs-seg--hot {
+  background: linear-gradient(180deg, #ffffff 0%, #ffd98f 100%);
+  animation: hsSegHot 0.8s ease-in-out infinite;
+}
+
+/* — diamond pips (embers / shards) — */
+.hs-pip {
+  width: 11px;
+  height: 11px;
+  flex: none;
+  transform: rotate(45deg);
+  border-radius: 1px;
+  background: rgba(242, 230, 207, 0.07);
+  border: 1px solid rgba(255, 196, 120, 0.25);
+  transition: background-color 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
+}
+.hs-pip--on {
+  background: #ffc766;
+  border-color: #ffdf9e;
+  box-shadow: 0 0 6px rgba(255, 199, 102, 0.4);
+}
+.hs-pip--sm { width: 9px; height: 9px; }
+
+/* — engraved buttons: hairline that lightens on hover, never blooms — */
+.hs-btn {
+  min-height: 44px;
+  border: 1px solid rgba(255, 196, 120, 0.45);
+  border-radius: 2px;
+  background: rgba(12, 9, 7, 0.6);
+  color: #f2e6cf;
+  cursor: pointer;
+  transition: border-color 0.18s ease, background-color 0.18s ease, color 0.18s ease, opacity 0.18s ease;
+}
+.hs-btn:hover:not(:disabled) {
+  border-color: rgba(255, 199, 102, 0.75);
+  background: rgba(255, 199, 102, 0.07);
+  color: #fff3dc;
+}
+.hs-btn:disabled { opacity: 0.35; cursor: not-allowed; }
+.hs-btn--quiet {
+  border-color: rgba(255, 196, 120, 0.22);
+  color: rgba(242, 230, 207, 0.78);
+}
+.hs-btn--quiet:hover:not(:disabled) {
+  border-color: rgba(255, 196, 120, 0.5);
+  background: rgba(255, 199, 102, 0.04);
+  color: rgba(242, 230, 207, 0.9);
+}
+.hs-btn--danger {
+  border-color: rgba(255, 90, 74, 0.3);
+  color: rgba(255, 177, 166, 0.85);
+}
+.hs-btn--danger:hover:not(:disabled) {
+  border-color: rgba(255, 90, 74, 0.65);
+  background: rgba(255, 90, 74, 0.06);
+  color: #ffc4bc;
+}
+
+/* — 5-notch tick overlay for rectangular meter tracks — */
+.hs-ticks {
+  background: repeating-linear-gradient(
+    to right,
+    transparent 0,
+    transparent calc(20% - 1px),
+    rgba(2, 3, 10, 0.9) calc(20% - 1px),
+    rgba(2, 3, 10, 0.9) 20%
+  );
+}
+
+/* keyboard focus — a single gold hairline, nothing louder */
+main button:focus-visible {
+  outline: 1px solid rgba(255, 199, 102, 0.9);
+  outline-offset: 2px;
+}
+
 /* title flicker — a dying star's last light */
 @keyframes hsFlicker {
   0%, 100% { opacity: 1; }
   92% { opacity: 1; }
-  94% { opacity: 0.72; }
+  94% { opacity: 0.78; }
   96% { opacity: 1; }
-  97.5% { opacity: 0.85; }
+  97.5% { opacity: 0.88; }
 }
 .hs-flicker { animation: hsFlicker 4.2s infinite; }
 
@@ -152,12 +317,18 @@ html, body {
 }
 .hs-pulse { animation: hsPulse 0.9s ease-in-out infinite; }
 
+/* white-hot overdrive cells */
+@keyframes hsSegHot {
+  0%, 100% { opacity: 0.65; }
+  50% { opacity: 1; }
+}
+
 /* wave banner */
 @keyframes hsBanner {
-  0% { opacity: 0; transform: translate(-50%, 14px) scale(0.96); }
+  0% { opacity: 0; transform: translate(-50%, 14px) scale(0.97); }
   14% { opacity: 1; transform: translate(-50%, 0) scale(1); }
   80% { opacity: 1; }
-  100% { opacity: 0; transform: translate(-50%, -10px) scale(1.02); }
+  100% { opacity: 0; transform: translate(-50%, -10px) scale(1.01); }
 }
 .hs-banner { animation: hsBanner 2.2s ease-out forwards; }
 
@@ -176,5 +347,5 @@ html, body {
 
 /* reduced motion: kill decorative animation */
 @media (prefers-reduced-motion: reduce) {
-  .hs-flicker, .hs-pulse, .hs-banner, .hs-toast { animation: none !important; }
+  .hs-flicker, .hs-pulse, .hs-banner, .hs-toast, .hs-seg--hot { animation: none !important; }
 }

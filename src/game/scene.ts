@@ -1,15 +1,20 @@
 import * as THREE from 'three';
 import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
+import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 import { ARENA, BIOMES, COLORS } from './constants';
 import { makeGlowTexture } from './fx';
+import { coreMaterial, setRimK, stylizedMaterial, updateStylized } from './materials';
 
 /**
- * HOLLOW SUN world: a near-black arena carved inside a dead star.
- * The hex floor grid ignites outward from the center as the sun rekindles;
- * kill pulses sweep across the floor; the cracked star leaks god-rays.
+ * HOLLOW SUN — "EMBER RITE" world layer.
+ * A warm near-black obsidian temple: the arena is a chiseled hex floor inside
+ * a dead star. THE HOLLOW LANTERN (a broken ring of nine dark monolith slabs
+ * around a small ember core) hangs at the heart; a designed field of leaning
+ * rim-lit monoliths silhouettes against the fog. Dark solid masses, restrained
+ * emissive accents, a graded film look — no round glow-ball aesthetic.
  */
 
 const FLOOR_VERT = /* glsl */ `
@@ -74,7 +79,7 @@ void main() {
   vec3 cold = uCold;
   vec3 hot = uHot;
   vec3 lineCol = mix(cold, hot, clamp(heat * 1.5, 0.0, 1.0));
-  float lineA = 0.15 + heat * 0.85 + ring * 1.4;
+  float lineA = 0.10 + heat * 0.85 + ring * 1.4;
 
   // ember light puddle under the player
   float pd = distance(p, uPlayer);
@@ -84,6 +89,7 @@ void main() {
   // the star's well: dark sink at the very center + molten core ring
   float well = smoothstep(3.4, 1.2, dCenter);
   lineA += well * (0.35 + uIgnite * 0.6);
+  lineCol += vec3(1.0, 0.72, 0.35) * well * (0.28 + uIgnite * 0.5);
 
   vec3 col = lineCol * edge * lineA * flick;
   col = min(col, vec3(1.15));  // keep the grid luminous, never white
@@ -111,10 +117,62 @@ void main() {
   float fade = smoothstep(0.0, 0.55, vUv.y) * (1.0 - smoothstep(0.62, 1.0, vUv.y));
   float side = smoothstep(0.0, 0.42, vUv.x) * (1.0 - smoothstep(0.58, 1.0, vUv.x));
   float breathe = 0.75 + 0.25 * sin(uTime * 1.7 + uSeed * 12.0);
-  vec3 col = vec3(1.0, 0.78, 0.42) * fade * side * (0.10 + uEnergy * 0.45) * breathe;
+  vec3 col = vec3(1.0, 0.78, 0.42) * fade * side * (0.08 + uEnergy * 0.32) * breathe;
   gl_FragColor = vec4(col, 1.0);
 }
 `;
+
+/** the "designed film look" — grade pass sits between bloom and output */
+const GRADE_SHADER = {
+  uniforms: {
+    tDiffuse: { value: null as THREE.Texture | null },
+    uTime: { value: 0 },
+  },
+  vertexShader: /* glsl */ `
+    varying vec2 vUv;
+    void main() {
+      vUv = uv;
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    }
+  `,
+  fragmentShader: /* glsl */ `
+    uniform sampler2D tDiffuse;
+    uniform float uTime;
+    varying vec2 vUv;
+
+    float hash(vec2 p) {
+      return fract(sin(dot(p, vec2(127.1, 311.7)) + uTime * 43.0) * 43758.5453);
+    }
+
+    void main() {
+      vec3 col = texture2D(tDiffuse, vUv).rgb;
+      // gentle S-curve — clamped knee keeps HDR hotspots monotonic
+      vec3 s = clamp(col, 0.0, 1.0);
+      col = mix(col, col * col * (3.0 - 2.0 * s), 0.22);
+      // warm shadow lift
+      col += vec3(0.030, 0.016, 0.008);
+      // vignette, slightly high anchor
+      float d = distance(vUv, vec2(0.5, 0.46));
+      col *= 1.0 - smoothstep(0.42, 0.92, d) * 0.38;
+      // shimmering film grain
+      col += (hash(vUv * vec2(1920.0, 1080.0)) - 0.5) * 0.045;
+      gl_FragColor = vec4(col, 1.0);
+    }
+  `,
+};
+
+/** tapered slab geometry — hand-cut stone by construction */
+function taperedBoxGeo(w: number, h: number, d: number, taper: number): THREE.BufferGeometry {
+  const geo = new THREE.BoxGeometry(w, h, d);
+  const pos = geo.attributes.position as THREE.BufferAttribute;
+  for (let i = 0; i < pos.count; i++) {
+    if (pos.getY(i) > 0) {
+      pos.setX(i, pos.getX(i) * taper);
+      pos.setZ(i, pos.getZ(i) * taper);
+    }
+  }
+  return geo;
+}
 
 export interface SunRig {
   group: THREE.Group;
@@ -132,6 +190,7 @@ export class Scene {
   floorMat!: THREE.ShaderMaterial;
   readonly sun: SunRig;
   private dustMat!: THREE.ShaderMaterial;
+  private gradePass!: ShaderPass;
   private rayMats: THREE.ShaderMaterial[] = [];
   private crackMat!: THREE.LineBasicMaterial;
   private starCore!: THREE.Mesh;
@@ -139,7 +198,13 @@ export class Scene {
   private starRing!: THREE.Mesh;
   private sunGroup!: THREE.Group;
   private shells: THREE.Mesh[] = [];
+  /** lantern slabs — rim retuned with sun energy */
+  private slabMats: THREE.ShaderMaterial[] = [];
+  private slabs: { mesh: THREE.Mesh; baseY: number }[] = [];
+  /** rim monolith field — stored for future animation */
+  private monolithMats: THREE.ShaderMaterial[] = [];
   private starLight: THREE.PointLight;
+  private sunEnergy = 0;
   private tgtCold = new THREE.Color(BIOMES[0].grid);
   private tgtHot = new THREE.Color(BIOMES[0].hot);
   private tgtFog = new THREE.Color(BIOMES[0].fog);
@@ -152,17 +217,19 @@ export class Scene {
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
     this.renderer.setSize(window.innerWidth, window.innerHeight, false);
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.12;
+    this.renderer.toneMappingExposure = 1.05;
 
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color(COLORS.bg);
-    this.scene.fog = new THREE.FogExp2(COLORS.bg, 0.0135);
+    this.scene.fog = new THREE.FogExp2(COLORS.bg, 0.016);
 
     this.camera = new THREE.PerspectiveCamera(55, window.innerWidth / window.innerHeight, 0.1, 220);
     this.camera.position.set(0, 24, 16);
 
-    this.scene.add(new THREE.AmbientLight(0x33383f, 0.55));
-    this.starLight = new THREE.PointLight(0xffc766, 30, 90, 1.6);
+    // lights only affect standard materials — stylized stone is self-lit
+    this.scene.add(new THREE.AmbientLight(0x2a2420, 0.4));
+    this.scene.add(new THREE.HemisphereLight(0x2a1c10, 0x0a0708, 0.5));
+    this.starLight = new THREE.PointLight(0xffb454, 24, 90, 1.6);
     this.starLight.position.set(0, 3, 0);
     this.scene.add(this.starLight);
 
@@ -172,11 +239,13 @@ export class Scene {
     this.sun = this.buildSun();
     this.buildDust();
 
-    // post: bloom IS the lighting model here
+    // post: restrained bloom + film grade IS the look here
     this.composer = new EffectComposer(this.renderer);
     this.composer.addPass(new RenderPass(this.scene, this.camera));
-    this.bloom = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 1.05, 0.62, 0.38);
+    this.bloom = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 0.55, 0.55, 0.55);
     this.composer.addPass(this.bloom);
+    this.gradePass = new ShaderPass(GRADE_SHADER);
+    this.composer.addPass(this.gradePass);
     this.composer.addPass(new OutputPass());
   }
 
@@ -211,37 +280,56 @@ export class Scene {
   }
 
   private buildWall(): void {
-    // boundary ring — a thin hot warning line where the shell wall rises
+    // boundary ring — a thin cold-red warning line where the shell wall rises
     const geo = new THREE.TorusGeometry(ARENA.wallGlow, 0.09, 8, 128);
     geo.rotateX(Math.PI / 2);
-    const mat = new THREE.MeshBasicMaterial({ color: 0x7a1425, transparent: true, opacity: 0.75, blending: THREE.AdditiveBlending, depthWrite: false });
+    const mat = new THREE.MeshBasicMaterial({ color: COLORS.foeDeep, transparent: true, opacity: 0.55, blending: THREE.AdditiveBlending, depthWrite: false });
     const ring = new THREE.Mesh(geo, mat);
     ring.position.y = 0.05;
     this.scene.add(ring);
 
     // the far dead shell — huge inverted cylinder swallowing the horizon
     const wallGeo = new THREE.CylinderGeometry(72, 78, 90, 64, 1, true);
-    const wallMat = new THREE.MeshBasicMaterial({ color: 0x06070d, side: THREE.BackSide, fog: true });
+    const wallMat = new THREE.MeshBasicMaterial({ color: 0x090605, side: THREE.BackSide, fog: true });
     const wall = new THREE.Mesh(wallGeo, wallMat);
     wall.position.y = 30;
     this.scene.add(wall);
   }
 
+  /** RIM MONOLITH FIELD — designed ring of leaning slabs around the arena */
   private buildShells(): void {
-    // broken chunks of the dead star, drifting around the perimeter
+    const count = 16;
+    for (let i = 0; i < count; i++) {
+      const a = (i / count) * Math.PI * 2 + (Math.random() - 0.5) * 0.24;
+      const r = 40 + Math.random() * 12;
+      const h = 7 + Math.random() * 11;
+      const w = 1.6 + Math.random() * 1.4;
+      const d = 1.2 + Math.random() * 1.2;
+      const geo = taperedBoxGeo(w, h, d, 0.5 + Math.random() * 0.3);
+      const mat = stylizedMaterial({ base: 0x120d08, lit: 0x2a1d12, rim: 0xff9a4a, rimK: 0.35, rimPow: 3.2, fog: true });
+      const m = new THREE.Mesh(geo, mat);
+      m.position.set(Math.cos(a) * r, h * 0.5 - 1.2, Math.sin(a) * r);
+      // lean toward the arena heart
+      m.lookAt(0, m.position.y, 0);
+      m.rotateY((Math.random() - 0.5) * 0.5);
+      m.rotateX(0.05 + Math.random() * 0.15);
+      this.scene.add(m);
+      this.monolithMats.push(mat);
+    }
+
+    // a few dark broken-shell chunks drift higher for parallax
     const geos = [
       new THREE.DodecahedronGeometry(1, 0),
       new THREE.IcosahedronGeometry(1, 0),
-      new THREE.OctahedronGeometry(1, 0),
     ];
-    for (let i = 0; i < 14; i++) {
+    for (let i = 0; i < 7; i++) {
       const geo = geos[i % geos.length];
-      const mat = new THREE.MeshBasicMaterial({ color: 0x0b0d18, fog: true });
+      const mat = stylizedMaterial({ base: 0x0c0805, lit: 0x181009, rim: 0xff9a4a, rimK: 0.22, rimPow: 3.6, fog: true });
       const m = new THREE.Mesh(geo, mat);
-      const a = (i / 14) * Math.PI * 2 + Math.random() * 0.4;
-      const r = 44 + Math.random() * 14;
-      m.position.set(Math.sin(a) * r, 4 + Math.random() * 22, Math.cos(a) * r);
-      m.scale.setScalar(2.2 + Math.random() * 4.5);
+      const a = Math.random() * Math.PI * 2;
+      const r = 46 + Math.random() * 18;
+      m.position.set(Math.sin(a) * r, 15 + Math.random() * 15, Math.cos(a) * r);
+      m.scale.setScalar(2.0 + Math.random() * 3.6);
       m.rotation.set(Math.random() * 3, Math.random() * 3, Math.random() * 3);
       m.userData.spin = (Math.random() - 0.5) * 0.08;
       this.scene.add(m);
@@ -249,29 +337,52 @@ export class Scene {
     }
   }
 
+  /** THE HOLLOW LANTERN — nine dark monolith slabs orbiting an ember core */
   private buildSun(): SunRig {
     const group = new THREE.Group();
     this.scene.add(group);
     this.sunGroup = group;
 
-    // molten core
-    const coreGeo = new THREE.IcosahedronGeometry(1.75, 1);
-    const coreMat = new THREE.MeshBasicMaterial({ color: 0xffdda6 });
+    // broken ring of monolith slabs
+    const slabCount = 9;
+    for (let i = 0; i < slabCount; i++) {
+      const a = (i / slabCount) * Math.PI * 2;
+      const r = 4.0 + Math.random() * 1.2;
+      const h = 2.4 + Math.random() * 1.8;
+      const w = 0.9 + Math.random() * 0.4;
+      const geo = taperedBoxGeo(w, h, w * 0.62, 0.55 + Math.random() * 0.2);
+      const mat = stylizedMaterial({ base: COLORS.obsidian, rim: 0xffb454, rimK: 0.55, emis: 0xff8a3d, emisK: 0.06 });
+      const m = new THREE.Mesh(geo, mat);
+      m.position.set(Math.cos(a) * r, 0, Math.sin(a) * r);
+      // face the core, alternate the lean so the ring reads as a broken crown
+      m.lookAt(0, m.position.y, 0);
+      m.rotateY((Math.random() - 0.5) * 0.4);
+      m.rotateX((i % 2 === 0 ? 1 : -1) * (0.12 + Math.random() * 0.13));
+      const baseY = h * 0.5 + 0.3 + Math.random() * 0.9;
+      m.position.y = baseY;
+      group.add(m);
+      this.slabMats.push(mat);
+      this.slabs.push({ mesh: m, baseY });
+    }
+
+    // ember core — small, hard, faceted
+    const coreGeo = new THREE.IcosahedronGeometry(1.15, 0);
+    const coreMat = coreMaterial(0xffe8c2);
     this.starCore = new THREE.Mesh(coreGeo, coreMat);
     group.add(this.starCore);
 
-    // halo
-    const glowTex = makeGlowTexture('rgba(255,214,150,0.9)', 'rgba(255,150,60,0)');
-    this.starGlow = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTex, blending: THREE.AdditiveBlending, depthWrite: false, opacity: 0.85 }));
-    this.starGlow.scale.setScalar(10);
+    // compact warm glow
+    const glowTex = makeGlowTexture('rgba(255,190,110,0.9)', 'rgba(255,120,40,0)');
+    this.starGlow = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTex, blending: THREE.AdditiveBlending, depthWrite: false, opacity: 0.18 }));
+    this.starGlow.scale.setScalar(5);
     group.add(this.starGlow);
 
-    // ring halo
-    const ringGeo = new THREE.TorusGeometry(3.4, 0.05, 8, 96);
+    // thin molten ring on the ground
+    const ringGeo = new THREE.TorusGeometry(2.6, 0.06, 8, 96);
     ringGeo.rotateX(Math.PI / 2);
-    const ringMat = new THREE.MeshBasicMaterial({ color: 0xffc766, transparent: true, opacity: 0.5, blending: THREE.AdditiveBlending, depthWrite: false });
+    const ringMat = new THREE.MeshBasicMaterial({ color: 0xffc766, transparent: true, opacity: 0.3, blending: THREE.AdditiveBlending, depthWrite: false });
     this.starRing = new THREE.Mesh(ringGeo, ringMat);
-    this.starRing.position.y = 0.4;
+    this.starRing.position.y = 0.06;
     group.add(this.starRing);
 
     // cracks — jagged light escaping the broken shell
@@ -294,13 +405,13 @@ export class Scene {
     }
     const crackGeo = new THREE.BufferGeometry();
     crackGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(crackPts), 3));
-    this.crackMat = new THREE.LineBasicMaterial({ color: 0xffd9a0, transparent: true, opacity: 0.0, blending: THREE.AdditiveBlending, depthWrite: false });
+    this.crackMat = new THREE.LineBasicMaterial({ color: 0xffcf8a, transparent: true, opacity: 0.0, blending: THREE.AdditiveBlending, depthWrite: false });
     const cracks = new THREE.LineSegments(crackGeo, this.crackMat);
     group.add(cracks);
 
-    // god-rays — vertical light planes slowly circling the star
+    // god-rays — narrow vertical light planes slowly circling the core
     for (let i = 0; i < 6; i++) {
-      const geo = new THREE.PlaneGeometry(2.6, 30, 1, 1);
+      const geo = new THREE.PlaneGeometry(1.6, 30, 1, 1);
       geo.translate(0, 14, 0);
       const mat = new THREE.ShaderMaterial({
         vertexShader: RAY_VERT,
@@ -325,19 +436,24 @@ export class Scene {
     return {
       group,
       setEnergy: (e: number) => {
-        this.crackMat.opacity = e * 0.95;
-        (this.starRing.material as THREE.MeshBasicMaterial).opacity = 0.15 + e * 0.6;
-        this.starGlow.scale.setScalar(9 + e * 7);
-        this.starGlow.material.opacity = 0.55 + e * 0.45;
-        this.starCore.scale.setScalar(1 + e * 0.22);
+        this.sunEnergy = e;
+        this.crackMat.opacity = e * 0.9;
+        this.starGlow.material.opacity = 0.18 + e * 0.4;
+        this.starGlow.scale.setScalar(4.6 + e * 1.8);
+        this.starCore.scale.setScalar(1 + e * 0.3);
         for (const m of this.rayMats) m.uniforms.uEnergy.value = e;
+        for (const m of this.slabMats) setRimK(m, 0.55 + e * 0.95);
       },
       update: (dt: number, t: number) => {
         group.rotation.y += dt * 0.12;
         this.starCore.rotation.x += dt * 0.3;
         this.starCore.rotation.y += dt * 0.42;
         const pulse = 1 + Math.sin(t * 2.4) * 0.035;
-        this.starCore.scale.setScalar((1 + this.crackMat.opacity * 0.22) * pulse);
+        this.starCore.scale.setScalar((1 + this.sunEnergy * 0.3) * pulse);
+        for (let i = 0; i < this.slabs.length; i++) {
+          const s = this.slabs[i];
+          s.mesh.position.y = s.baseY + Math.sin(t * 0.5 + i) * 0.15;
+        }
         for (const m of this.rayMats) m.uniforms.uTime.value = t;
         this.sunGroup = group;
       },
@@ -377,8 +493,8 @@ export class Scene {
           vec4 mv = modelViewMatrix * vec4(p, 1.0);
           float dist = max(0.1, -mv.z);
           gl_PointSize = min((1.0 + aSeed * 1.8) * uPix * (60.0 / dist), 14.0 * uPix);
-          vA = (0.10 + aSeed * 0.22) * smoothstep(0.5, 3.0, dist);
-          vC = mix(vec3(1.0, 0.72, 0.4), vec3(1.0, 0.9, 0.7), aSeed);
+          vA = (0.07 + aSeed * 0.16) * smoothstep(0.5, 3.0, dist);
+          vC = mix(vec3(1.0, 0.62, 0.32), vec3(1.0, 0.85, 0.62), aSeed);
           gl_Position = projectionMatrix * mv;
         }
       `,
@@ -421,6 +537,8 @@ export class Scene {
 
     this.floorMat.uniforms.uTime.value = this.time;
     this.dustMat.uniforms.uTime.value = this.time;
+    this.gradePass.uniforms.uTime.value = this.time;
+    updateStylized(this.time);
     this.sun.update(dt, this.time);
     for (const s of this.shells) {
       s.rotation.y += s.userData.spin * dt;

@@ -2,40 +2,128 @@ import * as THREE from 'three';
 import { ARENA, COLORS } from './constants';
 import type { FoeKind, Sim } from './sim';
 import { makeGlowTexture, ParticlePool } from './fx';
+import { coreMaterial, makeDiamondTexture, makeStreakTexture, stylizedMaterial } from './materials';
 
 /**
- * HOLLOW SUN view: pools syncing the sim onto the emissive scene.
- * Foes are shared-geometry meshes with additive glow sprites; bullets are a
- * single Points buffer; shards are elongated blades of light with trails.
+ * HOLLOW SUN view — "EMBER RITE" entity layer.
+ *
+ * Every living thing is a dark chiseled obsidian shell: faceted solid with a
+ * fresnel rim in its identity color and a small emissive heart. Silhouettes
+ * first, glow never carries the shape — additive sprites survive only as
+ * small heart accents, the dart's tail ember and the reticle hairlines.
+ *
+ * sync() is a pure visual re-sync of the frozen sim contract: same fields
+ * read, same pool/pop/spin/telegraph/buffer math — only the looks moved.
  */
 
 const FOE_GEO: Record<FoeKind, THREE.BufferGeometry> = {
-  drifter: new THREE.OctahedronGeometry(0.85, 0),
-  striker: new THREE.TetrahedronGeometry(0.95, 0),
-  weaver: new THREE.TorusGeometry(0.66, 0.17, 8, 26).rotateX(Math.PI / 2),
-  caster: new THREE.ConeGeometry(0.72, 1.7, 5).rotateX(Math.PI / 2), // a turret that lances
-  bulwark: new THREE.BoxGeometry(1.7, 1.5, 1.7), // a slab that walks
-  warden: new THREE.IcosahedronGeometry(2.2, 0),
+  drifter: new THREE.OctahedronGeometry(0.95, 0).scale(1, 1.25, 1), // ash husk
+  striker: new THREE.ConeGeometry(0.62, 1.7, 4).rotateX(Math.PI / 2), // cinder dart, tip = +Z
+  weaver: new THREE.TorusGeometry(0.66, 0.15, 6, 3).rotateX(Math.PI / 2), // hex weaver ring, flat
+  caster: new THREE.CylinderGeometry(0.22, 0.52, 1.8, 4), // grave obelisk
+  bulwark: new THREE.BoxGeometry(1.7, 1.5, 1.7), // tomb slab that walks
+  warden: new THREE.OctahedronGeometry(2.2, 0).scale(1, 1.35, 1), // the monolith titan
 };
 
+/** identity color — rim, heart, halo and telegraph all speak it */
 const FOE_COL: Record<FoeKind, number> = {
   drifter: COLORS.foe,
-  striker: 0xff6a3d,
+  striker: 0xff7a3d,
   weaver: 0xff2d6e,
-  caster: 0xc9ff6a,
-  bulwark: 0xe0a95c,
+  caster: 0xb8e63d,
+  bulwark: 0xffb35c,
   warden: COLORS.warden,
+};
+
+/** one chiseled shell material per kind — all 40 pool entries share it */
+const FOE_MAT: Record<FoeKind, THREE.ShaderMaterial> = {
+  drifter: stylizedMaterial({
+    base: COLORS.obsidian,
+    lit: COLORS.obsidianLit,
+    rim: FOE_COL.drifter,
+    rimK: 1.2,
+    emis: FOE_COL.drifter,
+    emisK: 0.1,
+  }),
+  striker: stylizedMaterial({
+    base: COLORS.obsidian,
+    lit: COLORS.obsidianLit,
+    rim: FOE_COL.striker,
+    rimK: 1.3,
+    emis: FOE_COL.striker,
+    emisK: 0.1,
+  }),
+  weaver: stylizedMaterial({
+    base: COLORS.obsidian,
+    lit: COLORS.obsidianLit,
+    rim: FOE_COL.weaver,
+    rimK: 1.4,
+    emis: FOE_COL.weaver,
+    emisK: 0.1,
+  }),
+  caster: stylizedMaterial({
+    base: COLORS.obsidian,
+    lit: COLORS.obsidianLit,
+    rim: FOE_COL.caster,
+    rimK: 1.2,
+    emis: 0x9dc43a,
+    emisK: 0.15,
+  }),
+  bulwark: stylizedMaterial({
+    base: COLORS.obsidian,
+    lit: COLORS.obsidianLit,
+    rim: FOE_COL.bulwark,
+    rimK: 0.9,
+    rimPow: 3,
+  }),
+  warden: stylizedMaterial({
+    base: 0x140d08,
+    lit: COLORS.obsidianLit,
+    rim: FOE_COL.warden,
+    rimK: 1.5,
+    rimPow: 2.2,
+    emis: FOE_COL.warden,
+    emisK: 0.12,
+    pulse: 0.15,
+  }),
+};
+
+/** the bulwark's frontal armor — brighter than the body, the block zone reads */
+const PLATE_MAT = stylizedMaterial({
+  base: 0x3a2a1a,
+  lit: COLORS.obsidianLit,
+  rim: 0xffe2a8,
+  rimK: 1.4,
+  emis: 0xffd27a,
+  emisK: 0.25,
+});
+
+/** small additive heart accents — halved from the old glow-ball scales */
+const FOE_HEART: Record<FoeKind, { color: number; scale: number; opacity: number }> = {
+  drifter: { color: 0xff3b52, scale: 1.6, opacity: 0.35 },
+  striker: { color: 0xff7a3d, scale: 1.4, opacity: 0.35 },
+  weaver: { color: 0xff2d6e, scale: 1.6, opacity: 0.3 },
+  caster: { color: 0xc9ff6a, scale: 1.5, opacity: 0.35 },
+  bulwark: { color: 0xffb35c, scale: 1.8, opacity: 0.3 },
+  warden: { color: 0xff5a2d, scale: 4.5, opacity: 0.4 },
 };
 
 interface FoeView {
   group: THREE.Group;
   mesh: THREE.Mesh;
   glow: THREE.Sprite;
+  core: THREE.Mesh; // weaver's inner light
   plate: THREE.Mesh; // bulwark frontal armor
   kind: FoeKind;
 }
 
 interface MarkView {
+  group: THREE.Group;
+  mat: THREE.MeshBasicMaterial; // bright rim
+  baseMat: THREE.MeshBasicMaterial; // foeDeep floor wash
+}
+
+interface HaloView {
   mesh: THREE.Mesh;
   mat: THREE.MeshBasicMaterial;
 }
@@ -47,14 +135,24 @@ export class View {
   private scene: THREE.Scene;
   private fx: ParticlePool;
   private glowTex: THREE.CanvasTexture;
+  private warmTex: THREE.CanvasTexture;
+  private diamondTex: THREE.CanvasTexture;
+  private streakTex: THREE.CanvasTexture;
 
   private playerGroup = new THREE.Group();
-  private playerCore: THREE.Mesh;
-  private playerGlow: THREE.Sprite;
+  private playerBody = new THREE.Group(); // y=1.0 craft, banks on z
+  private playerHull: THREE.Mesh;
+  private playerTail: THREE.Sprite;
+  private playerYaw = 0;
 
   private shardViews: { mesh: THREE.Mesh; glow: THREE.Sprite }[] = [];
+  private shardGeo: THREE.BufferGeometry;
+  private shardMat: THREE.ShaderMaterial;
 
   private foePool: FoeView[] = [];
+  private plateGeo = new THREE.BoxGeometry(2.3, 1.7, 0.22);
+  private coreGeo = new THREE.OctahedronGeometry(0.28, 0);
+  private coreMat = coreMaterial(0xffaebf);
 
   private bulletGeo = new THREE.BufferGeometry();
   private bulletPos = new THREE.BufferAttribute(new Float32Array(MAX_BULLETS * 3), 3);
@@ -66,138 +164,194 @@ export class View {
 
   private markPool: MarkView[] = [];
   private markCursor = 0;
+  private markRingGeo = new THREE.RingGeometry(0.9, 1.0, 40).rotateX(-Math.PI / 2);
+  private markBaseGeo = new THREE.RingGeometry(0.58, 0.94, 40).rotateX(-Math.PI / 2);
 
-  private haloPool: MarkView[] = [];
+  private haloPool: HaloView[] = [];
   private haloUsed = 0;
+  private haloGeo = new THREE.RingGeometry(0.8, 0.94, 36).rotateX(-Math.PI / 2);
 
   private telegraphs: { line: THREE.Line; mat: THREE.LineBasicMaterial }[] = [];
 
   private reticle: THREE.Group;
+  private reticleSpin = new THREE.Group();
   private time = 0;
 
   constructor(scene: THREE.Scene, fx: ParticlePool) {
     this.scene = scene;
     this.fx = fx;
     this.glowTex = makeGlowTexture('rgba(255,255,255,0.95)', 'rgba(255,255,255,0)');
+    this.warmTex = makeGlowTexture('rgba(255,208,130,0.95)', 'rgba(255,96,32,0)');
+    this.diamondTex = makeDiamondTexture();
+    this.streakTex = makeStreakTexture();
 
-    // ---- ember ----
-    const coreGeo = new THREE.IcosahedronGeometry(0.42, 1);
-    const coreMat = new THREE.MeshBasicMaterial({ color: 0xfff4dc });
-    this.playerCore = new THREE.Mesh(coreGeo, coreMat);
-    this.playerCore.position.y = 1.0;
-    this.playerGroup.add(this.playerCore);
-    this.playerGlow = new THREE.Sprite(
-      new THREE.SpriteMaterial({ map: this.glowTex, color: 0xffd9a0, blending: THREE.AdditiveBlending, depthWrite: false, opacity: 0.9, fog: false }),
+    // ---- the EMBER DART: faceted obsidian hull, swept fins, canopy heart ----
+    const hullGeo = new THREE.OctahedronGeometry(0.5, 0);
+    hullGeo.scale(0.55, 0.5, 1.5); // elongated dart, forward = +Z
+    this.playerHull = new THREE.Mesh(
+      hullGeo,
+      stylizedMaterial({ base: 0x241812, lit: 0x4a3220, rim: 0xffb454, rimK: 1.1, rimPow: 2.4, emis: 0xff9a4a, emisK: 0.12 }),
     );
-    this.playerGlow.scale.setScalar(4.2);
-    this.playerGlow.position.y = 1.0;
-    this.playerGroup.add(this.playerGlow);
+    this.playerBody.add(this.playerHull);
+
+    const finGeo = new THREE.BoxGeometry(0.55, 0.06, 0.5);
+    const finMat = stylizedMaterial({ base: 0x140e09, rim: 0xd98a3d, rimK: 0.7 });
+    const finR = new THREE.Mesh(finGeo, finMat);
+    finR.position.set(0.42, -0.04, -0.16);
+    finR.rotation.y = (25 * Math.PI) / 180; // outer edge swept back
+    const finL = new THREE.Mesh(finGeo, finMat);
+    finL.position.set(-0.42, -0.04, -0.16);
+    finL.rotation.y = (-25 * Math.PI) / 180;
+    this.playerBody.add(finR, finL);
+
+    const heart = new THREE.Mesh(new THREE.OctahedronGeometry(0.16, 0), coreMaterial(0xffe8c2));
+    heart.position.set(0, 0.3, 0.1); // canopy, top-center
+    this.playerBody.add(heart);
+
+    // tail ember — the ONE remaining glow accent on the player
+    this.playerTail = new THREE.Sprite(
+      new THREE.SpriteMaterial({ map: this.warmTex, blending: THREE.AdditiveBlending, depthWrite: false, opacity: 0.45, fog: false }),
+    );
+    this.playerTail.scale.setScalar(1.3);
+    this.playerTail.position.set(0, 0.02, -0.9);
+    this.playerBody.add(this.playerTail);
+
+    this.playerBody.position.y = 1.0;
+    this.playerGroup.add(this.playerBody);
     scene.add(this.playerGroup);
 
-    // ---- shards of light ----
-    const bladeGeo = new THREE.OctahedronGeometry(0.34, 0);
-    bladeGeo.scale(1, 2.4, 1);
+    // ---- shards of light: solid crystal prisms with an emissive heart ----
+    this.shardGeo = new THREE.OctahedronGeometry(0.34, 0);
+    this.shardGeo.scale(1, 2.4, 1);
+    this.shardMat = stylizedMaterial({
+      base: 0x2a1a0e,
+      lit: 0x553718,
+      rim: 0xffd27a,
+      rimK: 1.7,
+      rimPow: 1.9,
+      emis: 0xffd27a,
+      emisK: 0.9,
+      pulse: 0.3,
+      fog: false,
+    });
     for (let i = 0; i < 6; i++) {
-      const mat = new THREE.MeshBasicMaterial({ color: 0xffe9bd, blending: THREE.AdditiveBlending, transparent: true, opacity: 0.95, depthWrite: false, fog: false });
-      const mesh = new THREE.Mesh(bladeGeo, mat);
-      const glow = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.glowTex, color: 0xffd27a, blending: THREE.AdditiveBlending, depthWrite: false, opacity: 0.75, fog: false }));
-      glow.scale.setScalar(2.2);
+      const mesh = new THREE.Mesh(this.shardGeo, this.shardMat);
+      const glow = new THREE.Sprite(
+        new THREE.SpriteMaterial({ map: this.glowTex, color: 0xffd27a, blending: THREE.AdditiveBlending, depthWrite: false, opacity: 0.55, fog: false }),
+      );
+      glow.scale.setScalar(1.4);
       mesh.add(glow);
       mesh.visible = false;
       scene.add(mesh);
       this.shardViews.push({ mesh, glow });
     }
 
-    // ---- foes ----
-    const plateGeo = new THREE.BoxGeometry(2.3, 1.7, 0.22);
+    // ---- foes: designed silhouettes, shared shell + heart per kind ----
     for (let i = 0; i < 40; i++) {
       const group = new THREE.Group();
-      const mat = new THREE.MeshBasicMaterial({ color: COLORS.foe, transparent: true, opacity: 0.95, fog: true });
-      const mesh = new THREE.Mesh(FOE_GEO.drifter, mat);
+      const mesh = new THREE.Mesh(FOE_GEO.drifter, FOE_MAT.drifter);
       group.add(mesh);
-      const glow = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.glowTex, color: COLORS.foe, blending: THREE.AdditiveBlending, depthWrite: false, opacity: 0.4, fog: false }));
-      glow.scale.setScalar(3);
-      group.add(glow);
-      // bulwark frontal plate — brighter than the body, reads as the block zone
-      const plate = new THREE.Mesh(
-        plateGeo,
-        new THREE.MeshBasicMaterial({ color: 0xffe2a8, transparent: true, opacity: 0.92, fog: true }),
+      const heartDef = FOE_HEART.drifter;
+      const glow = new THREE.Sprite(
+        new THREE.SpriteMaterial({ map: this.glowTex, color: heartDef.color, blending: THREE.AdditiveBlending, depthWrite: false, opacity: heartDef.opacity, fog: false }),
       );
+      glow.scale.setScalar(heartDef.scale);
+      group.add(glow);
+      const core = new THREE.Mesh(this.coreGeo, this.coreMat);
+      core.visible = false;
+      group.add(core);
+      // bulwark frontal plate — brighter than the body, reads as the block zone
+      const plate = new THREE.Mesh(this.plateGeo, PLATE_MAT);
       plate.position.set(0, 0, 1.05);
       plate.visible = false;
       group.add(plate);
       group.visible = false;
       scene.add(group);
-      this.foePool.push({ group, mesh, glow, plate, kind: 'drifter' });
+      this.foePool.push({ group, mesh, glow, core, plate, kind: 'drifter' });
     }
 
-    // ---- bullets (one draw call) ----
+    // ---- bullets (one draw call) — diamond shards, not round dots ----
     this.bulletPos.setUsage(THREE.DynamicDrawUsage);
     this.bulletGeo.setAttribute('position', this.bulletPos);
     this.bulletGeo.setDrawRange(0, 0);
     const bMat = new THREE.PointsMaterial({
       color: COLORS.foeBullet,
-      size: 0.85,
+      size: 0.9,
       sizeAttenuation: true,
       transparent: true,
       opacity: 0.95,
       blending: THREE.AdditiveBlending,
       depthWrite: false,
-      map: this.glowTex,
+      map: this.diamondTex,
     });
     this.bulletPoints = new THREE.Points(this.bulletGeo, bMat);
     this.bulletPoints.frustumCulled = false;
     this.bulletPoints.renderOrder = 9;
     scene.add(this.bulletPoints);
 
-    // ---- heavy bullets (caster lances) — separate buffer, bigger & acid-pale
+    // ---- heavy bullets (caster lances) — horizontal streaks, bigger & acid-pale
     this.heavyPos.setUsage(THREE.DynamicDrawUsage);
     this.heavyGeo.setAttribute('position', this.heavyPos);
     this.heavyGeo.setDrawRange(0, 0);
     const hMat = new THREE.PointsMaterial({
       color: 0xd6ff8a,
-      size: 1.7,
+      size: 2.0,
       sizeAttenuation: true,
       transparent: true,
       opacity: 0.95,
       blending: THREE.AdditiveBlending,
       depthWrite: false,
-      map: this.glowTex,
+      map: this.streakTex,
     });
     this.heavyPoints = new THREE.Points(this.heavyGeo, hMat);
     this.heavyPoints.frustumCulled = false;
     this.heavyPoints.renderOrder = 9;
     scene.add(this.heavyPoints);
 
-    // ---- spawn telegraph marks ----
-    const markGeo = new THREE.RingGeometry(0.78, 1.0, 40);
-    markGeo.rotateX(-Math.PI / 2);
+    // ---- spawn telegraph marks: foeDeep doom-floor + bright rim, thinner ----
     for (let i = 0; i < 14; i++) {
-      const mat = new THREE.MeshBasicMaterial({ color: COLORS.foe, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide });
-      const mesh = new THREE.Mesh(markGeo, mat);
-      mesh.visible = false;
-      mesh.renderOrder = 6;
-      scene.add(mesh);
-      this.markPool.push({ mesh, mat });
+      const group = new THREE.Group();
+      const baseMat = new THREE.MeshBasicMaterial({
+        color: COLORS.foeDeep,
+        transparent: true,
+        opacity: 0,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+        side: THREE.DoubleSide,
+      });
+      const base = new THREE.Mesh(this.markBaseGeo, baseMat);
+      base.renderOrder = 6;
+      const mat = new THREE.MeshBasicMaterial({
+        color: 0xff5a4a,
+        transparent: true,
+        opacity: 0,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+        side: THREE.DoubleSide,
+      });
+      const ring = new THREE.Mesh(this.markRingGeo, mat);
+      ring.renderOrder = 6;
+      group.add(base, ring);
+      group.visible = false;
+      scene.add(group);
+      this.markPool.push({ group, mat, baseMat });
     }
 
     // ---- elite halos (readability: ring = affix) ----
-    const haloGeo = new THREE.RingGeometry(0.8, 0.94, 36);
-    haloGeo.rotateX(-Math.PI / 2);
     for (let i = 0; i < 12; i++) {
       const mat = new THREE.MeshBasicMaterial({ color: 0xffe9a0, transparent: true, opacity: 0.7, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide });
-      const mesh = new THREE.Mesh(haloGeo, mat);
+      const mesh = new THREE.Mesh(this.haloGeo, mat);
       mesh.visible = false;
       mesh.renderOrder = 6;
       scene.add(mesh);
       this.haloPool.push({ mesh, mat });
     }
 
-    // ---- striker telegraph lines ----
+    // ---- striker / caster telegraph lines ----
     for (let i = 0; i < 8; i++) {
       const geo = new THREE.BufferGeometry();
       geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(6), 3));
-      const mat = new THREE.LineBasicMaterial({ color: 0xff6a3d, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false });
+      const mat = new THREE.LineBasicMaterial({ color: FOE_COL.striker, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false });
       const line = new THREE.Line(geo, mat);
       line.frustumCulled = false;
       line.visible = false;
@@ -205,17 +359,28 @@ export class View {
       this.telegraphs.push({ line, mat });
     }
 
-    // ---- aim reticle ----
+    // ---- aim reticle: gold hairline — ring, four ticks, center dot ----
     this.reticle = new THREE.Group();
-    const rGeo = new THREE.RingGeometry(0.5, 0.62, 24);
+    const rMat = new THREE.MeshBasicMaterial({ color: 0xffd27a, transparent: true, opacity: 0.45, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide });
+    const rGeo = new THREE.RingGeometry(0.5, 0.55, 32);
     rGeo.rotateX(-Math.PI / 2);
-    const rMat = new THREE.MeshBasicMaterial({ color: 0xffe9bd, transparent: true, opacity: 0.4, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide });
-    const ring = new THREE.Mesh(rGeo, rMat);
-    this.reticle.add(ring);
-    const dotGeo = new THREE.CircleGeometry(0.14, 12);
+    this.reticleSpin.add(new THREE.Mesh(rGeo, rMat));
+    const tickGeo = new THREE.BoxGeometry(0.02, 0.01, 0.14);
+    for (const [tx, tz] of [
+      [0, 0.55],
+      [0, -0.55],
+      [0.55, 0],
+      [-0.55, 0],
+    ]) {
+      const tick = new THREE.Mesh(tickGeo, rMat);
+      tick.position.set(tx, 0, tz);
+      if (tz === 0) tick.rotation.y = Math.PI / 2; // long axis radial
+      this.reticleSpin.add(tick);
+    }
+    this.reticle.add(this.reticleSpin);
+    const dotGeo = new THREE.CircleGeometry(0.1, 16);
     dotGeo.rotateX(-Math.PI / 2);
-    const dot = new THREE.Mesh(dotGeo, rMat);
-    this.reticle.add(dot);
+    this.reticle.add(new THREE.Mesh(dotGeo, rMat));
     this.reticle.position.y = 0.15;
     scene.add(this.reticle);
   }
@@ -225,14 +390,22 @@ export class View {
   sync(sim: Sim, aimX: number, aimZ: number, showAim: boolean, dt: number): void {
     this.time += dt;
 
-    // ember
+    // ember dart
     this.playerGroup.position.set(sim.px, 0, sim.pz);
     const blink = sim.invuln > 0 && Math.floor(this.time * 14) % 2 === 0;
-    this.playerCore.visible = !blink;
-    this.playerGlow.visible = !blink;
-    this.playerCore.rotation.y += dt * 3;
+    this.playerBody.visible = !blink;
+    // face the aim — smoothed yaw with angle wrap
+    const targetYaw = Math.atan2(aimX - sim.px, aimZ - sim.pz);
+    const yawDiff = Math.atan2(Math.sin(targetYaw - this.playerYaw), Math.cos(targetYaw - this.playerYaw));
+    this.playerYaw += yawDiff * (1 - Math.exp(-14 * dt));
+    this.playerGroup.rotation.y = this.playerYaw;
+    // subtle bank into strafes: velocity perpendicular to facing, rolled negative
+    const lateral = sim.pvx * Math.cos(this.playerYaw) - sim.pvz * Math.sin(this.playerYaw);
+    this.playerBody.rotation.z = THREE.MathUtils.clamp(-lateral * 0.03, -0.4, 0.4);
+    // velocity stretch along the hull spine
     const stretch = 1 + Math.min(0.9, Math.hypot(sim.pvx, sim.pvz) * 0.035);
-    this.playerCore.scale.set(1 / Math.sqrt(stretch), stretch, 1 / Math.sqrt(stretch));
+    const pinch = 1 / Math.sqrt(stretch);
+    this.playerHull.scale.set(pinch, pinch, stretch);
     if (sim.dashT > 0) {
       this.fx.spawn(sim.px, 1.0, sim.pz, (Math.random() - 0.5) * 3, 0.6, (Math.random() - 0.5) * 3, {
         life: 0.32,
@@ -259,7 +432,7 @@ export class View {
         v.mesh.rotation.y = this.time * 2.4;
       }
       const flying = s.state !== 'orbit';
-      (v.glow.material as THREE.SpriteMaterial).opacity = flying ? 0.9 : 0.5;
+      (v.glow.material as THREE.SpriteMaterial).opacity = flying ? 0.55 : 0.3;
       if (flying) {
         this.fx.spawn(s.x, 1.0, s.z, (Math.random() - 0.5) * 1.2, 0.3, (Math.random() - 0.5) * 1.2, {
           life: 0.26,
@@ -278,9 +451,12 @@ export class View {
       if (v.kind !== f.kind) {
         v.kind = f.kind;
         v.mesh.geometry = FOE_GEO[f.kind];
-        (v.mesh.material as THREE.MeshBasicMaterial).color.set(FOE_COL[f.kind]);
-        (v.glow.material as THREE.SpriteMaterial).color.set(FOE_COL[f.kind]);
-        v.glow.scale.setScalar(f.kind === 'warden' ? 7.5 : 3);
+        v.mesh.material = FOE_MAT[f.kind];
+        const heartDef = FOE_HEART[f.kind];
+        (v.glow.material as THREE.SpriteMaterial).color.set(heartDef.color);
+        (v.glow.material as THREE.SpriteMaterial).opacity = heartDef.opacity;
+        v.glow.scale.setScalar(heartDef.scale);
+        v.core.visible = f.kind === 'weaver';
       }
       v.plate.visible = f.kind === 'bulwark' && f.spawnT <= 0;
       v.group.visible = true;
@@ -323,7 +499,7 @@ export class View {
           pos.setXYZ(1, f.x + ((f.tx - f.x) / dl) * dl * Math.min(1, grow * 1.4), 0.9, f.z + ((f.tz - f.z) / dl) * dl * Math.min(1, grow * 1.4));
           pos.needsUpdate = true;
           t.line.visible = true;
-          (t.mat.color as THREE.Color).set(f.kind === 'caster' ? 0xc9ff6a : 0xff6a3d);
+          (t.mat.color as THREE.Color).set(FOE_COL[f.kind]);
           t.mat.opacity = 0.25 + 0.55 * grow * (0.7 + 0.3 * Math.sin(this.time * 30));
         }
       }
@@ -357,14 +533,15 @@ export class View {
     for (const m of sim.marks) {
       if (this.markCursor >= this.markPool.length) break;
       const v = this.markPool[this.markCursor++];
-      v.mesh.visible = true;
-      v.mesh.position.set(m.x, 0.14, m.z);
+      v.group.visible = true;
+      v.group.position.set(m.x, 0.14, m.z);
       const total = m.kind === 'warden' ? 1.5 : 0.9;
       const k = 1 - Math.max(0, m.t) / total;
-      v.mesh.scale.setScalar(2.6 - k * 1.7);
+      v.group.scale.setScalar(2.6 - k * 1.7);
       v.mat.opacity = 0.25 + 0.6 * k * (0.6 + 0.4 * Math.sin(this.time * 22));
+      v.baseMat.opacity = v.mat.opacity * 0.45;
     }
-    for (let i = this.markCursor; i < this.markPool.length; i++) this.markPool[i].mesh.visible = false;
+    for (let i = this.markCursor; i < this.markPool.length; i++) this.markPool[i].group.visible = false;
     for (let i = this.haloUsed; i < this.haloPool.length; i++) this.haloPool[i].mesh.visible = false;
     this.haloUsed = 0;
 
@@ -387,7 +564,7 @@ export class View {
       const clamped = Math.min(1, (ARENA.radius - 1) / Math.max(0.001, dCenter));
       this.reticle.position.x = aimX * clamped;
       this.reticle.position.z = aimZ * clamped;
-      this.reticle.children[0].rotateY(dt * 1.6);
+      this.reticleSpin.rotateY(dt * 1.6);
     }
   }
 
@@ -397,10 +574,39 @@ export class View {
 
   dispose(): void {
     this.scene.remove(this.playerGroup, this.bulletPoints, this.heavyPoints, this.reticle);
-    for (const s of this.shardViews) this.scene.remove(s.mesh);
-    for (const f of this.foePool) this.scene.remove(f.group);
-    for (const m of this.markPool) this.scene.remove(m.mesh);
-    for (const t of this.telegraphs) this.scene.remove(t.line);
+    for (const s of this.shardViews) {
+      this.scene.remove(s.mesh);
+      (s.glow.material as THREE.Material).dispose();
+    }
+    for (const f of this.foePool) {
+      this.scene.remove(f.group);
+      (f.glow.material as THREE.Material).dispose();
+    }
+    for (const m of this.markPool) {
+      this.scene.remove(m.group);
+      m.mat.dispose();
+      m.baseMat.dispose();
+    }
+    for (const h of this.haloPool) {
+      this.scene.remove(h.mesh);
+      h.mat.dispose();
+    }
+    for (const t of this.telegraphs) {
+      this.scene.remove(t.line);
+      t.mat.dispose();
+      t.line.geometry.dispose();
+    }
+    this.bulletGeo.dispose();
+    this.heavyGeo.dispose();
+    (this.bulletPoints.material as THREE.Material).dispose();
+    (this.heavyPoints.material as THREE.Material).dispose();
+    this.playerHull.geometry.dispose();
+    (this.playerHull.material as THREE.Material).dispose();
+    this.playerTail.material.dispose();
+    this.glowTex.dispose();
+    this.warmTex.dispose();
+    this.diamondTex.dispose();
+    this.streakTex.dispose();
   }
 }
 

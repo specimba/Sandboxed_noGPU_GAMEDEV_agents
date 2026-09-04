@@ -31,50 +31,79 @@ export default function TitleScreen() {
   return (
     <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center">
       <div className="absolute inset-0 bg-gradient-to-b from-black/70 via-transparent to-black/80" />
-      <div className="pointer-events-auto relative flex max-h-full flex-col items-center gap-4 overflow-y-auto px-6 py-6 text-center">
-        <p className="hs-tracking text-[10px] text-amber-200/60 sm:text-xs">A DESCENT INTO THE DEAD STAR</p>
+      <div className="pointer-events-auto relative flex max-h-full w-full max-w-2xl flex-col items-center gap-5 overflow-y-auto px-6 py-8 text-center">
+
+        {/* kicker between hairlines */}
+        <div className="flex w-full max-w-xs items-center gap-3 sm:max-w-sm">
+          <span aria-hidden="true" className="hs-hairline flex-1" />
+          <p className="hs-tracking whitespace-nowrap text-[9px] text-[#f2e6cf]/55 sm:text-[10px]">
+            A DESCENT INTO THE DEAD STAR
+          </p>
+          <span aria-hidden="true" className="hs-hairline flex-1" />
+        </div>
+
+        {/* wordmark — the one sanctioned halo */}
         <h1
-          className="hs-flicker text-5xl font-bold text-amber-50 sm:text-7xl md:text-8xl"
-          style={{ textShadow: '0 0 34px rgba(255,190,90,0.55), 0 0 90px rgba(255,120,40,0.25)' }}
+          className="hs-flicker text-6xl leading-none font-bold text-[#f2e6cf] sm:text-7xl md:text-8xl"
+          style={{ textShadow: '0 0 8px rgba(255,190,90,0.35)' }}
         >
           HOLLOW SUN
         </h1>
-        <p className="hs-tracking max-w-xl text-xs leading-6 text-amber-100/75 sm:text-sm">
-          THREE BIOMES. NINE ROOMS. THROW SHARDS OF LIGHT THAT RICOCHET BETWEEN
-          ENEMIES AND RETURN — GRAZE FIRE TO CHARGE OVERDRIVE — EVERY POINT
-          REKINDLES THE CRACKED STAR.
-        </p>
 
-        <div className="hs-tracking grid grid-cols-2 gap-x-8 gap-y-2 text-[10px] text-amber-100/60 sm:text-xs">
-          <span className="rounded border border-amber-200/25 px-2 py-1">WASD · DRIFT</span>
-          <span className="rounded border border-amber-200/25 px-2 py-1">MOUSE · AIM</span>
-          <span className="rounded border border-amber-200/25 px-2 py-1">CLICK / F · THROW</span>
-          <span className="rounded border border-amber-200/25 px-2 py-1">SHIFT · DASH + RECALL</span>
+        {/* engraved rule + diamond glyph row */}
+        <div aria-hidden="true" className="flex items-center gap-2.5">
+          <span className="h-px w-14 bg-[rgba(255,196,120,0.3)] sm:w-20" />
+          <span className="h-[5px] w-[5px] rotate-45 bg-[rgba(255,199,102,0.45)]" />
+          <span className="h-[7px] w-[7px] rotate-45 bg-[rgba(255,199,102,0.8)]" />
+          <span className="h-[5px] w-[5px] rotate-45 bg-[rgba(255,199,102,0.45)]" />
+          <span className="h-px w-14 bg-[rgba(255,196,120,0.3)] sm:w-20" />
         </div>
 
-        <div className="flex flex-wrap items-center justify-center gap-3">
+        {/* pitch */}
+        <p className="max-w-md text-[11px] leading-5 text-[#f2e6cf]/70 sm:text-xs">
+          Three biomes. Nine rooms. Throw shards of light that ricochet between
+          enemies and return — graze fire to charge Overdrive — every point
+          rekindles the cracked star.
+        </p>
+
+        {/* one engraved control strip */}
+        <div className="hs-panel hs-tracking flex max-w-full flex-wrap items-center justify-center gap-x-2.5 gap-y-1 px-4 py-2 text-[9px] text-[#f2e6cf]/60 sm:text-[10px]">
+          <span>WASD — DRIFT</span>
+          <span aria-hidden="true" className="text-[#ffc766]/40">·</span>
+          <span>MOUSE — AIM</span>
+          <span aria-hidden="true" className="text-[#ffc766]/40">·</span>
+          <span>CLICK / F — THROW</span>
+          <span aria-hidden="true" className="text-[#ffc766]/40">·</span>
+          <span>SHIFT — DASH + RECALL</span>
+        </div>
+
+        {/* CTA row */}
+        <div className="mt-1 flex flex-wrap items-center justify-center gap-4">
           <button
             type="button"
             onClick={() => getEngine()?.begin()}
-            className="hs-tracking border border-amber-200/60 bg-black/40 px-10 py-4 text-sm text-amber-100 transition-all hover:border-amber-200 hover:bg-amber-200/10 hover:shadow-[0_0_30px_rgba(255,190,90,0.35)] sm:text-base"
+            className="hs-frame hs-btn hs-tracking relative px-10 py-3.5 text-sm sm:text-base"
           >
+            <span aria-hidden="true" className="hs-c" />
             BEGIN THE REKINDLING
           </button>
           <button
             type="button"
             onClick={() => setShrineOpen((v) => !v)}
-            className="hs-tracking border border-amber-200/25 bg-black/30 px-5 py-4 text-xs text-amber-100/80 transition-all hover:border-amber-200/60 hover:bg-amber-200/5"
+            aria-expanded={shrineOpen}
+            className="hs-btn hs-btn--quiet hs-tracking px-5 py-3 text-[11px] sm:text-xs"
           >
             SHRINE OF DAWN — ✦ {dawn.toLocaleString()}
           </button>
         </div>
 
+        {/* shrine ledger */}
         {shrineOpen && (
-          <div className="w-full max-w-md rounded border border-amber-200/20 bg-black/60 p-4">
-            <p className="hs-tracking mb-3 text-[10px] text-amber-200/60">
+          <div className="hs-panel w-full max-w-md p-4 text-left sm:p-5">
+            <p className="hs-tracking text-[9px] leading-4 text-[#f2e6cf]/50 sm:text-[10px]">
               DAWN EMBERS PERSIST BETWEEN RUNS — SPEND THEM ON PERMANENT POWER
             </p>
-            <div className="flex flex-col gap-2">
+            <div className="mt-2 flex flex-col">
               {SHRINE_UPGRADES.map((u) => {
                 const owned = !!unlocked[u.id];
                 const afford = dawn >= u.cost;
@@ -84,19 +113,35 @@ export default function TitleScreen() {
                     type="button"
                     disabled={owned || !afford}
                     onClick={() => getEngine()?.buyUpgrade(u.id)}
-                    className={`flex items-center justify-between gap-3 rounded border px-3 py-2 text-left transition-all ${
+                    className={`flex items-center justify-between gap-3 border-b border-[rgba(255,196,120,0.12)] px-1 py-2.5 text-left last:border-b-0 ${
                       owned
-                        ? 'border-amber-300/40 bg-amber-300/10'
+                        ? 'cursor-default bg-[rgba(255,199,102,0.05)]'
                         : afford
-                          ? 'border-amber-200/30 hover:border-amber-200/70 hover:bg-amber-200/10'
-                          : 'border-white/10 opacity-40'
+                          ? 'transition-colors hover:bg-[rgba(255,199,102,0.06)]'
+                          : 'cursor-not-allowed opacity-40'
                     }`}
                   >
-                    <span className="flex flex-col">
-                      <span className="hs-tracking text-[11px] text-amber-100">{u.name}</span>
-                      <span className="text-[10px] text-amber-100/50">{u.desc}</span>
+                    <span className="flex min-w-0 items-center gap-3">
+                      <span
+                        aria-hidden="true"
+                        className={`h-[6px] w-[6px] shrink-0 rotate-45 ${
+                          owned
+                            ? 'bg-[#ffc766]'
+                            : afford
+                              ? 'border border-[rgba(255,199,102,0.55)]'
+                              : 'border border-[rgba(242,230,207,0.25)]'
+                        }`}
+                      />
+                      <span className="flex min-w-0 flex-col">
+                        <span className="hs-tracking text-[11px] text-[#f2e6cf]">{u.name}</span>
+                        <span className="text-[10px] leading-4 text-[#f2e6cf]/50">{u.desc}</span>
+                      </span>
                     </span>
-                    <span className="hs-tracking whitespace-nowrap text-[10px] text-amber-300">
+                    <span
+                      className={`hs-tracking whitespace-nowrap text-[10px] ${
+                        owned ? 'text-[#ffc766]' : 'text-[#ffc766]/70'
+                      }`}
+                    >
                       {owned ? '✦ KEPT' : `✦ ${u.cost}`}
                     </span>
                   </button>
@@ -106,13 +151,17 @@ export default function TitleScreen() {
           </div>
         )}
 
+        {/* footer */}
         {(best > 0 || bestWave > 1) && (
-          <p className="hs-tracking text-[10px] text-amber-200/50 sm:text-xs">
-            BRIGHTEST EMBER — {best.toLocaleString()} PTS · WAVE {bestWave}
+          <p className="hs-tracking text-[9px] text-[#f2e6cf]/45 sm:text-[10px]">
+            <span className="text-[#ffc766]/70">BRIGHTEST EMBER</span> —{' '}
+            {best.toLocaleString()} PTS · WAVE {bestWave}
           </p>
         )}
-        <p className="hs-tracking text-[10px] text-amber-100/35">
-          {touch ? 'TOUCH: STICK TO DRIFT · BUTTONS TO THROW & DASH' : 'HEADPHONES RECOMMENDED — THE SUN SINGS BACK'}
+        <p className="hs-tracking text-[9px] text-[#f2e6cf]/35 sm:text-[10px]">
+          {touch
+            ? 'TOUCH: STICK TO DRIFT · BUTTONS TO THROW & DASH'
+            : 'HEADPHONES RECOMMENDED — THE SUN SINGS BACK'}
         </p>
       </div>
     </div>

@@ -550,7 +550,7 @@ export class Engine {
     const energy = starEnergy(this.sim.score);
     this.scene.setEnergy(energy);
     this.scene.floorMat.uniforms.uPlayer.value.set(this.sim.px, this.sim.pz);
-    this.scene.bloom.strength = 1.0 + (this.sim.odActive ? 0.22 : 0) + energy * 0.1;
+    this.scene.bloom.strength = 0.5 + (this.sim.odActive ? 0.16 : 0) + energy * 0.07;
     this.scene.update(dtReal);
     this.rig.setVelocity(this.sim.pvx, this.sim.pvz);
     this.rig.update(dtReal, this.scene.camera, this.sim.px, this.sim.pz, this.sim.pvx, this.sim.pvz, this.sim.odActive, false);
@@ -655,8 +655,8 @@ export class Engine {
 }
 
 const SHARD_C = new THREE.Color(0xffd27a);
-const FOE_C = new THREE.Color(0xff5a3c);
-const WARDEN_C = new THREE.Color(0xff7a2d);
+const FOE_C = new THREE.Color(0xff5a4a);
+const WARDEN_C = new THREE.Color(0xff5a2d);
 const EMBER_C = new THREE.Color(0xffe9bd);
 const WHITE_C = new THREE.Color(0xffffff);
 const GOLD_C = new THREE.Color(0xffe9a0);

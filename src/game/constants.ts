@@ -6,19 +6,23 @@
  */
 
 export const COLORS = {
-  bg: 0x02030a,
+  bg: 0x0a0708,
   /** player ember + shards of light */
   ember: 0xffe6b0,
   emberHot: 0xfff8e8,
   gold: 0xffc766,
   /** enemies + their fire */
-  foe: 0xff2d4e,
-  foeDeep: 0xb3122e,
-  foeBullet: 0xff5a3c,
+  foe: 0xff3b52,
+  foeDeep: 0x8f1230,
+  foeBullet: 0xff6a4a,
   /** arena grid — cold teal that ignites to gold as the star rekindles */
-  gridCold: 0x0f3a3c,
-  gridHot: 0xffb35c,
-  warden: 0xff7a2d,
+  gridCold: 0x123236,
+  gridHot: 0xffab52,
+  warden: 0xff5a2d,
+  /** EMBER RITE shells — dark chiseled obsidian + bone highlights */
+  obsidian: 0x191009,
+  obsidianLit: 0x3a2a1a,
+  bone: 0xf2e6cf,
 };
 
 export const ARENA = {
@@ -103,11 +107,11 @@ export const RUN = {
   dawnWinBonus: 100,
 };
 
-/** biome palettes — grid cold/hot, fog, sun tint (see VISUAL_AUDIO.md) */
+/** biome palettes — grid cold/hot, fog, sun tint (EMBER RITE grade) */
 export const BIOMES = [
-  { grid: 0x0f3a3c, hot: 0xffb35c, fog: 0x02030a, sun: 0xffc766 }, // ashfall
-  { grid: 0x2a1236, hot: 0xff5c8a, fog: 0x07030c, sun: 0xff9a76 }, // glass hollow
-  { grid: 0x35333c, hot: 0xfff0d0, fog: 0x090910, sun: 0xfff0c8 }, // the heart
+  { grid: 0x123236, hot: 0xffab52, fog: 0x0a0708, sun: 0xffb454 }, // ashfall
+  { grid: 0x2a1236, hot: 0xff5c8a, fog: 0x0b050d, sun: 0xff8a6a }, // glass hollow
+  { grid: 0x3a3436, hot: 0xfff0d0, fog: 0x0d0b0e, sun: 0xfff0c8 }, // the heart
 ] as const;
 
 export type Elite = '' | 'swift' | 'shield' | 'split';

@@ -1,0 +1,1210 @@
+     1→import {
+     2→  ARENA,
+     3→  FOE,
+     4→  OVERDRIVE,
+     5→  PLAYER,
+     6→  RUN,
+     7→  SCORE,
+     8→  SHARD,
+     9→  WAVES,
+    10→  type Elite,
+    11→} from './constants';
+    12→import { mulberry32, type Rng } from './rng';
+    13→import {
+    14→  baseMods,
+    15→  bossHp,
+    16→  bossScore,
+    17→  defaultRoomMods,
+    18→  eliteChance,
+    19→  isBossRoom,
+    20→  rollMutator,
+    21→  roomBudget,
+    22→  type BoonDef,
+    23→  type Mods,
+    24→  type RoomMutator,
+    25→} from './run';
+    26→
+    27→/**
+    28→ * HOLLOW SUN simulation — pure 2D math, zero rendering imports.
+    29→ * The ember, the ricocheting shards of light, the foes, the waves,
+    30→ * Overdrive and the score→sun feedback all live here.
+    31→ */
+    32→
+    33→export type FoeKind = 'drifter' | 'striker' | 'weaver' | 'caster' | 'bulwark' | 'warden';
+    34→export type ShardState = 'orbit' | 'fly' | 'chain' | 'return';
+    35→
+    36→export interface SimEvents {
+    37→  onThrow(x: number, z: number): void;
+    38→  onBounce(x: number, z: number, bounceIndex: number): void;
+    39→  onCatch(x: number, z: number): void;
+    40→  onKill(kind: FoeKind, x: number, z: number): void;
+    41→  onGraze(x: number, z: number): void;
+    42→  onHurt(x: number, z: number): void;
+    43→  onDash(x: number, z: number): void;
+    44→  onRecall(x: number, z: number): void;
+    45→  onShieldBreak(x: number, z: number): void;
+    46→  onBlock(x: number, z: number): void;
+    47→  onHeavyShot(x: number, z: number): void;
+    48→  onBossPhase(x: number, z: number, phase: number): void;
+    49→  onRevive(x: number, z: number): void;
+    50→  onWardenSpawn(x: number, z: number): void;
+    51→  onWardenDie(x: number, z: number): void;
+    52→  onWaveStart(n: number): void;
+    53→  onWaveClear(n: number): void;
+    54→  onOverdriveStart(): void;
+    55→  onShardGain(): void;
+    56→  onDeath(): void;
+    57→  onSpawnMark(x: number, z: number): void;
+    58→}
+    59→
+    60→interface Shard {
+    61→  state: ShardState;
+    62→  x: number;
+    63→  z: number;
+    64→  vx: number;
+    65→  vz: number;
+    66→  orbitAngle: number;
+    67→  targetId: number; // foe id while fly/chain (-1 none)
+    68→  bounces: number;
+    69→  flown: number; // straight-flight distance, forces the return leg
+    70→  boost: number; // recall speed boost timer
+    71→  hitCd: Map<number, number>;
+    72→}
+    73→
+    74→interface Foe {
+    75→  id: number;
+    76→  kind: FoeKind;
+    77→  x: number;
+    78→  z: number;
+    79→  vx: number;
+    80→  vz: number;
+    81→  hp: number;
+    82→  maxHp: number;
+    83→  r: number;
+    84→  elite: Elite;
+    85→  shieldUp: boolean;
+    86→  boss: boolean;
+    87→  spawnT: number; // fade-in, harmless while > 0
+    88→  state: number; // kind-specific FSM; boss = phase 1..3
+    89→  timer: number;
+    90→  tx: number; // striker locked dash target; boss = escort-spawned flag
+    91→  tz: number;
+    92→  dx: number; // striker dash dir
+    93→  dz: number;
+    94→  burstLeft: number; // weaver burst queue
+    95→  burstT: number;
+    96→  patternAngle: number; // warden radial offset
+    97→  face: number; // bulwark armor facing
+    98→}
+    99→
+   100→interface Bullet {
+   101→  x: number;
+   102→  z: number;
+   103→  vx: number;
+   104→  vz: number;
+   105→  life: number;
+   106→  grazed: boolean;
+   107→  heavy: boolean; // caster shots: bigger, faster, dodge me
+   108→}
+   109→
+   110→export interface SpawnMark {
+   111→  x: number;
+   112→  z: number;
+   113→  t: number;
+   114→  kind: FoeKind;
+   115→}
+   116→
+   117→const TAU = Math.PI * 2;
+   118→
+   119→function clampArena(x: number, z: number, pad: number): { x: number; z: number } {
+   120→  const d = Math.hypot(x, z);
+   121→  const max = ARENA.radius - pad;
+   122→  if (d <= max || d === 0) return { x, z };
+   123→  const s = max / d;
+   124→  return { x: x * s, z: z * s };
+   125→}
+   126→
+   127→export class Sim {
+   128→  readonly events: SimEvents;
+   129→  /** every build modifier (meta + boons) lives here */
+   130→  mods: Mods;
+   131→
+   132→  // run context (drives budgets, elites, boss stats)
+   133→  biome = 0;
+   134→  room = 1;
+   135→
+   136→  // ember
+   137→  px = 0;
+   138→  pz = 0;
+   139→  pvx = 0;
+   140→  pvz = 0;
+   141→  embers = 3;
+   142→  maxEmbers = 3;
+   143→  invuln = 0;
+   144→  dashT = 0;
+   145→  dashCd = 0;
+   146→  dashDx = 0;
+   147→  dashDz = 0;
+   148→  reviveUsed = false;
+   149→
+   150→  // shards
+   151→  shards: Shard[] = [];
+   152→  throwCd = 0;
+   153→  private dashHit = new Set<number>();
+   154→
+   155→  // foes & bullets
+   156→  foes: Foe[] = [];
+   157→  bullets: Bullet[] = [];
+   158→  marks: SpawnMark[] = [];
+   159→  private nextId = 1;
+   160→
+   161→  // waves
+   162→  wave = 0;
+   163→  private waveState: 'idle' | 'active' | 'intermission' = 'idle';
+   164→  private intermissionT = 0;
+   165→  private spawnQueue: FoeKind[] = [];
+   166→  private spawnT = 0;
+   167→  wardensKilled = 0;
+   168→
+   169→  // score & chain
+   170→  score = 0;
+   171→  chain = 0;
+   172→  chainT = 0;
+   173→
+   174→  // overdrive
+   175→  odCharge = 0;
+   176→  odActive = false;
+   177→  odT = 0;
+   178→
+   179→  time = 0;
+   180→  over = false;
+   181→
+   182→  // seeded run
+   183→  seed = 0;
+   184→  rng: Rng = Math.random;
+   185→  mutator: RoomMutator = { id: '', name: '', desc: '', mods: defaultRoomMods() };
+   186→
+   187→  constructor(events: SimEvents, mods?: Partial<Mods>) {
+   188→    this.events = events;
+   189→    this.mods = { ...baseMods(), ...mods };
+   190→    this.reset();
+   191→  }
+   192→
+   193→  /** every run of the same seed descends the same star */
+   194→  setSeed(seed: number): void {
+   195→    this.seed = seed >>> 0;
+   196→    this.rng = mulberry32(this.seed);
+   197→  }
+   198→
+   199→  reset(): void {
+   200→    this.px = 0;
+   201→    this.pz = 12;
+   202→    this.pvx = 0;
+   203→    this.pvz = 0;
+   204→    this.maxEmbers = this.mods.maxEmbers;
+   205→    this.embers = this.mods.maxEmbers;
+   206→    this.invuln = 1;
+   207→    this.dashT = 0;
+   208→    this.dashCd = 0;
+   209→    this.reviveUsed = false;
+   210→    this.dashHit.clear();
+   211→    this.biome = 0;
+   212→    this.room = 1;
+   213→    this.shards = [];
+   214→    for (let i = 0; i < SHARD.startCount + this.mods.startShards; i++) this.addShard();
+   215→    this.throwCd = 0;
+   216→    this.foes = [];
+   217→    this.bullets = [];
+   218→    this.marks = [];
+   219→    this.wave = 1;
+   220→    this.waveState = 'idle';
+   221→    this.intermissionT = 0;
+   222→    this.spawnQueue = [];
+   223→    this.spawnT = 0;
+   224→    this.wardensKilled = 0;
+   225→    this.score = 0;
+   226→    this.chain = 0;
+   227→    this.chainT = 0;
+   228→    this.odCharge = 0;
+   229→    this.odActive = false;
+   230→    this.odT = 0;
+   231→    this.time = 0;
+   232→    this.over = false;
+   233→    this.mutator = { id: '', name: '', desc: '', mods: defaultRoomMods() };
+   234→  }
+   235→
+   236→  addShard(): void {
+   237→    this.shards.push({
+   238→      state: 'orbit',
+   239→      x: this.px,
+   240→      z: this.pz,
+   241→      vx: 0,
+   242→      vz: 0,
+   243→      orbitAngle: (this.shards.length / Math.max(1, SHARD.startCount)) * TAU,
+   244→      targetId: -1,
+   245→      bounces: 0,
+   246→      flown: 0,
+   247→      boost: 0,
+   248→      hitCd: new Map(),
+   249→    });
+   250→  }
+   251→
+   252→  /* ---------------------------------------------------------------- */
+   253→  /* run rooms                                                        */
+   254→  /* ---------------------------------------------------------------- */
+   255→
+   256→  /** begin a specific run room (combat 1-2, boss = roomsPerBiome) */
+   257→  startRoom(biome: number, room: number): void {
+   258→    this.biome = biome;
+   259→    this.room = room;
+   260→    this.foes.length = 0;
+   261→    this.bullets.length = 0;
+   262→    this.marks.length = 0;
+   263→    this.spawnQueue.length = 0;
+   264→    this.invuln = Math.max(this.invuln, 0.8);
+   265→    this.wave = biome * RUN.roomsPerBiome + room;
+   266→    // room weather — deterministic per seed
+   267→    this.mutator = rollMutator(this.rng, this.wave);
+   268→    this.waveState = 'active';
+   269→    this.spawnT = 0.5;
+   270→    if (isBossRoom(room)) {
+   271→      // boss + small escort fodder
+   272→      const escort: FoeKind[] = biome === 0 ? ['drifter', 'drifter'] : biome === 1 ? ['drifter', 'striker'] : ['caster', 'drifter'];
+   273→      this.spawnQueue = escort;
+   274→      this.marks.push({ x: this.px + 10, z: this.pz, t: 1.6, kind: 'warden' });
+   275→      this.events.onWaveStart(this.wave);
+   276→    } else {
+   277→      const budget = Math.round(roomBudget(biome, room) * (1 + this.mutator.mods.budget));
+   278→      this.spawnQueue = this.buildWaveQueue(this.wave, budget);
+   279→      this.events.onWaveStart(this.wave);
+   280→    }
+   281→    if (this.mutator.mods.glassRain) {
+   282→      // the room opens under a collapsing ring of glass — banner buys you the read
+   283→      const n = 16;
+   284→      for (let i = 0; i < n; i++) {
+   285→        const a = (i / n) * TAU + this.rng() * 0.2;
+   286→        const r = 25;
+   287→        const x = Math.sin(a) * r;
+   288→        const z = Math.cos(a) * r;
+   289→        const d = Math.hypot(x, z) || 1;
+   290→        this.bullets.push({ x, z, vx: (-x / d) * 8.5, vz: (-z / d) * 8.5, life: 6, grazed: false, heavy: false });
+   291→      }
+   292→    }
+   293→  }
+   294→
+   295→  get shardCount(): number {
+   296→    return this.shards.length;
+   297→  }
+   298→
+   299→  get mult(): number {
+   300→    return 1 + Math.min(9, this.chain) * SCORE.multPerBounce;
+   301→  }
+   302→
+   303→  get enemiesLeft(): number {
+   304→    return this.spawnQueue.length + this.marks.length + this.foes.length;
+   305→  }
+   306→
+   307→  get waveActive(): boolean {
+   308→    return this.waveState === 'active';
+   309→  }
+   310→
+   311→  /* ---- modded tuning getters ---- */
+   312→
+   313→  private get shardSpeed(): number {
+   314→    return SHARD.speed * this.mods.shardSpeed * this.mutator.mods.shardSpeed;
+   315→  }
+   316→  private get maxBounces(): number {
+   317→    return SHARD.maxBounces + this.mods.bounces;
+   318→  }
+   319→  private get grazeR(): number {
+   320→    return PLAYER.grazeRadius * this.mods.graze;
+   321→  }
+   322→  private get odDuration(): number {
+   323→    return OVERDRIVE.duration + this.mods.odDuration;
+   324→  }
+   325→
+   326→  /** advance the simulation; enemyDt already carries the Overdrive time scale */
+   327→  update(dt: number, enemyDt: number, moveX: number, moveY: number, aimX: number, aimZ: number, wantThrow: boolean, wantDash: boolean): void {
+   328→    if (this.over) return;
+   329→    this.time += dt;
+   330→
+   331→    this.updatePlayer(dt, moveX, moveY, wantDash);
+   332→    this.updateShards(dt);
+   333→
+   334→    // foes & bullets live on enemy time (slowed by Overdrive)
+   335→    this.updateFoes(enemyDt);
+   336→    this.updateBullets(enemyDt);
+   337→    this.updateMarks(enemyDt);
+   338→    this.updateWave(dt);
+   339→
+   340→    // chain decay
+   341→    if (this.chain > 0) {
+   342→      this.chainT -= dt;
+   343→      if (this.chainT <= 0) this.chain = 0;
+   344→    }
+   345→
+   346→    // overdrive duration
+   347→    if (this.odActive) {
+   348→      this.odT -= dt;
+   349→      if (this.odT <= 0) this.odActive = false;
+   350→    }
+   351→
+   352→    if (wantThrow) this.tryThrow(aimX, aimZ);
+   353→    this.throwCd = Math.max(0, this.throwCd - dt);
+   354→  }
+   355→
+   356→  /* ------------------------------------------------------------------ */
+   357→  /* ember                                                               */
+   358→  /* ------------------------------------------------------------------ */
+   359→
+   360→  private updatePlayer(dt: number, moveX: number, moveY: number, wantDash: boolean): void {
+   361→    this.invuln = Math.max(0, this.invuln - dt);
+   362→    this.dashCd = Math.max(0, this.dashCd - dt);
+   363→
+   364→    if (wantDash && this.dashCd <= 0 && this.dashT <= 0) {
+   365→      // dash-recall: airborne shards whip home at 1.5× speed
+   366→      let recalled = false;
+   367→      for (const s of this.shards) {
+   368→        if (s.state !== 'orbit') {
+   369→          s.state = 'return';
+   370→          s.targetId = -1;
+   371→          s.boost = 1;
+   372→          recalled = true;
+   373→        }
+   374→      }
+   375→      if (recalled) this.events.onRecall(this.px, this.pz);
+   376→      let dx = moveX;
+   377→      let dz = -moveY;
+   378→      const len = Math.hypot(dx, dz);
+   379→      if (len < 0.2) {
+   380→        // dash along current heading, or aim facing if idle
+   381→        dx = this.pvx;
+   382→        dz = this.pvz;
+   383→        const l2 = Math.hypot(dx, dz);
+   384→        if (l2 < 0.5) {
+   385→          dx = 0;
+   386→          dz = -1;
+   387→        } else {
+   388→          dx /= l2;
+   389→          dz /= l2;
+   390→        }
+   391→      } else {
+   392→        dx /= len;
+   393→        dz /= len;
+   394→      }
+   395→      this.dashDx = dx;
+   396→      this.dashDz = dz;
+   397→      this.dashT = PLAYER.dashTime;
+   398→      this.dashCd = PLAYER.dashCooldown * this.mods.dashCd;
+   399→      this.dashHit.clear();
+   400→      this.events.onDash(this.px, this.pz);
+   401→    }
+   402→
+   403→    if (this.dashT > 0) {
+   404→      this.dashT -= dt;
+   405→      this.pvx = this.dashDx * PLAYER.dashSpeed;
+   406→      this.pvz = this.dashDz * PLAYER.dashSpeed;
+   407→    } else {
+   408→      const spd = this.mods.speed;
+   409→      const ax = moveX * PLAYER.accel * spd;
+   410→      const az = -moveY * PLAYER.accel * spd;
+   411→      this.pvx += (ax - PLAYER.drag * this.pvx) * dt;
+   412→      this.pvz += (az - PLAYER.drag * this.pvz) * dt;
+   413→    }
+   414→
+   415→    this.px += this.pvx * dt;
+   416→    this.pz += this.pvz * dt;
+   417→    const c = clampArena(this.px, this.pz, PLAYER.radius);
+   418→    this.px = c.x;
+   419→    this.pz = c.z;
+   420→
+   421→    // dash strike: dashing through a foe burns it
+   422→    if (this.dashT > 0) {
+   423→      for (const f of this.foes) {
+   424→        if (f.spawnT > 0 || this.dashHit.has(f.id)) continue;
+   425→        const dd = Math.hypot(f.x - this.px, f.z - this.pz);
+   426→        if (dd < f.r + PLAYER.radius + 0.35) {
+   427→          this.dashHit.add(f.id);
+   428→          // dashing into the bulwark's shield face clangs off — go around
+   429→          if (f.kind === 'bulwark') {
+   430→            const dl2 = Math.hypot(f.x - this.px, f.z - this.pz) || 1;
+   431→            const dot = ((f.x - this.px) / dl2) * Math.sin(f.face) + ((f.z - this.pz) / dl2) * Math.cos(f.face);
+   432→            if (dot < -Math.cos(FOE.bulwarkCone)) {
+   433→              this.events.onBlock(f.x, f.z);
+   434→              continue;
+   435→            }
+   436→          }
+   437→          const dl = Math.hypot(f.x - this.px, f.z - this.pz) || 1;
+   438→          const kx = ((f.x - this.px) / dl) * 14 * this.mods.dashKnock;
+   439→          const kz = ((f.z - this.pz) / dl) * 14 * this.mods.dashKnock;
+   440→          const dead = this.damageFoe(f, this.mods.dashStrike);
+   441→          if (!dead) {
+   442→            f.vx += kx;
+   443→            f.vz += kz;
+   444→          }
+   445→        }
+   446→      }
+   447→    }
+   448→  }
+   449→
+   450→  private hurt(): void {
+   451→    if (this.invuln > 0 || this.dashT > 0 || this.over) return;
+   452→    this.embers -= 1;
+   453→    this.chain = 0;
+   454→    if (this.embers <= 0 && this.mods.revive && !this.reviveUsed) {
+   455→      // SECOND DAWN — the shrine remembers you
+   456→      this.reviveUsed = true;
+   457→      this.embers = 1;
+   458→      this.invuln = 2.5;
+   459→      this.events.onRevive(this.px, this.pz);
+   460→      return;
+   461→    }
+   462→    this.invuln = PLAYER.invulnTime;
+   463→    this.events.onHurt(this.px, this.pz);
+   464→    if (this.embers <= 0) {
+   465→      this.over = true;
+   466→      this.events.onDeath();
+   467→    }
+   468→  }
+   469→
+   470→  /* ------------------------------------------------------------------ */
+   471→  /* shards of light                                                     */
+   472→  /* ------------------------------------------------------------------ */
+   473→
+   474→  private tryThrow(aimX: number, aimZ: number): void {
+   475→    if (this.throwCd > 0) return;
+   476→    let launched = false;
+   477→    for (const s of this.shards) {
+   478→      if (s.state !== 'orbit') continue;
+   479→      launched = true;
+   480→      // slight fan so simultaneous shards don't stack
+   481→      const ang = Math.atan2(aimX - this.px, aimZ - this.pz) + (this.rng() - 0.5) * 0.24;
+   482→      const dirX = Math.sin(ang);
+   483→      const dirZ = Math.cos(ang);
+   484→      s.x = this.px + dirX * 1.2;
+   485→      s.z = this.pz + dirZ * 1.2;
+   486→      s.bounces = 0;
+   487→      s.flown = 0;
+   488→      s.boost = 0;
+   489→      s.hitCd.clear();
+   490→      // always launch with full velocity along the aim direction; steering corrects from there
+   491→      s.vx = dirX * this.shardSpeed;
+   492→      s.vz = dirZ * this.shardSpeed;
+   493→
+   494→      // aim magnetism: snap to a foe near the aim point
+   495→      let best: Foe | null = null;
+   496→      let bestD = SHARD.aimMagnet;
+   497→      for (const f of this.foes) {
+   498→        if (f.spawnT > 0) continue;
+   499→        const d = Math.hypot(f.x - aimX, f.z - aimZ);
+   500→        if (d < bestD) {
+   501→          bestD = d;
+   502→          best = f;
+   503→        }
+   504→      }
+   505→      if (best) {
+   506→        s.state = 'fly';
+   507→        s.targetId = best.id;
+   508→      } else {
+   509→        s.state = 'fly';
+   510→        s.targetId = -1;
+   511→      }
+   512→    }
+   513→    if (launched) {
+   514→      this.throwCd = SHARD.throwCooldown * this.mods.throwCd;
+   515→      this.events.onThrow(this.px, this.pz);
+   516→    }
+   517→  }
+   518→
+   519→  /** a chosen boon reshapes the build; immediate effects apply here too */
+   520→  applyBoon(b: BoonDef): void {
+   521→    const prevMax = this.mods.maxEmbers;
+   522→    b.apply(this.mods);
+   523→    if (this.mods.maxEmbers > prevMax) {
+   524→      this.maxEmbers = this.mods.maxEmbers;
+   525→      this.embers = Math.min(this.maxEmbers, this.embers + 1); // heal 1
+   526→    }
+   527→  }
+   528→
+   529→  /** QA hook: wipe the room (browser verification only) — bypasses boss floors */
+   530→  debugClearRoom(): void {
+   531→    for (const f of this.foes.slice()) {
+   532→      f.state = 3;
+   533→      f.spawnT = 0;
+   534→      this.damageFoe(f, 999);
+   535→    }
+   536→    this.spawnQueue.length = 0;
+   537→    this.marks.length = 0;
+   538→  }
+   539→
+   540→  private foeById(id: number): Foe | null {
+   541→    for (const f of this.foes) if (f.id === id) return f;
+   542→    return null;
+   543→  }
+   544→
+   545→  private updateShards(dt: number): void {
+   546→    for (const s of this.shards) {
+   547→      // per-enemy re-hit cooldowns tick on enemy time so slowed foes don't farm hits
+   548→      for (const [k, v] of s.hitCd) {
+   549→        const nv = v - dt;
+   550→        if (nv <= 0) s.hitCd.delete(k);
+   551→        else s.hitCd.set(k, nv);
+   552→      }
+   553→
+   554→      if (s.state === 'orbit') {
+   555→        s.orbitAngle += dt * 2.9;
+   556→        const orbitR = 1.7 + this.shards.length * 0.06;
+   557→        s.x = this.px + Math.sin(s.orbitAngle) * orbitR;
+   558→        s.z = this.pz + Math.cos(s.orbitAngle) * orbitR;
+   559→        s.vx = 0;
+   560→        s.vz = 0;
+   561→        continue;
+   562→      }
+   563→
+   564→      if (s.state === 'return') {
+   565→        const dx = this.px - s.x;
+   566→        const dz = this.pz - s.z;
+   567→        const d = Math.hypot(dx, dz);
+   568→        if (d < SHARD.catchRadius) {
+   569→          s.state = 'orbit';
+   570→          s.boost = 0;
+   571→          this.events.onCatch(s.x, s.z);
+   572→          this.addOverdrive(OVERDRIVE.catchCharge + this.mods.odCatch);
+   573→          continue;
+   574→        }
+   575→        s.boost = Math.max(0, s.boost - dt);
+   576→        const want = Math.atan2(dx, dz);
+   577→        this.steer(s, want, dt);
+   578→        s.x += s.vx * dt;
+   579→        s.z += s.vz * dt;
+   580→        continue;
+   581→      }
+   582→
+   583→      // fly / chain: seek target or keep heading; hit anything touched
+   584→      let target: Foe | null = null;
+   585→      if (s.targetId >= 0) target = this.foeById(s.targetId);
+   586→      if (target && target.spawnT > 0) target = null;
+   587→      if (!target && s.targetId >= 0) {
+   588→        // target died mid-flight — fall back to straight flight, then return
+   589→        s.targetId = -1;
+   590→      }
+   591→
+   592→      if (target) {
+   593→        const want = Math.atan2(target.x - s.x, target.z - s.z);
+   594→        this.steer(s, want, dt);
+   595→      } else if (s.targetId < 0) {
+   596→        // straight flight: after enough distance with nothing hit, arc home
+   597→        s.flown += this.shardSpeed * dt;
+   598→        if (s.flown > 46) {
+   599→          s.state = 'return';
+   600→          continue;
+   601→        }
+   602→      }
+   603→      s.x += s.vx * dt;
+   604→      s.z += s.vz * dt;
+   605→
+   606→      // wall bounce — light reflects inward
+   607→      const dCenter = Math.hypot(s.x, s.z);
+   608→      if (dCenter > ARENA.radius - 0.4) {
+   609→        const nx = s.x / dCenter;
+   610→        const nz = s.z / dCenter;
+   611→        const dot = s.vx * nx + s.vz * nz;
+   612→        s.vx -= 2 * dot * nx;
+   613→        s.vz -= 2 * dot * nz;
+   614→        const max = ARENA.radius - 0.4;
+   615→        s.x = nx * max;
+   616→        s.z = nz * max;
+   617→        if (s.state === 'fly' && s.targetId < 0) s.state = 'return';
+   618→      }
+   619→
+   620→      // catch while passing the ember
+   621→      const pd = Math.hypot(this.px - s.x, this.pz - s.z);
+   622→      if (s.state === 'return' && pd < SHARD.catchRadius) {
+   623→        s.state = 'orbit';
+   624→        s.boost = 0;
+   625→        this.events.onCatch(s.x, s.z);
+   626→        this.addOverdrive(OVERDRIVE.catchCharge + this.mods.odCatch);
+   627→        continue;
+   628→      }
+   629→      if (pd < SHARD.catchRadius * 0.7 && s.bounces > this.maxBounces) {
+   630→        s.state = 'orbit';
+   631→        s.boost = 0;
+   632→        this.events.onCatch(s.x, s.z);
+   633→        continue;
+   634→      }
+   635→
+   636→      // contact with foes
+   637→      const dmg = (1 + (SHARD.damage - 1) + (this.mods.dmg - 1)) * (this.odActive ? OVERDRIVE.damageMult : 1);
+   638→      for (const f of this.foes) {
+   639→        if (f.spawnT > 0) continue;
+   640→        if ((s.hitCd.get(f.id) ?? 0) > 0) continue;
+   641→        const dd = Math.hypot(f.x - s.x, f.z - s.z);
+   642→        if (dd < f.r + 0.55) {
+   643→          s.hitCd.set(f.id, SHARD.hitCooldown);
+   644→          // BULWARK frontal armor — light ricochets off the plate, no damage,
+   645→          // but the ricochet still chains. Backstab it or bend around.
+   646→          if (f.kind === 'bulwark') {
+   647→            const al = Math.hypot(s.vx, s.vz) || 1;
+   648→            const dot = (s.vx / al) * Math.sin(f.face) + (s.vz / al) * Math.cos(f.face);
+   649→            if (dot < -Math.cos(FOE.bulwarkCone)) {
+   650→              this.events.onBlock(f.x, f.z);
+   651→              s.bounces += 1;
+   652→              if (s.bounces <= this.maxBounces) {
+   653→                this.chain += 1;
+   654→                this.chainT = SCORE.multDecay;
+   655→                const next = this.findChainTarget(f, s);
+   656→                this.events.onBounce(f.x, f.z, this.chain);
+   657→                if (next) {
+   658→                  s.targetId = next.id;
+   659→                  s.state = 'chain';
+   660→                } else {
+   661→                  s.state = 'return';
+   662→                  s.targetId = -1;
+   663→                }
+   664→              } else {
+   665→                s.state = 'return';
+   666→                s.targetId = -1;
+   667→              }
+   668→              continue;
+   669→            }
+   670→          }
+   671→          // SHIELDED elite: first hit only strips the halo
+   672→          if (f.shieldUp) {
+   673→            f.shieldUp = false;
+   674→            this.events.onShieldBreak(f.x, f.z);
+   675→            continue;
+   676→          }
+   677→          const killed = this.damageFoe(f, dmg);
+   678→          if (!killed) {
+   679→            // knockback along the shard's travel
+   680→            const sl = Math.hypot(s.vx, s.vz) || 1;
+   681→            f.vx += (s.vx / sl) * 9;
+   682→            f.vz += (s.vz / sl) * 9;
+   683→          }
+   684→          // SEARING CHAIN: splash around every shard impact
+   685→          if (this.mods.splash > 0) {
+   686→            for (const o of this.foes) {
+   687→              if (o === f || o.spawnT > 0 || o.shieldUp) continue;
+   688→              if (Math.hypot(o.x - f.x, o.z - f.z) < 3.5) this.damageFoe(o, this.mods.splash);
+   689→            }
+   690→          }
+   691→          if (killed) continue;
+   692→          // ricochet to the next foe
+   693→          s.bounces += 1;
+   694→          if (s.bounces <= this.maxBounces) {
+   695→            this.chain += 1;
+   696→            this.chainT = SCORE.multDecay;
+   697→            const next = this.findChainTarget(f, s);
+   698→            this.events.onBounce(f.x, f.z, this.chain);
+   699→            if (next) {
+   700→              s.targetId = next.id;
+   701→              s.state = 'chain';
+   702→            } else {
+   703→              s.state = 'return';
+   704→              s.targetId = -1;
+   705→            }
+   706→          } else {
+   707→            s.state = 'return';
+   708→            s.targetId = -1;
+   709→          }
+   710→        }
+   711→      }
+   712→    }
+   713→  }
+   714→
+   715→  private steer(s: Shard, wantAngle: number, dt: number): void {
+   716→    const cur = Math.atan2(s.vx, s.vz);
+   717→    let delta = wantAngle - cur;
+   718→    while (delta > Math.PI) delta -= TAU;
+   719→    while (delta < -Math.PI) delta += TAU;
+   720→    const maxTurn = SHARD.turnRate * dt;
+   721→    const ang = cur + Math.max(-maxTurn, Math.min(maxTurn, delta));
+   722→    const sp = this.shardSpeed * (s.boost > 0 ? 1.5 : 1);
+   723→    s.vx = Math.sin(ang) * sp;
+   724→    s.vz = Math.cos(ang) * sp;
+   725→  }
+   726→
+   727→  private findChainTarget(from: Foe, s: Shard): Foe | null {
+   728→    let best: Foe | null = null;
+   729→    let bestD = SHARD.chainRadius;
+   730→    for (const f of this.foes) {
+   731→      if (f.id === from.id || f.spawnT > 0) continue;
+   732→      const d = Math.hypot(f.x - from.x, f.z - from.z);
+   733→      if (d < bestD) {
+   734→        bestD = d;
+   735→        best = f;
+   736→      }
+   737→    }
+   738→    void s;
+   739→    return best;
+   740→  }
+   741→
+   742→  /* ------------------------------------------------------------------ */
+   743→  /* foes                                                                */
+   744→  /* ------------------------------------------------------------------ */
+   745→
+   746→  private damageFoe(f: Foe, dmg: number): boolean {
+   747→    // BOSS PHASE FLOOR: a warden hangs on by a thread until its final phase
+   748→    // has played — burst builds can never skip the learning curve
+   749→    if (f.boss && f.state < 3) {
+   750→      const floor = f.state === 1 ? f.maxHp * 0.34 : 0.5;
+   751→      if (f.hp - dmg < floor) {
+   752→        f.hp = Math.max(floor, 0.5);
+   753→        return false;
+   754→      }
+   755→    }
+   756→    f.hp -= dmg;
+   757→    if (f.hp > 0) return false;
+   758→    // score: elites pay ×1.5, bosses scale by biome, mutators sweeten the pot
+   759→    let base = f.kind === 'warden' ? WAVES.wardenScore : SCORE[f.kind];
+   760→    if (f.boss) base = bossScore(this.biome);
+   761→    if (f.elite) base *= 1.5;
+   762→    this.score += Math.round((base * this.mult * this.mutator.mods.score) / 5) * 5;
+   763→    this.addOverdrive(OVERDRIVE.killCharge + this.mods.odOnKill + (f.elite ? 3 : 0));
+   764→    if (f.kind === 'warden') {
+   765→      this.wardensKilled += 1;
+   766→      this.events.onWardenDie(f.x, f.z);
+   767→      if (this.shardCount < SHARD.maxCount) {
+   768→        this.addShard();
+   769→        this.events.onShardGain();
+   770→      }
+   771→    }
+   772→    if (f.elite === 'split') {
+   773→      // SPLITTER: two minis burst out
+   774→      for (const side of [-1, 1]) {
+   775→        const a = this.rng() * TAU;
+   776→        this.spawnFoe('drifter', f.x + Math.cos(a) * 1.4 * side, f.z + Math.sin(a) * 1.4 * side, '', false, 1, 0.5);
+   777→      }
+   778→    }
+   779→    this.events.onKill(f.kind, f.x, f.z);
+   780→    this.removeFoe(f);
+   781→    return true;
+   782→  }
+   783→
+   784→  private removeFoe(f: Foe): void {
+   785→    const i = this.foes.indexOf(f);
+   786→    if (i >= 0) this.foes.splice(i, 1);
+   787→  }
+   788→
+   789→  private spawnFoe(kind: FoeKind, x: number, z: number, elite: Elite = '', boss = false, hpOverride?: number, rOverride?: number): void {
+   790→    const id = this.nextId++;
+   791→    let hp = 2;
+   792→    let r = 0.8;
+   793→    if (kind === 'striker') {
+   794→      hp = 2;
+   795→      r = 0.7;
+   796→    } else if (kind === 'weaver') {
+   797→      hp = 3;
+   798→      r = 0.9;
+   799→    } else if (kind === 'caster') {
+   800→      hp = 2;
+   801→      r = 0.85;
+   802→    } else if (kind === 'bulwark') {
+   803→      hp = 6;
+   804→      r = 1.3;
+   805→    } else if (kind === 'warden') {
+   806→      hp = boss ? bossHp(this.biome) : WAVES.wardenHpBase;
+   807→      r = 2.2;
+   808→    }
+   809→    if (hpOverride !== undefined) hp = hpOverride;
+   810→    if (rOverride !== undefined) r = rOverride;
+   811→    if (elite === 'shield') hp += 2;
+   812→    if (elite === 'swift') hp = Math.max(1, hp - 1);
+   813→    if (kind === 'bulwark' && elite === 'shield') elite = ''; // the plate IS the shield
+   814→    this.foes.push({
+   815→      id,
+   816→      kind,
+   817→      x,
+   818→      z,
+   819→      vx: 0,
+   820→      vz: 0,
+   821→      hp,
+   822→      maxHp: hp,
+   823→      r,
+   824→      elite,
+   825→      shieldUp: elite === 'shield',
+   826→      boss,
+   827→      spawnT: kind === 'warden' ? 1.4 : kind === 'bulwark' ? 0.7 : 0.45,
+   828→      state: boss ? 1 : 0, // boss phase
+   829→      timer: kind === 'caster' ? 1.2 + this.rng() * 0.8 : 0,
+   830→      tx: 0,
+   831→      tz: 0,
+   832→      dx: 0,
+   833→      dz: 0,
+   834→      burstLeft: 0,
+   835→      burstT: 0,
+   836→      patternAngle: this.rng() * TAU,
+   837→      face: Math.atan2(this.px - x, this.pz - z), // armor starts facing the ember
+   838→    });
+   839→    if (kind === 'warden' && boss) this.events.onWardenSpawn(x, z);
+   840→  }
+   841→
+   842→  private rollElite(): Elite {
+   843→    if (this.rng() >= eliteChance(this.biome)) return '';
+   844→    const roll = this.rng();
+   845→    return roll < 0.34 ? 'swift' : roll < 0.67 ? 'shield' : 'split';
+   846→  }
+   847→
+   848→  private updateFoes(dt: number): void {
+   849→    const spdScale = Math.min(1.6, 1 + this.wave * 0.03) * this.mutator.mods.foeSpeed; // per-foe swift handled below
+   850→    for (const f of this.foes) {
+   851→      const swiftK = f.elite === 'swift' ? 1.55 : 1;
+   852→      const eff = spdScale * swiftK;
+   853→      if (f.spawnT > 0) {
+   854→        f.spawnT -= dt;
+   855→        continue;
+   856→      }
+   857→      const pdx = this.px - f.x;
+   858→      const pdz = this.pz - f.z;
+   859→      const pd = Math.hypot(pdx, pdz) || 1;
+   860→
+   861→      switch (f.kind) {
+   862→        case 'drifter': {
+   863→          const sp = 4.3 * eff;
+   864→          f.vx += ((pdx / pd) * sp - f.vx) * Math.min(1, dt * 2.2);
+   865→          f.vz += ((pdz / pd) * sp - f.vz) * Math.min(1, dt * 2.2);
+   866→          break;
+   867→        }
+   868→        case 'striker': {
+   869→          if (f.state === 0) {
+   870→            // seek
+   871→            const sp = 6 * eff;
+   872→            f.vx += ((pdx / pd) * sp - f.vx) * Math.min(1, dt * 2.5);
+   873→            f.vz += ((pdz / pd) * sp - f.vz) * Math.min(1, dt * 2.5);
+   874→            if (pd < 15) {
+   875→              f.state = 1;
+   876→              f.timer = 0.55;
+   877→            }
+   878→          } else if (f.state === 1) {
+   879→            // telegraph — lock target at the end
+   880→            f.vx *= Math.max(0, 1 - dt * 8);
+   881→            f.vz *= Math.max(0, 1 - dt * 8);
+   882→            f.timer -= dt;
+   883→            f.tx = this.px;
+   884→            f.tz = this.pz;
+   885→            if (f.timer <= 0) {
+   886→              const ddx = f.tx - f.x;
+   887→              const ddz = f.tz - f.z;
+   888→              const dl = Math.hypot(ddx, ddz) || 1;
+   889→              f.dx = ddx / dl;
+   890→              f.dz = ddz / dl;
+   891→              f.state = 2;
+   892→              f.timer = 0.55;
+   893→            }
+   894→          } else if (f.state === 2) {
+   895→            // dash
+   896→            f.vx = f.dx * 27;
+   897→            f.vz = f.dz * 27;
+   898→            f.timer -= dt;
+   899→            if (f.timer <= 0) {
+   900→              f.state = 3;
+   901→              f.timer = 0.9;
+   902→            }
+   903→          } else {
+   904→            f.vx *= Math.max(0, 1 - dt * 6);
+   905→            f.vz *= Math.max(0, 1 - dt * 6);
+   906→            f.timer -= dt;
+   907→            if (f.timer <= 0) f.state = 0;
+   908→          }
+   909→          break;
+   910→        }
+   911→        case 'weaver': {
+   912→          // hold the 15..21 band, strafe clockwise
+   913→          const tangX = -pdz / pd;
+   914→          const tangZ = pdx / pd;
+   915→          const radial = pd > 21 ? -0.8 : pd < 15 ? 0.8 : 0;
+   916→          const wantVx = tangX * 5 * eff + (pdx / pd) * radial * 5;
+   917→          const wantVz = tangZ * 5 * eff + (pdz / pd) * radial * 5;
+   918→          f.vx += (wantVx - f.vx) * Math.min(1, dt * 2.4);
+   919→          f.vz += (wantVz - f.vz) * Math.min(1, dt * 2.4);
+   920→          if (f.burstLeft > 0) {
+   921→            f.burstT -= dt;
+   922→            if (f.burstT <= 0) {
+   923→              f.burstLeft -= 1;
+   924→              f.burstT = 0.13;
+   925→              this.fireAt(f, (Math.random() - 0.5) * 0.18);
+   926→            }
+   927→          } else {
+   928→            f.timer -= dt;
+   929→            if (f.timer <= 0) {
+   930→              f.timer = 2.7;
+   931→              f.burstLeft = 3;
+   932→              f.burstT = 0.01;
+   933→            }
+   934→          }
+   935→          break;
+   936→        }
+   937→        case 'caster': {
+   938→          if (f.state === 0) {
+   939→            // hold the 16..23 band, slow strafe — then lock, telegraph, lance
+   940→            const tangX = -pdz / pd;
+   941→            const tangZ = pdx / pd;
+   942→            const radial = pd > 23 ? -0.7 : pd < 16 ? 0.7 : 0;
+   943→            const wantVx = tangX * 3.4 * eff + (pdx / pd) * radial * 4;
+   944→            const wantVz = tangZ * 3.4 * eff + (pdz / pd) * radial * 4;
+   945→            f.vx += (wantVx - f.vx) * Math.min(1, dt * 2.2);
+   946→            f.vz += (wantVz - f.vz) * Math.min(1, dt * 2.2);
+   947→            f.timer -= dt;
+   948→            if (f.timer <= 0) {
+   949→              f.state = 1;
+   950→              f.timer = 0.5;
+   951→              f.tx = this.px; // locked at telegraph start — move!
+   952→              f.tz = this.pz;
+   953→            }
+   954→          } else if (f.state === 1) {
+   955→            f.vx *= Math.max(0, 1 - dt * 6);
+   956→            f.vz *= Math.max(0, 1 - dt * 6);
+   957→            f.timer -= dt;
+   958→            if (f.timer <= 0) {
+   959→              f.state = 2;
+   960→              f.timer = 0.1;
+   961→            }
+   962→          } else {
+   963→            f.timer -= dt;
+   964→            if (f.timer <= 0) {
+   965→              f.state = 0;
+   966→              f.timer = 2.0 + this.rng() * 1.1;
+   967→              const a = Math.atan2(f.tx - f.x, f.tz - f.z);
+   968→              this.bullets.push({
+   969→                x: f.x + Math.sin(a) * (f.r + 0.4),
+   970→                z: f.z + Math.cos(a) * (f.r + 0.4),
+   971→                vx: Math.sin(a) * FOE.heavySpeed,
+   972→                vz: Math.cos(a) * FOE.heavySpeed,
+   973→                life: FOE.heavyLife,
+   974→                grazed: false,
+   975→                heavy: true,
+   976→              });
+   977→              this.events.onHeavyShot(f.x, f.z);
+   978→            }
+   979→          }
+   980→          break;
+   981→        }
+   982→        case 'bulwark': {
+   983→          // slow armored advance; the plate turns toward you at 1.1 rad/s —
+   984→          // outrun its facing and hit the naked back
+   985→          const sp = 2.1 * eff;
+   986→          f.vx += ((pdx / pd) * sp - f.vx) * Math.min(1, dt * 1.6);
+   987→          f.vz += ((pdz / pd) * sp - f.vz) * Math.min(1, dt * 1.6);
+   988→          const wantFace = Math.atan2(pdx, pdz);
+   989→          let fd = wantFace - f.face;
+   990→          while (fd > Math.PI) fd -= TAU;
+   991→          while (fd < -Math.PI) fd += TAU;
+   992→          const maxTurn = 1.1 * dt;
+   993→          f.face += Math.max(-maxTurn, Math.min(maxTurn, fd));
+   994→          break;
+   995→        }
+   996→        case 'warden': {
+   997→          // slow menacing drift toward the ember
+   998→          f.vx += ((pdx / pd) * 1.7 - f.vx) * Math.min(1, dt * 1.2);
+   999→          f.vz += ((pdz / pd) * 1.7 - f.vz) * Math.min(1, dt * 1.2);
+  1000→
+  1001→          if (f.boss) {
+  1002→            // phase escalation on hp thresholds
+  1003→            const frac = f.hp / f.maxHp;
+  1004→            const wantPhase = frac > 0.66 ? 1 : frac > 0.33 ? 2 : 3;
+  1005→            if (wantPhase > f.state) {
+  1006→              f.state = wantPhase;
+  1007→              f.timer = Math.max(f.timer, 0.9); // breath before the new pattern
+  1008→              this.events.onBossPhase(f.x, f.z, wantPhase);
+  1009→            }
+  1010→          }
+  1011→
+  1012→          const interval = f.boss ? 2.6 * (f.state === 1 ? 1 : f.state === 2 ? 0.75 : 0.55) : 2.6;
+  1013→          const ringN = f.boss ? 12 + f.state * 3 : 14;
+  1014→          f.timer -= dt;
+  1015→          if (f.timer <= 0) {
+  1016→            f.timer = interval;
+  1017→            f.patternAngle += 0.37;
+  1018→            for (let i = 0; i < ringN; i++) {
+  1019→              const a = (i / ringN) * TAU + f.patternAngle * (f.boss && f.state === 3 ? 1.9 : 1);
+  1020→              this.bullets.push({
+  1021→                x: f.x + Math.sin(a) * f.r,
+  1022→                z: f.z + Math.cos(a) * f.r,
+  1023→                vx: Math.sin(a) * 8.5,
+  1024→                vz: Math.cos(a) * 8.5,
+  1025→                life: FOE.bulletLife,
+  1026→                grazed: false,
+  1027→                heavy: false,
+  1028→              });
+  1029→            }
+  1030→            // The Hollow Choir: escorts in phase 3
+  1031→            if (f.boss && this.biome === 2 && f.state === 3 && f.tx < 1) {
+  1032→              f.tx = 1;
+  1033→              const a1 = this.rng() * TAU;
+  1034→              this.marks.push({ x: Math.sin(a1) * 20, z: Math.cos(a1) * 20, t: 0.9, kind: 'striker' });
+  1035→              this.marks.push({ x: -Math.sin(a1) * 20, z: -Math.cos(a1) * 20, t: 0.9, kind: 'striker' });
+  1036→            }
+  1037→          }
+  1038→          break;
+  1039→        }
+  1040→      }
+  1041→
+  1042→      f.x += f.vx * dt;
+  1043→      f.z += f.vz * dt;
+  1044→
+  1045→      // soft separation so foes don't stack
+  1046→      for (const o of this.foes) {
+  1047→        if (o === f || o.spawnT > 0) continue;
+  1048→        const ox = f.x - o.x;
+  1049→        const oz = f.z - o.z;
+  1050→        const od = Math.hypot(ox, oz);
+  1051→        const minD = f.r + o.r;
+  1052→        if (od > 0.001 && od < minD) {
+  1053→          const push = ((minD - od) / minD) * 6 * dt;
+  1054→          f.x += (ox / od) * push * 6;
+  1055→          f.z += (oz / od) * push * 6;
+  1056→        }
+  1057→      }
+  1058→
+  1059→      const c = clampArena(f.x, f.z, f.r);
+  1060→      f.x = c.x;
+  1061→      f.z = c.z;
+  1062→
+  1063→      // contact damage
+  1064→      if (pd < f.r + FOE.contactRadius) this.hurt();
+  1065→    }
+  1066→  }
+  1067→
+  1068→  private fireAt(f: Foe, spread: number): void {
+  1069→    const a = Math.atan2(this.px - f.x, this.pz - f.z) + spread;
+  1070→    this.bullets.push({
+  1071→      x: f.x + Math.sin(a) * f.r,
+  1072→      z: f.z + Math.cos(a) * f.r,
+  1073→      vx: Math.sin(a) * FOE.bulletSpeed,
+  1074→      vz: Math.cos(a) * FOE.bulletSpeed,
+  1075→      life: FOE.bulletLife,
+  1076→      grazed: false,
+  1077→      heavy: false,
+  1078→    });
+  1079→  }
+  1080→
+  1081→  private updateBullets(dt: number): void {
+  1082→    for (let i = this.bullets.length - 1; i >= 0; i--) {
+  1083→      const b = this.bullets[i];
+  1084→      b.life -= dt;
+  1085→      b.x += b.vx * dt;
+  1086→      b.z += b.vz * dt;
+  1087→      const brad = b.heavy ? FOE.heavyRadius : FOE.bulletRadius;
+  1088→      const dx = this.px - b.x;
+  1089→      const dz = this.pz - b.z;
+  1090→      const d = Math.hypot(dx, dz);
+  1091→      if (d < PLAYER.radius + brad) {
+  1092→        if (this.invuln <= 0 && this.dashT <= 0) {
+  1093→          this.hurt();
+  1094→          this.bullets.splice(i, 1);
+  1095→          continue;
+  1096→        }
+  1097→      } else if (!b.grazed && d < this.grazeR + brad) {
+  1098→        b.grazed = true;
+  1099→        this.addOverdrive(OVERDRIVE.grazeCharge);
+  1100→        this.score += SCORE.graze;
+  1101→        this.events.onGraze(b.x, b.z);
+  1102→      }
+  1103→      if (b.life <= 0 || Math.hypot(b.x, b.z) > ARENA.radius + 1.5) {
+  1104→        this.bullets.splice(i, 1);
+  1105→        continue;
+  1106→      }
+  1107→    }
+  1108→  }
+  1109→
+  1110→  private updateMarks(dt: number): void {
+  1111→    for (let i = this.marks.length - 1; i >= 0; i--) {
+  1112→      const m = this.marks[i];
+  1113→      m.t -= dt;
+  1114→      if (m.t <= 0) {
+  1115→        this.marks.splice(i, 1);
+  1116→        this.spawnFoe(m.kind, m.x, m.z, m.kind === 'warden' ? '' : this.rollElite(), m.kind === 'warden');
+  1117→      }
+  1118→    }
+  1119→  }
+  1120→
+  1121→  /* ------------------------------------------------------------------ */
+  1122→  /* waves                                                               */
+  1123→  /* ------------------------------------------------------------------ */
+  1124→
+  1125→  private buildWaveQueue(n: number, budget: number): FoeKind[] {
+  1126→    let points = budget;
+  1127→    const q: FoeKind[] = [];
+  1128→    while (points >= 1) {
+  1129→      const roll = this.rng();
+  1130→      if (n >= 5 && roll < 0.18 && points >= 4) {
+  1131→        q.push('bulwark');
+  1132→        points -= 4;
+  1133→      } else if (n >= 4 && roll < 0.4 && points >= 3) {
+  1134→        q.push('caster');
+  1135→        points -= 3;
+  1136→      } else if (n >= 3 && roll < 0.62 && points >= 3) {
+  1137→        q.push('weaver');
+  1138→        points -= 3;
+  1139→      } else if (n >= 2 && roll < 0.85 && points >= 2) {
+  1140→        q.push('striker');
+  1141→        points -= 2;
+  1142→      } else {
+  1143→        q.push('drifter');
+  1144→        points -= 1;
+  1145→      }
+  1146→    }
+  1147→    // deterministic floor so later rooms always escalate
+  1148→    if (n >= 3 && !q.includes('weaver')) q.push('weaver');
+  1149→    if (n >= 2 && !q.includes('striker')) q.push('striker');
+  1150→    if (n >= 5 && !q.includes('caster')) q.push('caster');
+  1151→    if (n >= 8 && !q.includes('bulwark')) q.push('bulwark');
+  1152→    for (let i = q.length - 1; i > 0; i--) {
+  1153→      const j = Math.floor(this.rng() * (i + 1));
+  1154→      [q[i], q[j]] = [q[i], q[j]];
+  1155→    }
+  1156→    return q;
+  1157→  }
+  1158→
+  1159→  private updateWave(dt: number): void {
+  1160→    void dt;
+  1161→    if (this.waveState !== 'active') return;
+  1162→    if (this.spawnQueue.length > 0) {
+  1163→      this.spawnT -= dt;
+  1164→      if (this.spawnT <= 0) {
+  1165→        const interval = Math.max(WAVES.spawnIntervalMin, WAVES.spawnIntervalBase - WAVES.spawnIntervalPerWave * this.wave);
+  1166→        this.spawnT = interval * (0.7 + this.rng() * 0.6);
+  1167→        const batch = Math.min(this.spawnQueue.length, 1 + (this.wave > 4 && this.rng() < 0.4 ? 1 : 0));
+  1168→        for (let i = 0; i < batch; i++) {
+  1169→          const kind = this.spawnQueue.shift();
+  1170→          if (!kind) break;
+  1171→          // spawn on the rim away from the ember
+  1172→          let x = 0;
+  1173→          let z = 0;
+  1174→          for (let tries = 0; tries < 8; tries++) {
+  1175→            const a = this.rng() * TAU;
+  1176→            const r = ARENA.radius - 2.5;
+  1177→            x = Math.sin(a) * r;
+  1178→            z = Math.cos(a) * r;
+  1179→            if (Math.hypot(x - this.px, z - this.pz) > 14) break;
+  1180→          }
+  1181→          this.marks.push({ x, z, t: kind === 'warden' ? 1.5 : 0.9, kind });
+  1182→          this.events.onSpawnMark(x, z);
+  1183→        }
+  1184→      }
+  1185→    } else if (this.marks.length === 0 && this.foes.length === 0) {
+  1186→      // room cleared — the engine decides what comes next (shrine / boss / next biome)
+  1187→      this.waveState = 'idle';
+  1188→      this.events.onWaveClear(this.wave);
+  1189→    }
+  1190→  }
+  1191→
+  1192→  /* ------------------------------------------------------------------ */
+  1193→  /* overdrive                                                           */
+  1194→  /* ------------------------------------------------------------------ */
+  1195→
+  1196→  addOverdrive(v: number): void {
+  1197→    if (this.odActive) {
+  1198→      if (v >= OVERDRIVE.grazeCharge) this.odT += OVERDRIVE.extendPerGraze;
+  1199→      return;
+  1200→    }
+  1201→    this.odCharge = Math.min(OVERDRIVE.max, this.odCharge + v);
+  1202→    if (this.odCharge >= OVERDRIVE.max) {
+  1203→      this.odCharge = 0;
+  1204→      this.odActive = true;
+  1205→      this.odT = this.odDuration;
+  1206→      this.events.onOverdriveStart();
+  1207→    }
+  1208→  }
+  1209→}
+  1210→

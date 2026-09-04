@@ -45,6 +45,8 @@ function drive(seedMods: { dmg: number; maxEmbers: number; revive: boolean }): D
     onDash: () => {},
     onRecall: () => {},
     onShieldBreak: () => {},
+    onBlock: () => {},
+    onHeavyShot: () => {},
     onBossPhase: (_x, _z, p) => res.phasesSeen.add(p),
     onRevive: () => {},
     onWardenSpawn: () => {},
