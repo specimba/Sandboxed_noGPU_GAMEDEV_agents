@@ -284,3 +284,18 @@ Stage Summary:
 - UI moved from "bordered amber text on black" to the EMBER RITE instrument-panel language: charcoal glass panels, 1px gold hairlines, viewfinder corner brackets, rotated-square diamond glyphs, bone #f2e6cf type, one gold accent #ffc766 reserved for state (ready/active/best/owned), danger #ff5a4a reserved for threats; all neon glows stripped except the sanctioned ≤8px/35% halo on wordmark and big scores.
 - New CSS utilities shipped in globals.css: .hs-panel, .hs-frame (+ .hs-c span, --lurk), .hs-hairline (--bare), .hs-seg (--on, --hot), .hs-pip (--on, --sm), .hs-btn (--quiet, --danger), .hs-ticks, plus hsSegHot keyframes and a gold focus-visible rule.
 - Deviations from brief (all intentional): chain chip hidden at ×1.0 (brief-specified); pitch recased to sentence case for typographic contrast against tracked caps; control hints use em-dash internally so interpuncts separate the four hints; ember/shard pips unified to the single gold accent instead of two warm tones; warden/wave banner kinds map to bone (matches old else-branch).
+
+---
+Task ID: 9 (orchestrator; 9-a/9-b/9-c/9-d)
+Agent: orchestrator + world-architect + entity-sculptor + ui-art-director
+Task: EMBER RITE graphics revision — user rejected the glow-ball look; rebuild all visual layers as designed obsidian/ember art while freezing gameplay
+
+Work Log:
+- 9-0 (orch): built src/game/materials.ts — shared stylized shader (derivative-normal faceted shells, fresnel identity rim, emissive pulse heart, fog-aware) + diamond/streak bullet textures; regraded COLORS/BIOMES in constants.ts; lowered engine bloom base 1.0 → 0.5
+- 9-a: scene.ts rebuilt — glow-ball star → Hollow Lantern (9-slab monolith crown orbiting an ember core, energy-driven rimK), 16-monolith rim field, bloom (0.55/0.55/0.55) + new GradePass (S-curve, warm lift, vignette, animated grain), fog 0.016, floor regrade with mechanics byte-identical; fx.ts particle falloff crisper
+- 9-b: view.ts rebuilt — player glow-ball → Ember Dart craft (hull/fins/heart/tail, yaw-to-aim + bank roll), shards → gold crystal prisms, all 6 foe kinds → obsidian shells with identity rims + hearts, diamond/streak bullets, hairline reticle; sync() behavior contract preserved line-by-line
+- 9-c: TitleScreen/Hud/Overlays redesigned as instrument-panel UI (.hs-panel/.hs-frame/.hs-hairline/.hs-seg utilities in globals.css game layer); all store selectors, handlers, keyboard contracts preserved
+- 9-d (orch): fixed stale scripts/simdrive.ts (onBlock/onHeavyShot), excluded examples/skills from tsconfig; tsc 0 errors, eslint clean; headless sim drive: 9/9 rooms, 3/3 bosses, victory, dawn economy intact; agent-browser: title→begin→combat kill (chain ×1.5)→death scoreboard→rekindle→pause→resume, 0 console/page errors; screenshots .qa/ember-*.png
+
+Stage Summary:
+- Committed 3bc65b0. Visual identity is now "EMBER RITE": chiseled obsidian + identity rims + restrained gold; monolith sun; film-grade post; engraved UI. Gameplay untouched (headless-verified). materials.ts is the single shared design system for future visuals.
