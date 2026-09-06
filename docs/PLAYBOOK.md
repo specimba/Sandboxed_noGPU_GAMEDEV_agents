@@ -134,4 +134,4 @@ Full report: **`docs/research/COMMUNITY_DISCOVERY.md`** (4 scouts, 78 searches, 
 6. CC0 asset feed through the verify gate; thin `platform.ts` shim for future portal SDKs
 7. Jam entry as public benchmark (VibeJam-class rules: web-playable, ≥80% AI)
 
-**Pivot stance:** EMBER RITE was the storyboard that proved the pipeline and the director-loop. The next build starts from the evidence, not from that prototype — genre options ranked by verified ceiling: deep-sim arena survivor → procedural dungeon crawler → portal-first instant arcade. The pipeline generalizes to all three.
+**Pivot stance:** EMBER RITE was the storyboard that proved the pipeline and the director-loop. The next build starts from the evidence, not from that prototype — genre options ranked by verified ceiling: deep-sim arena survivor → procedural dungeon crawler → portal-first instant arcade. The pipeline generalizes to all three. **Decision made: see `docs/PIVOT_BRIEF.md` (AFTERGLOW, deep-sim arena survivor).**

@@ -416,3 +416,66 @@ Stage Summary:
 - Key verdicts: Three.js ships the web game (Godot web strictly worse: 7-10MB wasm + audio limits); Godot 4.3 = warm hedge via one vertical-slice spike; Blender-headless stays the studio with 4 concrete upgrades; no text-to-3D model fits the 3GB CPU sandbox (all ≥6GB VRAM) — pure-procedural + CC0 is the in-house path.
 - Honest ceiling read: prompt→playable = "competent toy"; agent+director+test-harness = Void Explorer class. Our differentiator is the director-taste loop + verification infrastructure, both proven in Sprint 9.
 - No source code touched this task; deliverables are docs/research/COMMUNITY_DISCOVERY.md + PLAYBOOK section 6 + this worklog.
+---
+Task ID: 12-b
+Agent: qa-instrumentation-engineer
+Task: Extend window.__hollowsun debug hook with a live performance snapshot (perf()/perfSnapshot()) — Astra-era agent-facing debug-hook pattern (__VOID_EXPLORER__ ≙ __hollowsun)
+
+Work Log:
+- Read worklog tail (Tasks 9/10/11) + docs/research/COMMUNITY_DISCOVERY.md pattern row 3 ("Agent-facing debug hook + perf counters — ✅ HAVE (__hollowsun) — extend with draw calls / tri counts"); grep'd engine.ts for the hook assignment (constructor, line ~117, exposed engine/sim/store only).
+- Edited EXACTLY ONE file: src/game/engine.ts, additive-only:
+  * `renderer.info.autoReset = false` in Engine constructor so ONE perf window spans every composer pass (EffectComposer otherwise resets info per pass and the last pass would report ~1 call); `samplePerf()` reads + `info.reset()` at frame top each frame — zero changes to Scene, render path, or gameplay math.
+  * Module-level preallocated state (Float32Array ring of 120 frame-time samples, EMA scalars, peak, boot time, reused p95 scratch array) — no allocations in the hot path.
+  * `frame()` gained exactly one line: `this.samplePerf(dtReal)` after dt computation, before all phase branches (title/paused/dying/playing all sampled).
+  * Hook extended with `perf` and `perfSnapshot` (same bound method): render.{calls,triangles}, memory.{geometries,textures}, programs, fps EMA (k=0.05), frameMs.{ema,p95 of 120-sample ring}, drawCallsPeak since last query (window resets on read), uptimeSec. Existing engine/sim/store fields untouched.
+- Gates: `bunx tsc --noEmit` exit 0 (no output, no new errors); `bun run lint` exit 0 clean.
+- Browser evidence via agent-browser: opened http://localhost:3000, clicked BEGIN THE REKINDLING (@e3), drove w/a/d, store phase "playing" (px -1.19, pz 10.56, wave 1, 8 enemies left), then two perf reads ~2.5s apart:
+  * {"render":{"calls":75,"triangles":4981},"memory":{"geometries":33,"textures":18},"programs":24,"fps":9.54,"frameMs":{"ema":95.39,"p95":100},"drawCallsPeak":75,"uptimeSec":29.244}
+  * {"render":{"calls":71,"triangles":4447},"memory":{"geometries":33,"textures":18},"programs":24,"fps":9.69,"frameMs":{"ema":96.94,"p95":100},"drawCallsPeak":75,"uptimeSec":32.346}
+  * Calls/triangles > 0 ✓; live values move (calls 75→71, tris 4981→4447, fps 9.54→9.69, uptime +3.1s) ✓; drawCallsPeak retained across queries until window reset ✓. fps ~9.5 is llvmpipe software-GL in this GPU-less sandbox (recording evidence, not a regression).
+- Screenshot saved: .qa/perf-12b.png (1.4MB, in-run HUD). dev.log tail: only clean GET/compile lines; sole "error" lines are the pre-existing startup EADDRINUSE at lines 2-3, predating this session. No console spam added (samplePerf is silent).
+
+Stage Summary:
+- window.__hollowsun now carries an agent-facing perf snapshot (perf() + perfSnapshot alias) computed from the existing RAF loop with zero hot-path allocations and zero visual/behavioral change — closing COMMUNITY_DISCOVERY pattern row 3's "extend with draw calls / tri counts" follow-up and PLAYBOOK §6 item 6.
+- Draw-call totals are now composer-accurate (autoReset=false + per-frame manual reset window), so agent QA can target the community canon (<100 calls/frame) with real numbers.
+- Next actions open to orchestrator: gate `perf().render.calls` in make qa; p95 ring is in place for regression watch on any future post-chain/asset work.
+
+---
+Task ID: 12-a
+Agent: pipeline-v2-engineer
+Task: Asset pipeline v2 — (1) batch Blender library export, (2) render→VLM-inspect loop, (3) gltf-transform optimization gate, (4) Makefile wiring — all headless, all receipted, EMBER RITE quality bar.
+
+Work Log:
+- Read worklog (9-11), PLAYBOOK §6, Makefile, assetgen.ts, obelisk.py, verify-assets.ts. Found the v2 scaffolding present from an earlier partial pass; this session verified EVERY link for real, fixed two real defects, and produced fresh receipts.
+- DEFECT 1 (visual): .qa/asset-inspect.json carried a FAIL on monolith_cracked ("inverted faces/holes as white artifacts; flat slab read"). VLM-diagnosed the render directly (z-ai vision CLI): bright interior geometry inside narrow boolean notches. Root cause: cutters 0.012–0.02 wide under a 0.015 bevel (bevel wider than cutter walls → degenerate self-intersecting bevel trash) + a 0.40×0.16 footprint reading flat. Fixed build_monolith_cracked to v3: chunkier 0.36×0.26 footprint, 3 WIDE diagonal gouges (0.05–0.075) on the -Y hero face + 1 on +X, bevel 0.010/1 segment. Re-render → re-inspect: FAIL → PASS (11/11 PASS total).
+- DEFECT 2 (build): `make assets-library` failed with "missing separator" — the earlier Edit pass had converted ALL Makefile tabs to 8 spaces. Restored tabs via python regex, dry-run verified. THEN simplified the wiring as the brief requested (simpler is better): assets-library now calls blender DIRECTLY from the Makefile (guard + one line, full bpy output in the log) instead of routing through assetgen.ts's marker-filtering execFileSync wrapper; the `--blender-library` alias in assetgen.ts is kept and documented as the graceful-skip alternative.
+- (1) LIBRARY EXPORT: scripts/blender/asset_library.py — one bpy pass builds obelisk (obelisk.py quality bar folded in) + 4 NEW EMBER RITE assets into named collections (monolith_cracked, inlay_hex floor inlay tile, warden_slab titan slab, shard_cluster), then batch-exports per collection via unlink/link-root-collections. Args after `--`: out DIR, --only a,b, --seed N (fixed seed 42). DETERMINISM PROVEN: two full runs → md5 of all 5 .glb byte-identical.
+- (2) RENDER→INSPECT: scripts/blender/render_preview.py + scripts/render_previews.sh (raw Xvfb :77, never xvfb-run; LIBGL_ALWAYS_SOFTWARE=1; Xvfb killed after). ENGINE VERDICT (honest): BLENDER_WORKBENCH aborts (rc=134, `libEGL.so.1: cannot open shared object file`) even under Xvfb — llvmpipe GL isn't enough for Workbench's draw manager; CYCLES device='CPU' samples=24 @320px renders ALL 11 previews and is byte-deterministic across runs (identical PNG sizes/md5 pattern). Script does per-asset workbench→cycles fallback; shell adds a full-pass retry. inspect-assets.ts (bun) VLM-verdicts every PNG via z-ai-web-dev-sdk createVision (glm-4.6v), ADVISORY ONLY (any failure → SKIP + exit 0), writes .qa/asset-inspect.json. Result: 11/11 PASS, 0 skip.
+- (3) GLTF-TRANSFORM GATE: scripts/optimize-assets.ts (deps were already added: @gltf-transform/{core,extensions,functions} 4.5.0). Per .glb: dedup + weld + prune, then KHR_mesh_quantization (position 14-bit / normal 10-bit, mesh volume) — NO draco/meshopt (decoder-free in three.js). Every intermediate + final output parse-gated with the same GLTFLoader as verify-assets.ts; any failure rolls back and reports quant=SKIPPED (0 skips happened). Fixed a tsc error in parseOk (Buffer.buffer ArrayBufferLike union → explicit toArrayBuffer copy).
+- (4) MAKEFILE: targets assets-library / previews / inspect / optimize / pipeline (assets + assets-library + optimize + verify + qa) all present, help text current, tabs fixed. `make pipeline` end-to-end rc=0.
+- Gates: bunx tsc --noEmit exit 0; bun run lint exit 0; make verify 11/11 PASS on optimized bytes; make qa PASS (run structure, elites, boss phases, boons, economy); dev server untouched (HTTP 200 after all runs).
+
+Stage Summary:
+- Pipeline v2 is closed-loop and receipted: bpy library (deterministic) → per-asset .glb → Cycles-CPU previews (deterministic) → VLM advisory gate → gltf-transform quantization gate (27.0% smaller, decoder-free) → GLTFLoader verify 11/11 → headless sim QA. One command: `make pipeline`.
+- Byte table (fresh, 11 assets): total 200,448B → 146,364B (saved 54,084B, 27.0%). Biggest: warden_slab 61,752→41,088 (-33.5%), monolith_cracked 18,368→12,576 (-31.5%), obelisk 8,572→6,052 (-29.4%), shard_cluster 28,648→20,544 (-28.3%), inlay_hex 72,436→56,232 (-22.4%). Honest caveat: two ~1-2KB tier-1 assets GROW (dart_hull +11.6%, shard_crystal +7.4%) — quantization metadata overhead dominates at that scale; the gate is still worth it net.
+- The render→inspect loop caught a REAL defect the eye-less pipeline shipped (broken bevel boolean on monolith_cracked) and the fix is now encoded in the seeded script — evidence the PLAYBOOK §6 upgrade #1 works as an agentic art director, not a rubber stamp.
+- Honest failures recorded: Workbench renders are impossible in this sandbox (missing libEGL.so.1 → abort) — Cycles CPU is the preview engine of record; xvfb-run still unusable (no xauth) — raw Xvfb pattern confirmed.
+- Next actions open to orchestrator: bake tier-3 obsidian texture onto library assets (needs UVs — box-project headless), wire `perf().render.calls` gate into make qa, extend library with biome-specific variants using the same collection pattern.
+
+---
+Task ID: 12 (orchestrator; 12-0/12-a/12-b/12-c)
+Agent: lead (Z.ai Code)
+Task: Professional git workflow on GitHub (specimba/Sandboxed_noGPU_GAMEDEV_agents via PAT) + start the pivot while working: pipeline v2 (four adopted gaps), QA perf instrumentation, pivot brief AFTERGLOW.
+
+Work Log:
+- 12-0: verified PAT access (ls-remote), fetched remote scaffold (README/LICENSE/.gitignore, "Initial commit"), merged with --allow-unrelated-histories (conflicts on README/.gitignore resolved to ours; adopted Apache-2.0 LICENSE), pushed baseline: 177 tracked files, full history, main tracking origin/main. Backup achieved before any new work.
+- 12-a (pipeline-v2-engineer): scripts/blender/asset_library.py batch-exports 5 tier-2 assets (obelisk + 4 new: monolith_cracked, inlay_hex, warden_slab, shard_cluster), md5-deterministic across runs; render_preview.py + render_previews.sh (raw Xvfb :77 + LIBGL_ALWAYS_SOFTWARE — Workbench impossible: libEGL missing, documented; Cycles CPU 24smp/320px renders 11 previews); inspect-assets.ts VLM gate (11/11 PASS, advisory, .qa/asset-inspect.json); optimize-assets.ts (weld+prune+dedup+KHR_mesh_quantization, no draco — decoder-free) → 200,448→146,364 bytes (−27.0%), verify still 11/11; Makefile: assets-library/previews/inspect/optimize + aggregate pipeline; agent VLM-diagnosed and FIXED a real defect (monolith_cracked inverted faces: bevel>cutter walls → v3 chunky footprint) — the render→inspect→refine loop worked end-to-end on its first mission.
+- 12-b (qa-instrumentation-engineer): __hollowsun.perf() added (renderer.info with autoReset=false so composer chain counts fully, fps EMA, 120-sample frame-ms ring + p95, draw-call peak, uptime); receipts: 71-75 calls / 4.4-5k triangles live in-run, values move, tsc+eslint clean, .qa/perf-12b.png. fps≈9.5 = llvmpipe software GL (environment, not regression).
+- 12-c (orchestrator): docs/PIVOT_BRIEF.md — AFTERGLOW (working title), deep-sim arena survivor selected on evidence; 3 design laws; build-craft/statuses content plan; M0-M3 milestones (M3 = jam benchmark); carry-over vs rebuild map; QA contract extended with perf receipts. PLAYBOOK §6 pivot stance updated with decision pointer.
+- 12-d: gates re-run on integrated tree (make check clean, verify 11/11); conventional commits; pushed to origin.
+
+Stage Summary:
+- The project now has professional remote backup + history discipline (no more orphaned local commits; every sprint lands as reviewed conventional commits).
+- Pipeline v2 closes 4 of the 7 adopted gaps: batch export, render→VLM inspect→refine, quantization gate, aggregate one-command pipeline. Remaining gaps: journey tests, CC0 feed, platform shim (backlog).
+- Perf instrumentation matches the Astra-era showcase pattern (agent-facing counters); draw calls ~71-75, under the <100 canon.
+- Pivot decision recorded: AFTERGLOW M0 (fresh sim foundation) is the next build target.
