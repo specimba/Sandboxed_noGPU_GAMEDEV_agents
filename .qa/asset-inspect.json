@@ -1,0 +1,63 @@
+{
+  "generatedAt": "2026-09-06T05:55:09.075Z",
+  "advisory": true,
+  "engine": "glm-4.6v via z-ai-web-dev-sdk createVision",
+  "previews": ".qa/assets",
+  "rows": [
+    {
+      "asset": "dart_hull",
+      "status": "ok",
+      "verdict": "PASS - Clean, closed faceted mesh with a sharp, readable silhouette and no visible errors; ready for texturing."
+    },
+    {
+      "asset": "inlay_hex",
+      "status": "ok",
+      "verdict": "PASS - Clean faceted silhouette with distinct chiseled geometry; no visible mesh errors, holes, or inverted faces. Reads clearly as a solid stone artifact."
+    },
+    {
+      "asset": "lantern_slab",
+      "status": "ok",
+      "verdict": "PASS - Clean faceted silhouette reads clearly as a solid stone artifact with no visible mesh errors, though it lacks the specified ember accents."
+    },
+    {
+      "asset": "monolith_a",
+      "status": "ok",
+      "verdict": "PASS - Clean faceted silhouette reads clearly as a solid stone artifact with no visible mesh errors."
+    },
+    {
+      "asset": "monolith_b",
+      "status": "ok",
+      "verdict": "PASS - Clean faceted silhouette reads clearly as a solid stone artifact; no obvious mesh errors, holes, or inverted faces detected."
+    },
+    {
+      "asset": "monolith_c",
+      "status": "ok",
+      "verdict": "PASS - Reads as a clean, faceted stone artifact with a clear silhouette and no obvious mesh errors."
+    },
+    {
+      "asset": "monolith_cracked",
+      "status": "ok",
+      "verdict": "PASS - Clean faceted silhouette reads clearly as a monolithic stone artifact; no obvious mesh errors, holes, or floating geometry detected."
+    },
+    {
+      "asset": "obelisk",
+      "status": "ok",
+      "verdict": "PASS - Clean faceted silhouette with no visible mesh errors; reads clearly as a solid, chiseled stone obelisk."
+    },
+    {
+      "asset": "shard_cluster",
+      "status": "ok",
+      "verdict": "PASS - Clean faceted silhouette with no visible mesh errors; reads clearly as a chiseled stone artifact."
+    },
+    {
+      "asset": "shard_crystal",
+      "status": "ok",
+      "verdict": "PASS - Clean, faceted silhouette reads clearly as a sharp stone artifact with no visible mesh errors or floating geometry."
+    },
+    {
+      "asset": "warden_slab",
+      "status": "ok",
+      "verdict": "PASS - Clean faceted silhouette reads clearly as a chiseled stone artifact with no obvious mesh errors or floating geometry."
+    }
+  ]
+}

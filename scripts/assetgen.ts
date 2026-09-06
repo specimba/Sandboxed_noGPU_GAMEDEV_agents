@@ -10,10 +10,17 @@
  * headless Python (bpy) generator scripts for assets that want modifiers
  * (bevel/solidify/subsurf). Falls back gracefully when Blender is absent.
  *
+ * Tier 2 v2 (`--blender-library`): runs scripts/blender/asset_library.py,
+ * which builds the WHOLE tier-2 library (obelisk + monolith_cracked +
+ * inlay_hex + warden_slab + shard_cluster) into named collections and
+ * batch-exports one .glb per collection. `--only a,b` and `--out DIR`
+ * are forwarded.
+ *
  * Usage:
  *   bun run scripts/assetgen.ts                 # tier 1 → public/assets/meshes
  *   bun run scripts/assetgen.ts --seed 11       # deterministic re-roll
- *   bun run scripts/assetgen.ts --blender       # tier 2 if Blender present
+ *   bun run scripts/assetgen.ts --blender       # tier 2 legacy obelisk
+ *   bun run scripts/assetgen.ts --blender-library [--only a,b] [--out dir]
  *   bun run scripts/assetgen.ts --out custom/dir
  */
 
@@ -249,6 +256,7 @@ function arg(name: string, fallback: string): string {
 const seed = parseInt(arg('--seed', '7'), 10) || 7;
 const outDir = arg('--out', 'public/assets/meshes');
 const wantBlender = process.argv.includes('--blender');
+const wantBlenderLibrary = process.argv.includes('--blender-library');
 
 mkdirSync(outDir, { recursive: true });
 
@@ -282,20 +290,48 @@ const BLENDER_CANDIDATES = [
   'blender',
 ];
 
-if (wantBlender) {
+function findBlender(): string | null {
   const bin = BLENDER_CANDIDATES.find((p) => (p.includes('/') ? existsSync(p) : true));
-  if (bin) {
-    const script = join(process.cwd(), 'scripts', 'blender', 'obelisk.py');
-    try {
-      const out = execFileSync(bin, ['-b', '-P', script, '--', outDir], { encoding: 'utf8', timeout: 120000 });
-      const ok = out.split('\n').find((l) => l.includes('BLENDER_ASSET_OK'));
-      console.log(ok ?? 'blender ran (no marker found)');
-    } catch (e) {
-      console.error('blender tier failed:', (e as Error).message);
-    }
-  } else {
+  return bin ?? null;
+}
+
+function runBlenderScript(scriptRel: string, extraArgs: string[], markers: string[], timeoutMs: number): void {
+  const bin = findBlender();
+  if (!bin) {
     console.log('blender not found — tier 2 skipped (tier 1 assets already written)');
+    return;
   }
+  const script = join(process.cwd(), scriptRel);
+  try {
+    const out = execFileSync(bin, ['-b', '-P', script, '--', ...extraArgs], {
+      encoding: 'utf8',
+      timeout: timeoutMs,
+    });
+    const hits = out.split('\n').filter((l) => markers.some((m) => l.includes(m)));
+    if (hits.length) hits.forEach((l) => console.log(l));
+    else console.log('blender ran (no marker found)');
+  } catch (e) {
+    console.error('blender tier failed:', (e as Error).message);
+  }
+}
+
+if (wantBlender) {
+  // legacy single-asset obelisk (superseded by the library, kept runnable)
+  runBlenderScript('scripts/blender/obelisk.py', [outDir], ['BLENDER_ASSET_OK'], 120000);
+}
+
+if (wantBlenderLibrary) {
+  // pipeline v2: one bpy script builds the whole tier-2 library and
+  // batch-exports one .glb per collection (see asset_library.py header)
+  const libArgs = ['out', outDir];
+  const onlyIdx = process.argv.indexOf('--only');
+  if (onlyIdx > -1 && process.argv[onlyIdx + 1]) libArgs.push('--only', process.argv[onlyIdx + 1]);
+  runBlenderScript(
+    'scripts/blender/asset_library.py',
+    libArgs,
+    ['LIBRARY_BUILD', 'LIBRARY_ASSET_OK', 'ASSET_LIBRARY_DONE'],
+    540000,
+  );
 }
 
 console.log(`assetgen done → ${outDir} (seed ${seed})`);

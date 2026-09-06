@@ -1,4 +1,10 @@
 """Tier-2 asset: beveled obelisk via Blender headless (bpy).
+
+SUPERSEDED (pipeline v2): scripts/blender/asset_library.py builds this same
+obelisk (identical quality bar) plus the rest of the tier-2 library and
+batch-exports every collection in one pass — see `make assets-library`.
+This file is kept runnable for one-off obelisk exports.
+
 Run: blender -b -P scripts/blender/obelisk.py -- public/assets/meshes
 """
 import bpy, sys, math
