@@ -35,6 +35,31 @@ import { View } from './view';
 
 const STEP = 1 / 60;
 
+/* ------------------------------------------------------------------ */
+/* perf instrumentation — feeds the __hollowsun debug hook            */
+/* module-level + preallocated so the frame loop allocates nothing     */
+/* ------------------------------------------------------------------ */
+
+interface PerfSnapshot {
+  render: { calls: number; triangles: number };
+  memory: { geometries: number; textures: number };
+  programs: number;
+  fps: number;
+  frameMs: { ema: number; p95: number };
+  drawCallsPeak: number;
+  uptimeSec: number;
+}
+
+const PERF_RING = 120; // ~2s of frame samples at 60fps
+const perfRing = new Float32Array(PERF_RING);
+let perfRingAt = 0;
+let perfRingLen = 0;
+let perfBootAt = 0;
+let perfFpsEma = 0;
+let perfMsEma = 0;
+let perfDrawPeak = 0;
+const perfScratch: number[] = []; // reused by perfSnapshot's p95 sort
+
 let active: Engine | null = null;
 export function getEngine(): Engine | null {
   return active;
@@ -110,6 +135,16 @@ export class Engine {
     window.addEventListener('resize', this.onResize);
     document.addEventListener('visibilitychange', this.onVisibility);
 
+    // QA instrumentation: one perf window per frame spanning every composer
+    // pass — samplePerf() reads + resets info at frame start (no Scene change).
+    this.scene.renderer.info.autoReset = false;
+    perfBootAt = performance.now();
+    perfRingAt = 0;
+    perfRingLen = 0;
+    perfFpsEma = 0;
+    perfMsEma = 0;
+    perfDrawPeak = 0;
+
     this.lastT = performance.now();
     this.raf = requestAnimationFrame(this.frame);
 
@@ -118,6 +153,8 @@ export class Engine {
       engine: this,
       sim: this.sim,
       store: this.store,
+      perf: () => this.perfSnapshot(),
+      perfSnapshot: () => this.perfSnapshot(),
     };
   }
 
@@ -476,6 +513,7 @@ export class Engine {
     this.raf = requestAnimationFrame(this.frame);
     const dtReal = Math.min(0.1, (now - this.lastT) / 1000);
     this.lastT = now;
+    this.samplePerf(dtReal);
     const phase = this.store.getState().phase;
 
     if (phase === 'title') {
@@ -603,6 +641,52 @@ export class Engine {
 
     this.scene.render();
   };
+
+  /* ---------------------------------------------------------------- */
+  /* perf sampling — once per frame, zero allocations in the hot path  */
+  /* ---------------------------------------------------------------- */
+
+  /** Reads the render stats accumulated by the previous frame's composer
+   *  passes, then opens a fresh info window (autoReset is off, so one
+   *  window covers the whole post chain). Runs in every phase branch. */
+  private samplePerf(dtReal: number): void {
+    const info = this.scene.renderer.info;
+    if (info.render.calls > perfDrawPeak) perfDrawPeak = info.render.calls;
+    info.reset();
+
+    const ms = dtReal * 1000;
+    perfRing[perfRingAt] = ms;
+    perfRingAt = (perfRingAt + 1) % PERF_RING;
+    if (perfRingLen < PERF_RING) perfRingLen += 1;
+    if (ms > 0) {
+      perfFpsEma += ((1000 / ms) - perfFpsEma) * 0.05;
+      perfMsEma += (ms - perfMsEma) * 0.05;
+    }
+  }
+
+  /** live snapshot for the debug hook — query-time only (may sort/allocate) */
+  private perfSnapshot(): PerfSnapshot {
+    const info = this.scene.renderer.info;
+    perfScratch.length = 0;
+    for (let i = 0; i < perfRingLen; i++) {
+      perfScratch.push(perfRing[(perfRingAt - perfRingLen + i + PERF_RING) % PERF_RING]);
+    }
+    perfScratch.sort((a, b) => a - b);
+    const p95 = perfRingLen > 0 ? perfScratch[Math.min(perfRingLen - 1, Math.floor(perfRingLen * 0.95))] : 0;
+
+    const snap: PerfSnapshot = {
+      render: { calls: info.render.calls, triangles: info.render.triangles },
+      memory: { geometries: info.memory.geometries, textures: info.memory.textures },
+      programs: info.programs !== null ? info.programs.length : 0,
+      fps: Math.round(perfFpsEma * 100) / 100,
+      frameMs: { ema: Math.round(perfMsEma * 100) / 100, p95: Math.round(p95 * 100) / 100 },
+      drawCallsPeak: perfDrawPeak,
+      uptimeSec: perfBootAt > 0 ? Math.round(((performance.now() - perfBootAt) / 1000) * 1000) / 1000 : 0,
+    };
+    // restart the draw-call peak window at this query
+    perfDrawPeak = info.render.calls;
+    return snap;
+  }
 
   private updateAim(): void {
     const st = this.store.getState();
