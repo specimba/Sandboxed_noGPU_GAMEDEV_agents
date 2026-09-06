@@ -359,3 +359,47 @@ main button:focus-visible {
   mix-blend-mode: screen;
   filter: saturate(0.85);
 }
+
+/* ============================================================
+   AFTERGLOW — appended M0 classes.
+   The engraved obsidian+ember language lives in the .hs-* system
+   above; AFTERGLOW adds only what the new UI needs on top.
+   ============================================================ */
+
+/* safe-area padding for fullscreen overlays (notch / home-bar aware) */
+.ag-safe {
+  padding-top: env(safe-area-inset-top, 0px);
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+  padding-left: env(safe-area-inset-left, 0px);
+  padding-right: env(safe-area-inset-right, 0px);
+}
+
+/* draft cards: hairline that kindles on hover, rare cards run hotter */
+.ag-card {
+  transition: border-color 0.18s ease, box-shadow 0.18s ease, transform 0.18s ease;
+}
+.ag-card:hover {
+  border-color: rgba(255, 199, 102, 0.75);
+  box-shadow: 0 0 18px rgba(255, 180, 84, 0.18), inset 0 0 12px rgba(255, 199, 102, 0.05);
+  transform: translateY(-2px);
+}
+.ag-card--rare {
+  border-color: rgba(255, 199, 102, 0.45);
+}
+
+/* overlay entrances */
+@keyframes agFade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+.ag-fade { animation: agFade 0.35s ease-out; }
+
+@keyframes agRise {
+  from { opacity: 0; transform: translateY(14px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.ag-card { animation: agRise 0.32s ease-out backwards; }
+
+@media (prefers-reduced-motion: reduce) {
+  .ag-fade, .ag-card { animation: none !important; }
+}

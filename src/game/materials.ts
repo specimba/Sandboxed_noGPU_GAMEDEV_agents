@@ -42,16 +42,22 @@ varying vec3 vPos;
 varying vec3 vView;
 #include <fog_pars_fragment>
 void main() {
+  #ifdef FLAT_GROUND
+  // flat surfaces: exact up normal — screen-space derivatives of a huge
+  // coplanar primitive misbehave on software GL (scanline seam artifacts)
+  vec3 N = vec3(0.0, 1.0, 0.0);
+  #else
   // hand-cut facets: face normal from screen-space derivatives
   vec3 N = normalize(cross(dFdx(vPos), dFdy(vPos)));
   vec3 V = normalize(vView);
   if (dot(N, V) < 0.0) N = -N;
+  #endif
   vec3 L = normalize(vec3(0.30, 0.85, 0.42));
   // chiseled key light — dark shell + facet highlight
   float ndl = dot(N, L) * 0.5 + 0.5;
   vec3 col = uBase + uLit * pow(ndl, 1.7);
   // identity rim — the silhouette edge carries the color coding
-  float fres = pow(1.0 - abs(dot(N, V)), uRimPow);
+  float fres = pow(1.0 - abs(dot(normalize(vView), N)), uRimPow);
   col += uRim * fres * uRimK;
   // top kiss so silhouettes read against the bright floor
   col += uRim * smoothstep(0.55, 1.0, N.y) * uTopK;
@@ -86,6 +92,8 @@ export interface StylizedOpts {
   pulse?: number;
   /** scene fog aware (default true) */
   fog?: boolean;
+  /** exact up-normal path for large flat grounds — no derivative artifacts */
+  flat?: boolean;
 }
 
 export function stylizedMaterial(o: StylizedOpts = {}): THREE.ShaderMaterial {
@@ -109,6 +117,7 @@ export function stylizedMaterial(o: StylizedOpts = {}): THREE.ShaderMaterial {
     vertexShader: STYLIZED_VERT,
     fragmentShader: STYLIZED_FRAG,
     fog: o.fog ?? true,
+    ...(o.flat ? { defines: { FLAT_GROUND: '' } } : {}),
   });
   stylizedMats.add(m);
   return m;

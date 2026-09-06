@@ -494,3 +494,35 @@ Stage Summary:
 - AFTERGLOW M0 sim core is live and deterministic: player (move/dash/iframes), GLIMMER auto-weapon (nearest-foe targeting, volleys, pierce, ember burn status, chain spark arcs), 3 foes (wisp/husk-telegraphed-charger/cinder-swarmer) with pillar steering, waves with budget spawning, wave-clear draft (12-item tag-tagged pool, rarity weights, maxStacks), light motes (xp/meta seed), serializeState() digest for CI assertions.
 - Public Sim API for the view layer: readonly player/foes/projectiles/arcs/motes/pillars/wave/offers/kills/light/over; methods setMove(x,z), requestDash(), pickDraft(id), start(), step(dtReal), serializeState(). Events: onFoeDie/onHurt/onDash/onWaveStart/onWaveClear/onDraftOffer/onDraftPick/onSpawn/onDeath/onMote/onPickup.
 - Balance notes: bot survives past wave 8 comfortably; death path still proves danger (no-input dies t=19s). Scaling may need tightening at M1 with elites.
+
+---
+Task ID: 13-b
+Agent: afterglow-view-engineer (+ orchestrator completion & visual-defect hunt after subagent timeout)
+Task: AFTERGLOW M0 view layer + hosting — engine/view/store, React components, page.tsx host with legacy toggle, browser golden path.
+
+Work Log:
+- Subagent built the full stack before timing out: src/game/afterglow/{engine,view,store,cameraRig,input}.ts, src/components/afterglow/{AfterglowCanvas,Hud,TitleScreen,DraftOverlay,DeathOverlay,TouchControls}.tsx, page.tsx dual-host (?legacy=1 mounts unmodified EMBER RITE stack; default mounts AFTERGLOW), globals.css additions. Browser evidence: title/run/draft/death screenshots (.qa/afterglow-m0-*.png).
+- Orchestrator post-timeout verification found TWO REAL VISUAL DEFECTS in-run and root-caused both empirically (12 bisect screenshots, object-visibility elimination via __hollowsun hook + source bisection via hot reload):
+  * DEFECT A (framing): follow camera pulled half the screen into out-of-arena void at the rim. Fix: HEIGHT 19→26, BACK 10.5→4.5 (house-steep angle, legacy-proven), velocity lead 0.14/0.18→0.10/0.13, rimBias() pulls focus inward when player within 9.5 units of the rim.
+  * DEFECT B (the hard horizontal scanline across the ground, hinged at the focus row): root-caused to stylizedMaterial's screen-space derivative normals (dFdx/dFdy) misbehaving on llvmpipe for LARGE FLAT primitives. Eliminated: geometry type (circle fan vs plane vs 8x8 grid), material term constants, z-fighting (ash disc→ring, no overlap), far plane (220→500 at runtime), scissor (absent), fx points/sprites — line persisted through ALL; MeshBasicMaterial ground → line GONE. Fix: materials.ts gained `flat` option — FLAT_GROUND define switches to exact up-normal path (mathematically identical for a plane, no derivatives); floor + ash ring use it. Also fixed defines:undefined console warning via conditional spread. Console now 0 errors 0 warnings.
+  * Camera steepening kept as the shipped design (better survivor readability: whole arena in frame).
+- Gates (all green): tsc exit 0; eslint clean; simdrive-afterglow 9/9 PASS; legacy simdrive PASS; verify-assets 11/11; browser: title/run/draft/death screenshots + __hollowsun.perf() = 34 draw calls / 4862 triangles / fps≈10 (llvmpipe) / peak 41 — draw-call law (<100) holds with 2.2× headroom; legacy ?legacy=1 regression screenshot clean.
+
+Stage Summary:
+- M0 is vertically playable in-browser: title → begin → waves (wisp/husk/cinder with telegraphs) → GLIMMER auto-combat with motes → SPEND THE AFTERGLOW draft (1/2/3 keys) → death stats → kindle again; storyboard preserved at /?legacy=1 linked from the title screen.
+- materials.ts `flat` option is a house-system upgrade: any future large ground/biome mesh should use flat:true (derivative path stays default for carved solids).
+- perf receipts: 34 calls / 4.9k triangles in-run; the draw-call budget leaves room for M1's 3 biomes + 2 bosses.
+
+---
+Task ID: 13 (orchestrator; 13-a/13-b)
+Agent: lead (Z.ai Code)
+Task: AFTERGLOW M0 — fresh sim foundation (pivot brief milestone gate: headless green, make check/qa/verify green, browser golden path, committed + pushed).
+
+Work Log:
+- 13-a (afterglow-sim-engineer + orchestrator completion): src/game/afterglow/{constants,draft,sim}.ts + scripts/simdrive-afterglow.ts + Makefile qa-afterglow; 9/9 assertions (determinism seed-7 hash-identical across 8 wave boundaries, divergence, no-NaN 139871 substeps, progression, draft integrity 8/8/8 across 3 seeds, telegraph law 25/25, entity bounds, pillar law, death path t=19s).
+- 13-b (afterglow-view-engineer + orchestrator completion): full view/host stack + two visual defects root-caused and fixed (derivative-normal ground artifact → materials.ts flat path; camera framing → steep rig + rim bias); browser receipts incl. perf 34 calls.
+- Conventional commits per layer; pushed to origin/main; worklog appended.
+
+Stage Summary:
+- PIVOT BRIEF M0 GATE: PASSED. Fresh AFTERGLOW sim foundation is live under src/game/afterglow/ with the storyboard behind a legacy toggle; deterministic headless 9/9; pipeline v2 untouched (11/11); EMBER RITE regression clean; perf budget healthy for M1.
+- M1 next: build-craft web (≥60 items), statuses (burn→brittle/chill/overcharge), 3 biomes via pipeline v2, 2 bosses; journey tests; jam benchmark M3.
