@@ -299,3 +299,19 @@ Work Log:
 
 Stage Summary:
 - Committed 3bc65b0. Visual identity is now "EMBER RITE": chiseled obsidian + identity rims + restrained gold; monolith sun; film-grade post; engraved UI. Gameplay untouched (headless-verified). materials.ts is the single shared design system for future visuals.
+
+---
+Task ID: 10
+Agent: orchestrator (capability audit + pipeline build)
+Task: Engine & pipeline capability discovery — CLI-first game development audit, assetgen pipeline, playbook
+
+Work Log:
+- P1: probed sandbox for 25 binaries (x86_64/2c/3GB/no GPU); PyPI+GitHub+blender.org reachable; Xvfb present, xauth missing
+- P2: downloaded+verified Godot 4.3 headless (logic script OK; real render 1152x648 PNG under raw Xvfb + LIBGL_ALWAYS_SOFTWARE); Blender 4.2.0 portable (336MB) runs -b -P; bpy wheel blocked on py3.12 (documented workaround: tarball); Unity/Unreal/Rust-class marked blocked/partial with named constraints
+- P3: scripts/assetgen.ts — zero-dep .glb writer + 6 seeded generators (crystal/3 monoliths/dart/lantern slab) + scripts/blender/obelisk.py (bevel tier); scripts/verify-assets.ts GLTFLoader gate 7/7 PASS
+- P4: src/game/assetLib.ts progressive-enhancement loader; swaps live in view.ts (shard crystal, dart hull, obelisk→caster) and scene.ts (monolith field, lantern slabs); SDK-generated obsidian texture on title screen; browser: all 7 assets fetched, gameplay runs, 0 console errors
+- P5: Makefile (assets/assets-blender/textures/verify/qa/check) + docs/PLAYBOOK.md (feasibility matrix, stack shortlist, pipeline spec, reproduce protocol, sandbox workarounds)
+- QA: tsc+eslint clean; make qa full-run PASS (won, dawn +534); commit + browser evidence .qa/pipeline-*.png
+
+Stage Summary:
+- Pipeline "Prompt → Code → Asset → Build → Play" is real: every asset regenerates from one command, every gate is headless, the live game renders generated meshes. Committed as pipeline commit.
