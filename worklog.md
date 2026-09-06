@@ -479,3 +479,18 @@ Stage Summary:
 - Pipeline v2 closes 4 of the 7 adopted gaps: batch export, render→VLM inspect→refine, quantization gate, aggregate one-command pipeline. Remaining gaps: journey tests, CC0 feed, platform shim (backlog).
 - Perf instrumentation matches the Astra-era showcase pattern (agent-facing counters); draw calls ~71-75, under the <100 canon.
 - Pivot decision recorded: AFTERGLOW M0 (fresh sim foundation) is the next build target.
+
+---
+Task ID: 13-a
+Agent: afterglow-sim-engineer (+ orchestrator completion after subagent timeout)
+Task: AFTERGLOW M0 fresh sim core — src/game/afterglow/ namespace (constants/draft/sim), headless drive harness, Makefile wiring.
+
+Work Log:
+- Subagent created src/game/afterglow/{constants.ts 162L, draft.ts 229L, sim.ts 1012L} + scripts/simdrive-afterglow.ts (424L) + Makefile qa-afterglow target (qa aggregate now runs both simdrives), then hit context timeout before QA/worklog; orchestrator verified completeness and ran all gates personally.
+- Gates (orchestrator-run): bunx tsc --noEmit exit 0; bun run lint clean; simdrive-afterglow 9/9 PASS in 0.74s wall; legacy simdrive.ts still PASS (run structure, elites, boss phases, boons, economy).
+- Drive receipts: determinism (seed 7 x2 identical across 8 wave boundaries + end, hash 372f8121); divergence (wave-3 hashes differ); no-NaN (0 violations / 139871 substeps); progression (bot cleared 8 waves, alive t=574s); draft integrity (8 clears → 8 offers → 8 picks → 8 stat deltas, 0 bad picks across 3 seeds); telegraph law (25 husk charges, 0 windup violations <0.75s); entity bounds (foes 18/40, projectiles 1/60, motes 34/120); pillar law (0 interior violations); death path (no-input bot died t=19s on seed 1).
+
+Stage Summary:
+- AFTERGLOW M0 sim core is live and deterministic: player (move/dash/iframes), GLIMMER auto-weapon (nearest-foe targeting, volleys, pierce, ember burn status, chain spark arcs), 3 foes (wisp/husk-telegraphed-charger/cinder-swarmer) with pillar steering, waves with budget spawning, wave-clear draft (12-item tag-tagged pool, rarity weights, maxStacks), light motes (xp/meta seed), serializeState() digest for CI assertions.
+- Public Sim API for the view layer: readonly player/foes/projectiles/arcs/motes/pillars/wave/offers/kills/light/over; methods setMove(x,z), requestDash(), pickDraft(id), start(), step(dtReal), serializeState(). Events: onFoeDie/onHurt/onDash/onWaveStart/onWaveClear/onDraftOffer/onDraftPick/onSpawn/onDeath/onMote/onPickup.
+- Balance notes: bot survives past wave 8 comfortably; death path still proves danger (no-input dies t=19s). Scaling may need tightening at M1 with elites.

@@ -7,7 +7,7 @@
 BLENDER ?= $(wildcard /home/z/tools/blender-4.2.0-linux-x64/blender)
 XVFB_DISPLAY ?= 77
 
-.PHONY: assets assets-blender assets-library previews inspect optimize textures check qa dev verify pipeline help
+.PHONY: assets assets-blender assets-library previews inspect optimize textures check qa qa-afterglow dev verify pipeline help
 
 help:
 	@echo "make assets          - regenerate procedural .glb meshes (tier 1, pure TS)"
@@ -18,7 +18,8 @@ help:
 	@echo "make optimize        - gltf-transform gate: weld+dedup+prune+KHR_mesh_quantization on every .glb (decoder-free in three.js)"
 	@echo "make textures        - regenerate AI textures via SDK CLI (tier 3)"
 	@echo "make check           - tsc + eslint"
-	@echo "make qa              - headless full-run simulation"
+	@echo "make qa              - headless full-run simulation (EMBER RITE simdrive + AFTERGLOW drive)"
+	@echo "make qa-afterglow    - AFTERGLOW M0 headless drive harness (9 assertions: determinism, telegraph law, death path...)"
 	@echo "make verify          - bun-verify every generated .glb parses via GLTFLoader"
 	@echo "make pipeline        - aggregate: assets + assets-library + optimize + verify + qa"
 	@echo "make dev             - run the dev server (assumes already running in sandbox)"
@@ -61,6 +62,11 @@ check:
 
 qa:
 	bun scripts/simdrive.ts
+	bun scripts/simdrive-afterglow.ts
+
+# AFTERGLOW M0 pivot: fresh deep-sim arena survivor core under src/game/afterglow/
+qa-afterglow:
+	bun scripts/simdrive-afterglow.ts
 
 verify:
 	bun scripts/verify-assets.ts
