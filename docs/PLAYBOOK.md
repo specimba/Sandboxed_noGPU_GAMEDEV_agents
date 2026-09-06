@@ -114,3 +114,24 @@ make qa && make check
 5. **Asset manifest as design doc** — `assets.json` (name → generator → seed → palette slot) so art direction stays reproducible and reviewable in PRs.
 
 *Status: phases 1–3 shipped and committed; the live game now renders pipeline-generated assets end to end.*
+
+---
+
+## 6. Post-Astra Community Discovery (Sprint 11 — researched)
+
+Full report: **`docs/research/COMMUNITY_DISCOVERY.md`** (4 scouts, 78 searches, every claim linked).
+
+**Headline:** GPT-6 Astra (OpenAI, Sep 3 2026) is real, and OpenAI's own showcase — *"Building games with Astra"*, Void Explorer + "4 games with Astra, Blender, Godot" — validates **exactly our pipeline**: prompt → bpy script → headless Blender → glTF → Three.js, with debug hooks (`__VOID_EXPLORER__` ≙ our `__hollowsun`), seeded pure sims, and journey tests. Community consensus: frontier-model 3D strength is concentrated in **Three.js + Python** — our stack is the sweet spot, not a compromise.
+
+**Verified ceilings:** Krunker.io (three.js, solo dev → FRVR acquisition) · FACEMINER (paid web three.js game, $7.99, 5.0★) · Brotato ($10.7M est., arena roguelite — our genre) · Halls of Torment ($3.4M, hundreds of entities). Godot headless export pipeline is first-class (`--headless --import` → `--export-release`; 1.07GB templates byte-verified) but its web build (7–10MB wasm, audio limits) is strictly worse than our instant JS bundle — **Godot stays a hedge, never a port target**. Text-to-3D: no open model fits our 3GB CPU sandbox (all ≥6GB VRAM) — pure-procedural bpy + CC0 (Kenney/Poly Haven) is the in-house path, hosted APIs the escape hatch.
+
+**Adopted capability upgrades (gaps → commands, cheapest first):**
+1. Blender render→VLM-inspect→refine loop (close the agentic visual iteration gap; BlenderMCP pattern, no MCP server needed)
+2. Batch collection export (one bpy script → whole .glb library; Khronos converter pattern)
+3. Cycles **CPU** bake (normal/basecolor) + decimate + auto-UV before export; apply Geometry Nodes to mesh before glTF (GN sims don't survive)
+4. `gltf-transform` Draco/KTX2 compression gate + `renderer.info` draw-call counter in `make qa`
+5. Named journey tests (replayable agent-browser scripts) + perf counters on the debug hook
+6. CC0 asset feed through the verify gate; thin `platform.ts` shim for future portal SDKs
+7. Jam entry as public benchmark (VibeJam-class rules: web-playable, ≥80% AI)
+
+**Pivot stance:** EMBER RITE was the storyboard that proved the pipeline and the director-loop. The next build starts from the evidence, not from that prototype — genre options ranked by verified ceiling: deep-sim arena survivor → procedural dungeon crawler → portal-first instant arcade. The pipeline generalizes to all three.

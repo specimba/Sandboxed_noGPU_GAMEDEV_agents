@@ -315,3 +315,104 @@ Work Log:
 
 Stage Summary:
 - Pipeline "Prompt → Code → Asset → Build → Play" is real: every asset regenerates from one command, every gate is headless, the live game renders generated meshes. Committed as pipeline commit.
+
+---
+Task ID: 11-d
+Agent: aiwave-scout
+Task: Research-only scan of the 2024-2026 AI-game-dev wave; verify "GPT-6 ASTRA" and map who actually builds AI-made games, with what tools, at what quality
+
+Work Log:
+- Read worklog tail (Tasks 9/10) to anchor context: our stack = agent-written code, Blender headless assets, Three.js render, headless QA gates.
+- Ran 20 web searches via z-ai web_search (GPT-6 Astra verification x3, AI-game showcases, vibe-coding jams x4, Rosebud, Websim, a16z market maps, HN, Steam AI disclosure, itch.io AI jams, LLM-PCG research, Genie 3 world models, open-source tooling, Street Heat verification).
+- Fully read 7 pages via page_reader: Wikipedia "GPT-6 Astra"; developers.openai.com "Building games with Astra" (Thomas Ricouard, Void Explorer); r/aigamedev "Astra builds full worlds in Blender and UE5"; Threads @petergyang (4 games with Astra+Blender+Godot); gamesindustry.biz Steam AI-disclosure study; creativebloq.com YouTube Playables Builder; openrouter.ai/openai/gpt-6-astra model card.
+- Cross-checked: levelsio X posts + wip.co (VibeJam winners), gamedevjs.com jam rules, fly.pieter.com landing page, rosebud.ai, websim.com, itch.io jam pages, deepmind.google Genie 3.
+- Failed reads (documented, not invented around): news.ycombinator.com items 47600002/49475316 returned "No such item" via page_reader; indiehackers.com winners page 500'd; hn.algolia.com API unreachable from sandbox. HN-sourced projects stay unverified.
+
+Stage Summary:
+- "GPT-6 ASTRA" is REAL: OpenAI's frontier model, limited preview Sep 3 2026, public Sep 4 2026; $10/$50 per 1M tokens, 1M context (Wikipedia; openrouter.ai/openai/gpt-6-astra; deploymentsafety.openai.com/gpt-6-astra). OpenAI's own launch examples include "building video game scenes".
+- The wave claim checks out: OpenAI's dev blog ships a full Astra game case study (Void Explorer: Three.js WebGPU/TSL, 2048 star systems, Vitest+Playwright harness, window.__VOID_EXPLORER__ debug hook) — same patterns as our pipeline (task 9/10).
+- Verified AI-made games: Void Explorer (Astra/Codex); fly.pieter.com (levelsio, Cursor+Three.js, "100% made with AI", built in ~3h, reported ~$1M/yr); Street Heat (juminoz, one-prompt Astra arcade racer); The Great Taxi Assignment (Tomas Bencko, $10k VibeJam 2025 winner from 1,000+ entries); Peter Yang's 4 games (Star Fox-like, train FPS, RTS level, roguelike deckbuilder — Astra+Blender+Godot).
+- Platforms: Rosebud AI (YC, prompt-to-game SaaS), Websim, Summer Engine, YouTube Playables Builder (Gemini 3, Dec 2025 beta: Xero-Rancher Endless Harvest, Dirt Runner, Flingaling, Bucha Blocks — verdict "very simple platformers"); jams: levelsio VibeJam 2025+2026 (jam.pieter.com), GameDev.js Vibe Coding Jam (420 entries, 80% AI rule), Cursor Vibe Jam 2026 ($40k), itch.io AI Jams 1-4 / Open-Source AI Game Jam.
+- Steam scale: 7,818 games (~7% of library) disclosed gen-AI by Jul 2025, 1-in-5 of 2025 releases, ~60% visual assets (gamesindustry.biz / Totally Human Media). Mostly assets, NOT whole games — honest ceiling marker.
+- Patterns that work (validated by OpenAI's own post): experience-first brief -> constraints; image-gen concept art before code; agent proposes architecture; debug hook + perf counters exposed to agent; named test scenes + journey tests; seeded procedural gen; human stays "feel" director. BlenderMCP (S. Ahuja) enables agentic in-Blender iteration; Genie 3/Project Genie = prompt-to-world models (research prototype).
+- Adoptable for us: journey-style Playwright tests driving real controls; AI-playtester loop; concept-art gate before assetgen; WebGPU/TSL + Web Workers terrain patterns; per-model cost note (Astra $10/$50/M — expensive loops, budget agent runs).
+
+---
+Task ID: 11-a
+Agent: blender-community-scout
+Task: Community research — Blender game-asset pipelines in the AI era; verify "GPT-6 ASTRA"; map what is replicable with CLI-only headless Blender on CPU-only 3GB sandbox
+
+Work Log:
+- Read worklog (Tasks 9-a/9-b/9-c/9/10) for stack context: Blender 4.2.0 headless `-b -P`, Godot 4.3 headless, glTF 2.0 interchange, Xvfb+LIBGL_ALWAYS_SOFTWARE, 2c/3GB/no-GPU.
+- Ran 22 distinct web searches (web_search): headless bpy pipelines, bpy glTF automation, geometry-nodes→glb export, TRELLIS/Hunyuan3D/TripoSR/SF3D/InstantMesh specs+licenses, Hunyuan3D VRAM, BlenderMCP, CC0 libraries (Kenney/Poly Haven), procedural city/dungeon/terrain repos, batch glTF export scripts, Cycles headless baking, AI-asset indie workflows, Meshy/Luma open-source alternatives, BlenderProc license, "GPT-6 Astra" + "Building games with Astra" verification.
+- Page-read attempts ×10 (rate-limited 429s; retried with cooldowns). Fully successful: Khronos BlenderGltfConverter guide (CLI conversion template), ahujasid/blender-mcp repo, GPT-6 Astra OpenRouter pricing/spec page, OpenAI "Building games with Astra" blog content (via social embed carrying full text), OpenAI dev-blog HTML fragment (Void Explorer). Mismatches but thematically useful: utsubo "100 Three.js Tips (2026)", r/aigamedev "GPT-6 Astra builds full worlds in Blender and UE5" thread, GamesIndustry.biz "7% of Steam games disclose genAI", Creative Bloq AI-generated video games.
+- Verified GPT-6 Astra is REAL: openai.com/index/gpt-6-astra, en.wikipedia.org/wiki/GPT-6_Astra, artificialanalysis.ai, OpenRouter ($10/M in, $50/M out, 1.05M ctx, 128K out), released 2026-09-03; OpenAI dev blog Sep 4 2026 = "Void Explorer" (2,048 star systems, 10,000+ planets, built in Codex) + companion tutorial "4 games with Astra, Blender, Godot" (Star Fox shooter, train FPS, RTS level, roguelike deckbuilder).
+- Compiled license/VRAM table for every text/image-to-3D candidate; cross-checked licenses against repos/HF cards (TRELLIS.2 MIT, TripoSR MIT, Hunyuan3D Tencent Community License w/ EU/UK/KR carve-out, BlenderProc GPL-3.0).
+- Did NOT modify any project source; research only + this worklog append.
+
+Stage Summary:
+- GPT-6 ASTRA VERIFIED (OpenAI, 2026-09-03): frontier agentic model; OpenAI's own showcase is a Codex-built procedural space game; a flagship community tutorial builds 4 games with Astra+Blender+Godot. User's premise confirmed, not hype.
+- Community pattern of the moment: "engineering worlds in code" — runtime TypeScript/Three.js geometry + bpy-scripted Blender + Godot builds; ZERO 3D model files in the showcased train demo. Astra's 3D strength tracked to Three.js+Python training data; it flounders in C++ custom engines. Our CLI-first pipeline is exactly the winning shape.
+- Text-to-3D honest verdict: NO open model runs in our sandbox — TripoSR ~6GB VRAM (MIT), SF3D ~6-7GB (0.5s/asset), Hunyuan3D-2.1 10GB shape/21GB texture (6GB via 2GP fork), TRELLIS.2 4B MIT (Ampere+ GPU). Viable path: hosted APIs/HF Spaces or hourly GPU rental → GLB → our Blender CLI import/retopo pipeline; keep pure-procedural bpy as the in-house default.
+- BlenderMCP (ahujasid, community; blender.org/lab/mcp-server official lab page) = the AI-era "LLM drives bpy" layer; concept ports directly to our `-b -P` world: prompts → generated bpy scripts → headless run → GLB out.
+- Techniques to steal: Khronos blender_gltf_converter.py template (`blender -b -P script -- -mp file`), collection batch-export (unlink/link + per-collection glTF), Geometry-Nodes-to-mesh via modifier evaluation (GN sims/instances do NOT survive glTF — must apply/bake), Cycles CPU baking of normal/basecolor for game-engine export, auto-UV/decimate before export.
+- Asset firehose: Kenney (tens of thousands CC0), Poly Haven (100% CC0), Poly Pizza, OpenGameArt, madjin/awesome-cc0 index — GPU-free, instantly usable alongside generated assets.
+- Market signal: 7% of all Steam games now disclose generative-AI usage (GamesIndustry.biz study) — AI-assisted asset production is mainstream, disclosed, and shipping.
+---
+Task ID: 11-b
+Agent: webgame-community-scout
+Task: Pure web research — what the Three.js/web-game community has shipped (games, techniques, perf wisdom, distribution, WebGPU/TSL status) to set the quality bar for EMBER RITE; worklog append only, zero source changes.
+
+Work Log:
+- Read worklog tail (Tasks 9/10 context: EMBER RITE visual rebuild + asset pipeline).
+- Ran 20 distinct web searches (z-ai web_search): best three.js games showcase; three.js postmortems; itch.io made-with-threejs; R3F production games; InstancedMesh/draw-call best practices; WebGPU+TSL 2025 status; CrazyGames/Poki dev economics; three.js roguelike repos; Krunker/Shell Shockers stacks; websocket multiplayer arenas; Draco/KTX2/LOD optimization; itch.io web-game revenue; Narrow One/PolyTrack/stein.world; Rapier WASM physics; Electron/Tauri Steam wrappers; HMR iteration workflows; Bruno Simon; WebGPU browser coverage; HexGL license; FACEMINER.
+- Fully read 8 pages via page_reader (+python HTML→text extraction, /tmp/p1..p8): utsubo "100 Three.js Tips That Actually Improve Performance" (43k chars of tips), GameDeveloper "The huge, hidden web game market" (Playgama founder, distribution numbers), seeles.ai three.js games guide, Maxime Heckel "Field Guide to TSL and WebGPU", itch.io/games/made-with-threejs top list (542 games), jakob.space Krunker reverse-engineering writeup, threejsresources.com/gaming, discourse "Why isn't ThreeJS a serious game dev option".
+- Cross-verified facts before citing: Krunker = three.js (HN + jakob.space found howler.js/tween.js/nipplejs/Rust-WASM inside krunker.io bundle; FRVR acquisition press); HexGL = github.com/BKcore/HexGL, MIT (LICENSE file); Shell Shockers = Babylon.js NOT three.js (html5gamedevelopment.com 2012 — excluded from three.js table to avoid a false claim); WebGPU majors coverage = web.dev Nov 2025 (Chrome/Edge 113+, Firefox 141+, Safari 26) + caniuse 85.72%; three.js WebGPU production-ready claim since r171 (utsubo) vs Threlte docs "not production" (recorded as conflicting views).
+- No project files touched other than this worklog append.
+
+Stage Summary:
+- Quality bar exists and is public: Krunker.io (three.js, millions of players, acquired by FRVR), Narrow One / Raccoon Retail (Pelican Party, cross-platform multiplayer), PolyTrack (Kodub), stein.world (browser MMORPG), FACEMINER (paid $7.99 three.js sim), HexGL (MIT, the classic study repo), Bruno Simon's portfolio-game. itch.io hosts 542 three.js-tagged games.
+- Perf canon (utsubo 100 tips + discourse): <100 draw calls/frame target; InstancedMesh/BatchedMesh/merge/shared materials cut draws 90%+; Draco (~90-95% geometry) + KTX2 (UASTC/ETC1S) via gltf-transform; dispose everything; object pooling; ≤3 active lights; bake shadows/lightmaps; pmndrs/postprocessing over stock EffectComposer; mediump + mix()/step() in shaders; workers for heavy CPU; stats-gl/renderer.info/Spector.js profiling; R3F rules (mutate in useFrame, never setState/create in frame).
+- WebGPU/TSL 2025-26: all majors ship WebGPU (Safari 26 Sept 2025; caniuse ~86%); three.js WebGPURenderer production-ready since r171 with auto WebGL2 fallback; TSL = one shader source for both backends (mrdoob: GLSL chunks are "lost work"). But community split: Threlte docs still say "not production", "TSL considered harmful" thread exists, Heckel documents many gotchas. Verdict for EMBER RITE: stay WebGL+GLSL now, keep materials centralized (already true in materials.ts), revisit TSL post-GPU-sandbox.
+- Distribution reality: Poki/CrazyGames ~30M MAU each (CrazyGames ~300M plays/mo); top web games measure plays in hundreds of millions (Stickman Hook 574M, Monkey Mart 300M); portals demand SDK + save system + progression + rewarded/interstitial ads + leaderboards + full QA before revenue share; itch.io = 542 three.js games, most earn <$100, well-marketed $500–$5k; aggregators (GameDistribution 2000+ publishers) are the long tail; desktop = Electron/Tauri wrappers (community: prefer Electron for consistent GPU rendering).
+- Tech picks validated: Rapier (Rust→WASM, SIMD) is the community physics default; Krunker itself embeds a Rust WASM module; howler.js is the standard web audio lib; socket.io/WebSockets the standard netcode (felixgren/three-arena reference).
+- Honesty check: forum/SEO sources flagged where uncertain (seeles guide has AI-flavored claims; used only corroborated ones). Shell Shockers actively corrected to Babylon.js.
+---
+Task ID: 11-c
+Agent: godot-community-scout
+Task: Web research — proof-of-ceiling shipped Godot games + community best-practice CLI/headless pipeline for Godot 4 (export, web, procgen, Blender glTF) with honest Godot-vs-our-Three.js verdict.
+
+Work Log:
+- Read worklog through Task ID: 10 (stack: CLI-first, 2c/3GB/no-GPU sandbox, Godot 4.3 headless + Xvfb software GL verified, Blender 4.2 → .glb assetgen, live Three.js HOLLOW SUN roguelite).
+- 16 web searches (z-ai web_search): shipped Godot games 2024-25; Brotato/Dome Keeper/Halls of Torment revenue; GH Actions export CI; official CLI export flags; web export WASM size/SharedArrayBuffer; procgen tutorials; Blender glTF automation; GDExtension/rust; 3D shipped list; compatibility renderer/llvmpipe; project architecture; 4.5 WASM SIMD; engine-version attribution; Vampire Survivors/W4 console porting.
+- 9 pages fully read: docs.godotengine.org command_line_tutorial (exact --headless/--import/--export-release/--export-pack/--write-movie semantics); docs.godotengine.org exporting_for_web (4.3 single-thread export kills SharedArrayBuffer need; COOP/COEP only for threads; gzip→wasm ~¼ size; itch.io no on-the-fly compression; WebAudio Sample mode limits); luiscarli.com godot-web-publish (Godot 4.1-era .wasm 29MB → 7.44MB gzip); medium Godot revenue analysis Oct 2025 (Brotato $10.7M/102,051 rev @96.57%, Buckshot $6.9M, Dome Keeper $6.1M, Backpack Battles $5.2M, Until Then $5.1M, Cassette Beasts $4.1M, YOMI HUSTLE $4M, Halls of Torment $3.4M/29,767 rev @95.72%, Turing Complete $2.1M, Tiny Pasture $740k); Firebelley godot-export GH Action README (requires Linux HEADLESS editor + .tpz templates URL, reads export_presets.cfg, cache, archive_output, wine/rcedit icons); ziva.sh godot-3d (Cruelty Squad ~$19.7M; Cassette Beasts 1.1M copies, first ground-up 3D Godot game on consoles; 4.6 Jolt default 56% faster rigid bodies); gamedesignskills famous-godot-games (35 games; Halls of Torment = Chasing Carrots left Unity for Godot's open-source; Dome Keeper from Ludum Dare 48 jam; Buckshot 1M in 2 weeks, 4M by Dec 2024; Sonic Colors Ultimate remaster in Godot); godotengine.org/showcase (Slay the Spire 2/Mega Crit, Until Then, Buckshot, Cassette Beasts, Halls of Torment, Luck be a Landlord, Dome Keeper, Brotato, Cruelty Squad, The Case of the Golden Idol…; curator list hit 2,000-item cap); official 4.5 SIMD article (WASM SIMD default in 4.5; official templates SIMD-only; typical 1.5-2× physics gains, worst-case 10-14× before spiral).
+- Verified real bytes via HTTP HEAD on GitHub release CDN: Godot_v4.3-stable_export_templates.tpz = 1,073,228,327 B ≈ 1.07 GB (one-time, matches our ~1GB estimate); Linux editor zip = 50.3 MB. GitHub API rate-limited otherwise.
+- Fetchable community procgen blueprint (gd-agentic-skills godot-procedural-generation SKILL.md): FastNoiseLite off-main-thread generation via WorkerThreadPool, seeded RandomNumberGenerator, BSP/drunkard-walk over WFC for simple layouts, Poisson-disk placement, max_iterations safety, never touch SceneTree from worker threads.
+- Blender→Godot patterns collected: Godot 4 native .glb/.blend import (glTF under the hood), OMI physics extensions for collisions authored in Blender, Nexus Godot Pipeline addon (batch + gltfpack), hot-reload glTF pipelines, headless glTF import verified in CI by third parties; maps 1:1 onto our scripts/assetgen.ts .glb writer + one missing command (`--headless --import`).
+- No project source modified; this entry is the only write.
+
+Stage Summary:
+- Ceiling is proven: Godot games grossed ~$50M+ combined across verified titles (Cruelty Squad ~$19.7M, Brotato $10.7M, Buckshot $6.9M, Dome Keeper $6.1M, Backpack Battles $5.2M, Until Then $5.1M, Cassette Beasts $4.1M, Halls of Torment $3.4M — third-party estimates, Steam-review-backed); Slay the Spire 2 (Mega Crit) moved Unity→Godot; Sonic Colors Ultimate remaster shipped in Godot.
+- Most relevant proof for us: Brotato (arena roguelite, our genre) and Halls of Torment (bullet-heaven, hundreds of entities) run fine in Godot — 2D/2.5D is the engine's sweet spot.
+- Headless story is first-class: `--headless` = display+audio dummy; `--import` imports assets and quits; `--export-release/--export-pack` consume export_presets.cfg; `--write-movie` for deterministic frame capture; standard CI = headless binary + .tpz templates (1.07 GB verified) via Firebelley action or godot-ci docker; our sandbox can run this exact pipeline (needs one-time 1.07GB templates download).
+- Web export reality: 4.3+ single-threaded build needs NO SharedArrayBuffer/COOP/COEP (works on itch.io/Poki/CrazyGames); wasm ~29MB→7.44MB gzip in 4.1-era, compresses to ~¼ with gzip; 4.5 turns on WASM SIMD (1.5-2× typical); audio defaults to limited low-latency WebAudio Sample mode; WebGL2 required. A Godot web build of HOLLOW SUN would be a 7-10MB+ wasm download vs our instant ~MBs-of-JS game — strictly worse for browser-first.
+- Blender→glTF is Godot's native language; our assetgen.ts .glb output drops straight in after `--headless --import`; .blend direct import and OMI-physics extensions are the community norms.
+- Honest verdict: keep Three.js as the shipping stack for HOLLOW SUN (live web game, pure-TS headless-verified sim, Tauri can wrap for desktop later); adopt Godot 4.3 as a vertical-slice spike only (arena roguelike, reuse .glb assets, `--import`→`--export-release`) to keep the desktop/Steam door open — do not port the web game to Godot.
+- Missing local evidence to acquire next: actually run `--headless --import` + download the 1.07GB templates + one `--export-release` to prove the sandbox can close the loop (documented as next action, not done here — research-only task).
+
+---
+Task ID: 11 (orchestrator; 11-a/11-b/11-c/11-d)
+Agent: lead (Z.ai Code)
+Task: Community deep-dive — verify the post-"GPT-6 ASTRA" wave (Blender + Three.js + Godot game creation), map best community examples/techniques, and set the pivot stance for real game production after the user declared EMBER RITE "a storyboard, not an anchor".
+
+Work Log:
+- Dispatched 4 parallel research-only scouts (11-a Blender community pipelines + text-to-3D reality; 11-b Three.js web-game community + perf/distribution; 11-c Godot shipped games + headless CLI pipeline; 11-d AI-game-dev wave + Astra verification). All four read worklog, ran 78 searches + 30+ page reads total, appended their sections (11-d, 11-a, 11-b, 11-c above).
+- Cross-checked scout claims; corrections enforced (Shell Shockers = Babylon.js, excluded; HN-sourced items flagged unverified; Godot template size byte-verified 1.07GB via HTTP HEAD).
+- Wrote synthesis to docs/research/COMMUNITY_DISCOVERY.md: (1) Astra wave verification with primary sources; (2) 14-row pattern table vs our pipeline status (HAVE/PARTIAL/GAP); (3) proof-of-ceiling tables for Three.js web games and Godot commercial titles; (4) honest quality-ceiling assessment; (5) 8 adopted decisions; (6) pivot stance.
+- Appended "Section 6 — Post-Astra Community Discovery" to docs/PLAYBOOK.md with the adopted capability-upgrade backlog (Blender render-inspect loop, batch export, CPU bake, gltf-transform gate, journey tests, CC0 feed, platform shim, jam benchmark) and genre options for the pivot sprint.
+
+Stage Summary:
+- User's premise VERIFIED against primary sources: GPT-6 Astra released Sep 3 2026; OpenAI's own dev blog showcases games built with Astra + Blender + Godot; community meta = "worlds in code" via Three.js + Python/bpy — structurally identical to our Sprint 10 pipeline.
+- Key verdicts: Three.js ships the web game (Godot web strictly worse: 7-10MB wasm + audio limits); Godot 4.3 = warm hedge via one vertical-slice spike; Blender-headless stays the studio with 4 concrete upgrades; no text-to-3D model fits the 3GB CPU sandbox (all ≥6GB VRAM) — pure-procedural + CC0 is the in-house path.
+- Honest ceiling read: prompt→playable = "competent toy"; agent+director+test-harness = Void Explorer class. Our differentiator is the director-taste loop + verification infrastructure, both proven in Sprint 9.
+- No source code touched this task; deliverables are docs/research/COMMUNITY_DISCOVERY.md + PLAYBOOK section 6 + this worklog.
