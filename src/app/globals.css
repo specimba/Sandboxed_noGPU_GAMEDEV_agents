@@ -349,3 +349,13 @@ main button:focus-visible {
 @media (prefers-reduced-motion: reduce) {
   .hs-flicker, .hs-pulse, .hs-banner, .hs-toast, .hs-seg--hot { animation: none !important; }
 }
+
+/* AI-generated stone wash (assetgen SDK tier → public/assets/textures) */
+.hs-title-tex {
+  background-image: url('/assets/textures/obsidian_ember.png');
+  background-size: cover;
+  background-position: center;
+  opacity: 0.16;
+  mix-blend-mode: screen;
+  filter: saturate(0.85);
+}

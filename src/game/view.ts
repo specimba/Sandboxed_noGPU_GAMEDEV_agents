@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { loadAssetGeometry } from './assetLib';
 import { ARENA, COLORS } from './constants';
 import type { FoeKind, Sim } from './sim';
 import { makeGlowTexture, ParticlePool } from './fx';
@@ -176,6 +177,7 @@ export class View {
   private reticle: THREE.Group;
   private reticleSpin = new THREE.Group();
   private time = 0;
+  private disposed = false;
 
   constructor(scene: THREE.Scene, fx: ParticlePool) {
     this.scene = scene;
@@ -383,6 +385,27 @@ export class View {
     this.reticle.add(new THREE.Mesh(dotGeo, rMat));
     this.reticle.position.y = 0.15;
     scene.add(this.reticle);
+
+    // ---- pipeline swap-in: assetgen .glb assets replace primitives when ----
+    // ---- they arrive (procedural geometry stays as the fallback)        ----
+    void loadAssetGeometry('shard_crystal').then((geo) => {
+      if (!geo || this.disposed) return;
+      const old = this.shardGeo;
+      this.shardGeo = geo;
+      for (const v of this.shardViews) v.mesh.geometry = geo;
+      old.dispose();
+    });
+    void loadAssetGeometry('dart_hull').then((geo) => {
+      if (!geo || this.disposed) return;
+      const old = this.playerHull.geometry;
+      this.playerHull.geometry = geo;
+      old.dispose();
+    });
+    void loadAssetGeometry('obelisk').then((geo) => {
+      if (!geo || this.disposed) return;
+      geo.scale(1.05, 1.0, 1.05); // match the caster obelisk footprint
+      FOE_GEO.caster = geo; // Blender-tier beveled obelisk (shared, never disposed)
+    });
   }
 
   /* ---------------------------------------------------------------- */
@@ -573,6 +596,7 @@ export class View {
   }
 
   dispose(): void {
+    this.disposed = true;
     this.scene.remove(this.playerGroup, this.bulletPoints, this.heavyPoints, this.reticle);
     for (const s of this.shardViews) {
       this.scene.remove(s.mesh);

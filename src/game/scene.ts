@@ -5,6 +5,7 @@ import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 import { ARENA, BIOMES, COLORS } from './constants';
+import { loadAssetGeometry } from './assetLib';
 import { makeGlowTexture } from './fx';
 import { coreMaterial, setRimK, stylizedMaterial, updateStylized } from './materials';
 
@@ -203,6 +204,7 @@ export class Scene {
   private slabs: { mesh: THREE.Mesh; baseY: number }[] = [];
   /** rim monolith field — stored for future animation */
   private monolithMats: THREE.ShaderMaterial[] = [];
+  private monolithMeshes: THREE.Mesh[] = [];
   private starLight: THREE.PointLight;
   private sunEnergy = 0;
   private tgtCold = new THREE.Color(BIOMES[0].grid);
@@ -247,6 +249,49 @@ export class Scene {
     this.gradePass = new ShaderPass(GRADE_SHADER);
     this.composer.addPass(this.gradePass);
     this.composer.addPass(new OutputPass());
+
+    // pipeline swap-in: assetgen .glb meshes replace primitives when they arrive
+    this.loadGeneratedWorld();
+  }
+
+  /** swap procedural monoliths/lantern slabs for assetgen meshes (safe-fail) */
+  private loadGeneratedWorld(): void {
+    const names = ['monolith_a', 'monolith_b', 'monolith_c'] as const;
+    void Promise.all(names.map((n) => loadAssetGeometry(n, true))).then((loaded) => {
+      const variants = loaded.filter((g): g is THREE.BufferGeometry => !!g);
+      if (!variants.length) return;
+      const sizes = variants.map((g) => {
+        g.computeBoundingBox();
+        const bb = g.boundingBox;
+        return bb ? bb.getSize(new THREE.Vector3()) : new THREE.Vector3(1, 1, 1);
+      });
+      for (let i = 0; i < this.monolithMeshes.length; i++) {
+        const m = this.monolithMeshes[i];
+        const dims = m.userData.dims as { w: number; h: number; d: number } | undefined;
+        if (!dims) continue;
+        const k = i % variants.length;
+        const size = sizes[k];
+        const old = m.geometry;
+        m.geometry = variants[k];
+        m.scale.set(dims.w / size.x, dims.h / size.y, dims.d / size.z);
+        old.dispose();
+      }
+    });
+    void loadAssetGeometry('lantern_slab', true).then((geo) => {
+      if (!geo) return;
+      geo.computeBoundingBox();
+      const bb = geo.boundingBox;
+      if (!bb) return;
+      const size = bb.getSize(new THREE.Vector3());
+      for (const s of this.slabs) {
+        const dims = s.mesh.userData.dims as { w: number; h: number; d: number } | undefined;
+        if (!dims) continue;
+        const old = s.mesh.geometry;
+        s.mesh.geometry = geo;
+        s.mesh.scale.set(dims.w / size.x, dims.h / size.y, dims.d / size.z);
+        old.dispose();
+      }
+    });
   }
 
   /* ---------------------------------------------------------------- */
@@ -313,8 +358,10 @@ export class Scene {
       m.lookAt(0, m.position.y, 0);
       m.rotateY((Math.random() - 0.5) * 0.5);
       m.rotateX(0.05 + Math.random() * 0.15);
+      m.userData.dims = { w, h, d };
       this.scene.add(m);
       this.monolithMats.push(mat);
+      this.monolithMeshes.push(m);
     }
 
     // a few dark broken-shell chunks drift higher for parallax
@@ -360,6 +407,7 @@ export class Scene {
       m.rotateX((i % 2 === 0 ? 1 : -1) * (0.12 + Math.random() * 0.13));
       const baseY = h * 0.5 + 0.3 + Math.random() * 0.9;
       m.position.y = baseY;
+      m.userData.dims = { w, h, d: w * 0.62 };
       group.add(m);
       this.slabMats.push(mat);
       this.slabs.push({ mesh: m, baseY });
