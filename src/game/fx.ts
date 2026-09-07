@@ -4,6 +4,11 @@ import * as THREE from 'three';
  * HOLLOW SUN FX: one additive Points pool (4,096 cap) with kill bursts that
  * spiral into the star, a pool of expanding shockwave rings, and shared
  * canvas-generated glow textures. Single draw call per system.
+ *
+ * M0 elevation: the pool accepts a blending override (NormalBlending smoke
+ * pool), and a fixed-capacity PerPointBatch (per-point size/color/alpha,
+ * no CPU particle state) backs view-side systems — motes, bolts, contact
+ * shadows, ambient ember field — one draw call each.
  */
 
 /* ------------------------------------------------------------------ */
@@ -50,11 +55,15 @@ void main() {
 const PARTICLE_FRAG = /* glsl */ `
 varying vec3 vC;
 varying float vA;
+float hsHash(vec2 p) {
+  return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453);
+}
 void main() {
   float d = length(gl_PointCoord - 0.5);
   // crisp core with a tight falloff — sparks, not blobs
   float a = smoothstep(0.5, 0.16, d) * vA;
-  gl_FragColor = vec4(vC * a, a);
+  vec3 col = vC * a + (hsHash(gl_FragCoord.xy) - 0.5) / 255.0;
+  gl_FragColor = vec4(col, a);
 }
 `;
 
@@ -89,7 +98,7 @@ export class ParticlePool {
   private sizeAttr: THREE.BufferAttribute;
   private cursor = 0;
 
-  constructor(parent: THREE.Object3D, max = 4096) {
+  constructor(parent: THREE.Object3D, max = 4096, opts: { blending?: THREE.Blending } = {}) {
     this.max = max;
     this.geo = new THREE.BufferGeometry();
     this.posAttr = new THREE.BufferAttribute(new Float32Array(max * 3), 3);
@@ -108,7 +117,7 @@ export class ParticlePool {
       uniforms: { uPix: { value: 1 } },
       transparent: true,
       depthWrite: false,
-      blending: THREE.AdditiveBlending,
+      blending: opts.blending ?? THREE.AdditiveBlending,
     });
     this.points = new THREE.Points(this.geo, this.mat);
     this.points.frustumCulled = false;
@@ -157,7 +166,7 @@ export class ParticlePool {
     z: number,
     count: number,
     speed: number,
-    opts: { life?: number; size?: number; color?: THREE.Color; spiral?: number; up?: number } = {},
+    opts: { life?: number; size?: number; color?: THREE.Color; spiral?: number; up?: number; drag?: number } = {},
   ): void {
     for (let i = 0; i < count; i++) {
       const a = Math.random() * Math.PI * 2;
@@ -219,6 +228,139 @@ export class ParticlePool {
     this.colAttr.needsUpdate = true;
     this.alphaAttr.needsUpdate = true;
     this.sizeAttr.needsUpdate = true;
+  }
+
+  dispose(): void {
+    this.geo.dispose();
+    this.mat.dispose();
+    this.points.removeFromParent();
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* per-point batch — fixed-capacity attribute pool, no CPU state       */
+/* (motes / bolts / contact shadows / ambient field: 1 draw call each) */
+/* ------------------------------------------------------------------ */
+
+export interface PerPointOpts {
+  blending?: THREE.Blending;
+  renderOrder?: number;
+  /** world-units → px scale (150 ≈ house particles; ~880 ≈ world-true at arena distances) */
+  scale?: number;
+  /** point size clamp in px */
+  maxSize?: number;
+  /** soft inner edge of the round falloff (0.14 crisp … 0.4 blob) */
+  soft?: number;
+  /** vertical squash for ground-plane reads (contact shadows) */
+  squash?: number;
+}
+
+const BATCH_VERT = /* glsl */ `
+attribute vec3 aColor;
+attribute float aAlpha;
+attribute float aSize;
+uniform float uPix;
+uniform float uScale;
+uniform float uMax;
+varying vec3 vC;
+varying float vA;
+void main() {
+  vC = aColor;
+  vA = aAlpha;
+  vec4 mv = modelViewMatrix * vec4(position, 1.0);
+  float dist = max(0.1, -mv.z);
+  gl_PointSize = min(aSize * uPix * (uScale / dist), uMax * uPix);
+  vA *= smoothstep(0.3, 1.2, dist);
+  gl_Position = projectionMatrix * mv;
+}
+`;
+
+const BATCH_FRAG = /* glsl */ `
+uniform float uSoft;
+uniform float uSquash;
+varying vec3 vC;
+varying float vA;
+float hsHash(vec2 p) {
+  return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453);
+}
+void main() {
+  vec2 pc = (gl_PointCoord - 0.5) * vec2(1.0, uSquash);
+  float d = length(pc);
+  float a = smoothstep(0.5, uSoft, d) * vA;
+  vec3 col = vC * a + (hsHash(gl_FragCoord.xy) - 0.5) / 255.0;
+  gl_FragColor = vec4(col, a);
+}
+`;
+
+export class PerPointBatch {
+  readonly points: THREE.Points;
+  private max: number;
+  private geo: THREE.BufferGeometry;
+  private mat: THREE.ShaderMaterial;
+  private posAttr: THREE.BufferAttribute;
+  private colAttr: THREE.BufferAttribute;
+  private alphaAttr: THREE.BufferAttribute;
+  private sizeAttr: THREE.BufferAttribute;
+
+  constructor(parent: THREE.Object3D, max: number, opts: PerPointOpts = {}) {
+    this.max = max;
+    this.geo = new THREE.BufferGeometry();
+    this.posAttr = new THREE.BufferAttribute(new Float32Array(max * 3), 3).setUsage(THREE.DynamicDrawUsage);
+    this.colAttr = new THREE.BufferAttribute(new Float32Array(max * 3), 3).setUsage(THREE.DynamicDrawUsage);
+    this.alphaAttr = new THREE.BufferAttribute(new Float32Array(max), 1).setUsage(THREE.DynamicDrawUsage);
+    this.sizeAttr = new THREE.BufferAttribute(new Float32Array(max), 1).setUsage(THREE.DynamicDrawUsage);
+    this.geo.setAttribute('position', this.posAttr);
+    this.geo.setAttribute('aColor', this.colAttr);
+    this.geo.setAttribute('aAlpha', this.alphaAttr);
+    this.geo.setAttribute('aSize', this.sizeAttr);
+    this.geo.setDrawRange(0, 0);
+    this.mat = new THREE.ShaderMaterial({
+      vertexShader: BATCH_VERT,
+      fragmentShader: BATCH_FRAG,
+      uniforms: {
+        uPix: { value: 1 },
+        uScale: { value: opts.scale ?? 150 },
+        uMax: { value: opts.maxSize ?? 46 },
+        uSoft: { value: opts.soft ?? 0.16 },
+        uSquash: { value: opts.squash ?? 1 },
+      },
+      transparent: true,
+      depthWrite: false,
+      blending: opts.blending ?? THREE.AdditiveBlending,
+    });
+    this.points = new THREE.Points(this.geo, this.mat);
+    this.points.frustumCulled = false;
+    this.points.renderOrder = opts.renderOrder ?? 8;
+    parent.add(this.points);
+  }
+
+  /** write one slot — callers own all per-point state */
+  set(i: number, x: number, y: number, z: number, size: number, color: THREE.Color, alpha: number): void {
+    const pos = this.posAttr.array as Float32Array;
+    pos[i * 3] = x;
+    pos[i * 3 + 1] = y;
+    pos[i * 3 + 2] = z;
+    const col = this.colAttr.array as Float32Array;
+    col[i * 3] = color.r;
+    col[i * 3 + 1] = color.g;
+    col[i * 3 + 2] = color.b;
+    (this.sizeAttr.array as Float32Array)[i] = size;
+    (this.alphaAttr.array as Float32Array)[i] = alpha;
+  }
+
+  setCount(n: number): void {
+    this.geo.setDrawRange(0, Math.max(0, Math.min(n, this.max)));
+  }
+
+  flush(): void {
+    this.posAttr.needsUpdate = true;
+    this.colAttr.needsUpdate = true;
+    this.alphaAttr.needsUpdate = true;
+    this.sizeAttr.needsUpdate = true;
+  }
+
+  setPixelRatio(dpr: number): void {
+    this.mat.uniforms.uPix.value = dpr;
   }
 
   dispose(): void {

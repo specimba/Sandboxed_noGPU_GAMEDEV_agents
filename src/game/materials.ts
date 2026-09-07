@@ -11,15 +11,23 @@ import * as THREE from 'three';
  *
  * Canvas textures provide diamond/streak bullet sprites instead of round
  * glow dots. The sun rig can retune rim strength per material at runtime.
+ *
+ * M0 visual elevation: large flat grounds may opt into a BAKED albedo map
+ * (STYLIZED_MAP) — plain uv interpolation, no screen-space derivatives in
+ * that path (the llvmpipe seam bug came from derivative-normal
+ * reconstruction on huge coplanar tris, NOT smooth uv sampling). A cheap
+ * hash dither kills 8-bit gradient banding in every stylized surface.
  */
 
 const STYLIZED_VERT = /* glsl */ `
 varying vec3 vPos;
 varying vec3 vView;
+varying vec2 vUv;
 #include <fog_pars_vertex>
 void main() {
   vec4 wp = modelMatrix * vec4(position, 1.0);
   vPos = wp.xyz;
+  vUv = uv;
   vec4 mvPosition = viewMatrix * wp;
   vView = -mvPosition.xyz;
   gl_Position = projectionMatrix * mvPosition;
@@ -32,6 +40,9 @@ uniform vec3 uBase;
 uniform vec3 uLit;
 uniform vec3 uRim;
 uniform vec3 uEmis;
+uniform vec3 uTint;
+uniform sampler2D uMap;
+uniform float uMapMix;
 uniform float uEmisK;
 uniform float uRimK;
 uniform float uRimPow;
@@ -40,8 +51,16 @@ uniform float uPulse;
 uniform float uTime;
 varying vec3 vPos;
 varying vec3 vView;
+varying vec2 vUv;
 #include <fog_pars_fragment>
+float hsHash(vec2 p) {
+  return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453);
+}
 void main() {
+  // fragment->camera vector in WORLD space — matches N's space. The old
+  // view-space vView silently mismatched every world-space term below
+  // (fresnel collapsed to ~1 everywhere = the orange-wash bug).
+  vec3 V = normalize(cameraPosition - vPos);
   #ifdef FLAT_GROUND
   // flat surfaces: exact up normal — screen-space derivatives of a huge
   // coplanar primitive misbehave on software GL (scanline seam artifacts)
@@ -49,15 +68,27 @@ void main() {
   #else
   // hand-cut facets: face normal from screen-space derivatives
   vec3 N = normalize(cross(dFdx(vPos), dFdy(vPos)));
-  vec3 V = normalize(vView);
   if (dot(N, V) < 0.0) N = -N;
   #endif
   vec3 L = normalize(vec3(0.30, 0.85, 0.42));
   // chiseled key light — dark shell + facet highlight
   float ndl = dot(N, L) * 0.5 + 0.5;
   vec3 col = uBase + uLit * pow(ndl, 1.7);
-  // identity rim — the silhouette edge carries the color coding
-  float fres = pow(1.0 - abs(dot(normalize(vView), N)), uRimPow);
+  #ifdef STYLIZED_MAP
+  // baked detail mask (arena floor): MODULATES the lit term instead of
+  // replacing it. Empirically bisected on llvmpipe: ACES + linear->sRGB
+  // inflate raw albedo ~2x past authored intent (intended #1e130e rendered
+  // mid-orange), so the canvas is a mid-gray multiplier around 1.0
+  // (128/255 * 2.1 ≈ 1.05) sampled raw (NoColorSpace). uMapMix = kill-switch.
+  col *= mix(vec3(1.0), texture2D(uMap, vUv).rgb * 2.1 * uTint, uMapMix);
+  #endif
+  // identity rim — the silhouette edge carries the color coding.
+  // SINGLE-SPACE FIX (V hoisted above): the old dot(vView, N) crossed
+  // view-space with world-space, collapsed toward 0 under the steep rig,
+  // and fres ≈ 1.0 EVERYWHERE — the whole floor painted itself with the
+  // rim color (the orange wash). World-space V makes fresnel geometric:
+  // edge-on lights up, face-on stays dark.
+  float fres = pow(1.0 - abs(dot(V, N)), uRimPow);
   col += uRim * fres * uRimK;
   // top kiss so silhouettes read against the bright floor
   col += uRim * smoothstep(0.55, 1.0, N.y) * uTopK;
@@ -66,6 +97,8 @@ void main() {
   col += uEmis * uEmisK * pulse;
   gl_FragColor = vec4(col, 1.0);
   #include <fog_fragment>
+  // 8-bit banding killer — one-step ordered noise
+  gl_FragColor.rgb += (hsHash(gl_FragCoord.xy) - 0.5) / 255.0;
 }
 `;
 
@@ -94,6 +127,12 @@ export interface StylizedOpts {
   fog?: boolean;
   /** exact up-normal path for large flat grounds — no derivative artifacts */
   flat?: boolean;
+  /** baked albedo map (large flat grounds) — swaps the lit term for texture */
+  map?: THREE.Texture;
+  /** 0..1 baked-map mix — the kill-switch: 0 disables the texture path */
+  mapMix?: number;
+  /** tint multiplied into the baked map */
+  tint?: number;
 }
 
 export function stylizedMaterial(o: StylizedOpts = {}): THREE.ShaderMaterial {
@@ -110,15 +149,23 @@ export function stylizedMaterial(o: StylizedOpts = {}): THREE.ShaderMaterial {
       uTopK: { value: o.topK ?? 0.16 },
       uPulse: { value: o.pulse ?? 0 },
       uTime: { value: 0 },
+      uTint: { value: new THREE.Color(o.tint ?? 0xffffff) },
+      uMap: { value: null as THREE.Texture | null },
+      uMapMix: { value: o.mapMix ?? 1 },
     },
   ]);
+  const defines: Record<string, string> = {};
+  if (o.flat) defines.FLAT_GROUND = '';
+  if (o.map) defines.STYLIZED_MAP = '';
   const m = new THREE.ShaderMaterial({
     uniforms,
     vertexShader: STYLIZED_VERT,
     fragmentShader: STYLIZED_FRAG,
     fog: o.fog ?? true,
-    ...(o.flat ? { defines: { FLAT_GROUND: '' } } : {}),
+    ...(Object.keys(defines).length > 0 ? { defines } : {}),
   });
+  // set the texture AFTER the uniform merge — UniformsUtils.clone would copy it
+  if (o.map) m.uniforms.uMap.value = o.map;
   stylizedMats.add(m);
   return m;
 }
