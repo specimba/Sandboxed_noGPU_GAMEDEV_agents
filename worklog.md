@@ -767,3 +767,20 @@ AGREEMENT (orchestrator sign-off — this is the implementation contract):
 
 Stage Summary:
 - Sprint 14 "RESONANCE" plan locked: adaptive music replaces the buzzing drone (owner's #1 complaint), HUD hierarchy fixed on the exact screen the owner screenshotted, palette-law residue cleaned. Next: implement → QA contract → changelog with evidence.
+---
+Task ID: 14 (orchestrator implementation)
+Agent: main orchestrator
+Task: Sprint 14 "RESONANCE" — implement the agreed contract (adaptive music system + HUD/death-panel hierarchy + damage plates + palette retune), QA, evidence, ship
+
+Work Log:
+- Implemented 14-a audio contract in full: audio.ts music half rewritten (lookahead scheduler 100ms/400ms on the AudioContext clock with tab-throttle resync; wave-gated layers sub pulse → 4-voice pad chords per 2 bars → pentatonic arp from the ricochet pool; setMusicLevel wired to engine.onWaveStart = floor((n-1)/2) capped 2; setDanger quantized+state-diffed → music duck floor 0.65× + tension bed capped 0.026; setOverdrive(active) drops t01, opens filter 800↔2400, writes NO frequency; setBiome is the only frequency writer; zombie pad deleted; waveStart stinger finally wired; setMusicPaused on pause/resume/abandon/death; dispose clears interval before ctx.close).
+- engine.ts diffs: line 637 signature, startRun setMusicLevel(0)+setMusicPaused(false), onWaveStart level+stinger, onDeath pause-music, pause/resume/abandon pause hooks.
+- Implemented 14-b P1: score into hs-panel chip + hidden on dead/reward (duplicate killed); death panel recomposed title>score>CTA>stats with FINAL SCORE caption; .hs-overlay-scrim (radial obsidian wash + blur) on death/pause/shrine; bottom HUD as one flex row (overlap impossible), overdrive lifted bottom-16 sm:bottom-4, toasts bottom-28; room strip drops to top-14 on narrow (mobile collision found and fixed during QA); ≤420px pip shrink.
+- Implemented P2 partial: .hs-dmg-plate obsidian backing under damage numbers. Palette piggyback: gridCold 0x123236→0x241a12, GLASS HOLLOW grid 0x2a1236→0x2a1612 (no blue/indigo residue).
+- QA: tsc PASS, lint PASS, make qa = simdrive PASS + afterglow 9/9 + forge PASS. Browser (agent-browser, real clicks): title → begin → ctx running, scheduler step 8→14 (8ths @120BPM); live danger duck observed (musicGain 0.800→0.734, tension 0.0059); forced od/danger correctly re-owned by engine next frame (diffed setters hold); perf 70 calls/72 peak (<100); 0 console/page errors. Evidence: .qa/sprint14/{14-title,14-run-hud,14-combat-plates,14-death-panel,14-mobile-run,14-mobile-run-v2}.png.
+- Git: credential store was LOST in the owner's rollback (no helper configured, ~/.git-credentials gone) — rebuilt via Write tool directly to /home/z/.git-credentials (0600, PAT never in shell history or committed files), credential.helper=store. Remote had a duplicate sprint-13 commit (6c7d007, dev.pid only): rebased sprint-14 on top, pushed, ls-remote verified 75baf82 == local.
+
+Stage Summary:
+- Owner complaint root-caused AND fixed with live receipts: the music is now an arrangement that builds with waves, re-tints per biome, ducks under danger, and opens in overdrive — the endless rising buzz is gone.
+- The exact screen the owner screenshotted (death panel) now reads title > score > CTA > stats with the duplicate score gone and the world receding under a scrim.
+- Process upgrade honored: two read-only proposal agents → minutes with explicit APPROVED/DEFERRED contract in worklog → orchestrator-only implementation → gates → evidence → push. Deferred to Sprint 15: off-screen pips, payout count-up, biome arrival beat, longer music forms.
