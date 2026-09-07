@@ -109,12 +109,12 @@ export default function TitleScreen() {
           </p>
         )}
 
-        {/* legacy storyboard toggle */}
+        {/* the 3D descent — the main product */}
         <a
-          href="/?legacy=1"
+          href="/"
           className="hs-tracking text-[9px] text-[#f2e6cf]/35 underline decoration-[rgba(255,196,120,0.25)] underline-offset-4 transition-colors hover:text-[#f2e6cf]/60 sm:text-[10px]"
         >
-          EMBER RITE (LEGACY STORYBOARD)
+          EMBER RITE — THE 3D DESCENT
         </a>
       </div>
     </div>

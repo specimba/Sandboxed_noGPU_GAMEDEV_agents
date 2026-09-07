@@ -155,8 +155,9 @@ const GRADE_SHADER = {
       // vignette, slightly high anchor
       float d = distance(vUv, vec2(0.5, 0.46));
       col *= 1.0 - smoothstep(0.42, 0.92, d) * 0.38;
-      // shimmering film grain
-      col += (hash(vUv * vec2(1920.0, 1080.0)) - 0.5) * 0.045;
+      // shimmering film grain — retuned 0.045 -> 0.025 (VLM audit: overcooked
+      // grain was muddying mid-tones; keep the texture, lose the mud)
+      col += (hash(vUv * vec2(1920.0, 1080.0)) - 0.5) * 0.025;
       gl_FragColor = vec4(col, 1.0);
     }
   `,
@@ -290,6 +291,77 @@ export class Scene {
         s.mesh.geometry = geo;
         s.mesh.scale.set(dims.w / size.x, dims.h / size.y, dims.d / size.z);
         old.dispose();
+      }
+    });
+
+    // cracked titan landmarks — broken monuments guarding the rim approaches
+    void loadAssetGeometry('monolith_cracked', true).then((geo) => {
+      if (!geo) return;
+      geo.computeBoundingBox();
+      const bb = geo.boundingBox;
+      if (!bb) return;
+      const size = bb.getSize(new THREE.Vector3());
+      const k = 6.0 / size.y; // read as a rim-field titan
+      geo.scale(k, k, k);
+      const spots: Array<[number, number]> = [
+        [0.65, ARENA.radius - 7.5],
+        [3.9, ARENA.radius - 8.5],
+      ];
+      for (const [a, r] of spots) {
+        const mat = stylizedMaterial({ base: 0x120d08, lit: 0x2a1d12, rim: 0xff9a4a, rimK: 0.4, rimPow: 3.2, fog: true });
+        const m = new THREE.Mesh(geo, mat);
+        m.position.set(Math.cos(a) * r, 0, Math.sin(a) * r);
+        m.rotation.y = -a + Math.PI / 2;
+        this.scene.add(m);
+        this.monolithMats.push(mat);
+      }
+    });
+
+    // shard clusters — crystal growths scattered between the lanes
+    void loadAssetGeometry('shard_cluster', true).then((geo) => {
+      if (!geo) return;
+      geo.computeBoundingBox();
+      const bb = geo.boundingBox;
+      if (!bb) return;
+      const size = bb.getSize(new THREE.Vector3());
+      const k = 1.6 / size.y;
+      geo.scale(k, k, k);
+      for (let i = 0; i < 5; i++) {
+        const a = (i / 5) * Math.PI * 2 + 0.5;
+        const r = 11 + (i % 2) * 6;
+        const mat = stylizedMaterial({
+          base: COLORS.obsidian,
+          lit: COLORS.obsidianLit,
+          rim: 0xffc766,
+          rimK: 0.9,
+          rimPow: 2.6,
+          emis: 0xff8a3d,
+          emisK: 0.08,
+          fog: true,
+        });
+        const m = new THREE.Mesh(geo, mat);
+        m.position.set(Math.cos(a) * r, 0, Math.sin(a) * r);
+        m.rotation.y = a;
+        this.scene.add(m);
+      }
+    });
+
+    // hex floor inlays — engraved rings flush with the obsidian floor
+    void loadAssetGeometry('inlay_hex', true).then((geo) => {
+      if (!geo) return;
+      geo.computeBoundingBox();
+      const bb = geo.boundingBox;
+      if (!bb) return;
+      const size = bb.getSize(new THREE.Vector3());
+      const k = 3.4 / Math.max(size.x, size.z);
+      geo.scale(k, k, k);
+      if (size.y > Math.max(size.x, size.z)) geo.rotateX(-Math.PI / 2); // stand-up mesh -> lay flat
+      for (let i = 0; i < 3; i++) {
+        const a = (i / 3) * Math.PI * 2 + 1.05;
+        const mat = stylizedMaterial({ base: 0x0c0805, lit: 0x181009, rim: 0xffb454, rimK: 0.5, rimPow: 3.0, fog: true });
+        const m = new THREE.Mesh(geo, mat);
+        m.position.set(Math.cos(a) * 10, 0.05, Math.sin(a) * 10);
+        this.scene.add(m);
       }
     });
   }

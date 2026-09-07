@@ -406,6 +406,16 @@ export class View {
       geo.scale(1.05, 1.0, 1.05); // match the caster obelisk footprint
       FOE_GEO.caster = geo; // Blender-tier beveled obelisk (shared, never disposed)
     });
+    void loadAssetGeometry('warden_slab').then((geo) => {
+      if (!geo || this.disposed) return;
+      geo.computeBoundingBox();
+      const bb = geo.boundingBox;
+      if (!bb) return;
+      const size = bb.getSize(new THREE.Vector3());
+      const k = 5.2 / size.y; // match the warden titan footprint (2.2 octahedron ×1.35)
+      geo.scale(k, k, k);
+      FOE_GEO.warden = geo; // Blender-tier warden body (shared, never disposed)
+    });
   }
 
   /* ---------------------------------------------------------------- */

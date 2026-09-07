@@ -8,6 +8,7 @@ import {
   starEnergy,
 } from './constants';
 import { AudioEngine } from './audio';
+import { DamageNumbers } from './damageNumbers';
 import { CameraRig } from './cameraRig';
 import { ParticlePool, RingPool } from './fx';
 import { Input } from './input';
@@ -89,6 +90,8 @@ export class Engine {
   private lastT = 0;
   private acc = 0;
   private hitstop = 0;
+  private hitstopCd = 0;
+  private dmgNums = new DamageNumbers();
   private slowT = 0;
   private hudT = 0;
   private heartT = 0;
@@ -354,6 +357,7 @@ export class Engine {
     this.view.dispose();
     this.fx.dispose();
     this.rings.dispose();
+    this.dmgNums.dispose();
     this.scene.renderer.dispose();
     this.scene.sun.dispose();
   }
@@ -381,7 +385,7 @@ export class Engine {
       },
       onKill: (kind, x, z) => {
         this.audio.kill();
-        this.hitstop = Math.min(FEEL.hitstopMax, this.hitstop + (kind === 'warden' ? FEEL.hitstopWarden : FEEL.hitstopKill));
+        this.tryHitstop(kind === 'warden' ? FEEL.hitstopWarden : FEEL.hitstopKill);
         this.rig.addShake(kind === 'warden' ? FEEL.traumaWarden : FEEL.traumaKill);
         this.rig.addFovKick(FEEL.fovKickKill);
         this.fx.burst(x, z, BURST[kind], kind === 'warden' ? 24 : 15, {
@@ -393,6 +397,10 @@ export class Engine {
         });
         this.rings.fire(x, z, kind === 'warden' ? 16 : 8, 0.6, 0xff8a5c);
         this.scene.floorPulse(x, z);
+      },
+      onFoeHurt: (kind, x, z, dmg, chain) => {
+        this.dmgNums.spawn(x, z, dmg, chain);
+        void kind;
       },
       onGraze: (x, z) => {
         this.audio.graze();
@@ -470,7 +478,7 @@ export class Engine {
       onBossPhase: (x, z, phase) => {
         this.audio.bossPhase();
         this.rig.addShake(0.35);
-        this.hitstop = Math.min(FEEL.hitstopMax, this.hitstop + 0.12);
+        this.tryHitstop(0.12);
         this.rings.fire(x, z, 14 + phase * 4, 0.8, 0xff7a2d);
         this.store.getState().pushToast(`THE WARDEN RAGES — PHASE ${phase}`, 'red');
       },
@@ -508,11 +516,20 @@ export class Engine {
   /* main loop                                                         */
   /* ---------------------------------------------------------------- */
 
+  /** hit-stop with a retrigger cooldown (AFTERGLOW law): kill spam refreshes
+   *  the stop instead of stack-stuttering; cooldown runs on wall clock */
+  private tryHitstop(seconds: number): void {
+    if (this.hitstopCd > 0) return;
+    this.hitstop = Math.min(FEEL.hitstopMax, this.hitstop + seconds);
+    this.hitstopCd = 0.15;
+  }
+
   private frame = (now: number): void => {
     if (this.disposed) return;
     this.raf = requestAnimationFrame(this.frame);
     const dtReal = Math.min(0.1, (now - this.lastT) / 1000);
     this.lastT = now;
+    this.hitstopCd = Math.max(0, this.hitstopCd - dtReal);
     this.samplePerf(dtReal);
     const phase = this.store.getState().phase;
 
@@ -544,6 +561,7 @@ export class Engine {
       this.acc = 0;
       this.rings.update(dtReal);
       this.fx.update(dtReal);
+      this.dmgNums.update(this.scene.camera, dtReal);
       this.scene.update(dtReal * 0.45);
       this.rig.setVelocity(0, 0);
       this.rig.update(dtReal, this.scene.camera, this.sim.px, this.sim.pz, 0, 0, false, false);
@@ -595,6 +613,7 @@ export class Engine {
     this.view.sync(this.sim, this.aim.x, this.aim.z, !st.touch, dtReal);
     this.rings.update(dtReal);
     this.fx.update(dtReal);
+    this.dmgNums.update(this.scene.camera, dtReal);
     this.audio.setOverdrive(this.sim.odActive, this.sim.odActive ? 1 - this.sim.odT / OVERDRIVE.duration : 0);
 
     // danger ambience + heartbeat at one ember

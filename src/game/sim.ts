@@ -38,6 +38,9 @@ export interface SimEvents {
   onBounce(x: number, z: number, bounceIndex: number): void;
   onCatch(x: number, z: number): void;
   onKill(kind: FoeKind, x: number, z: number): void;
+  /** optional pure-notify hook (view sugar): a foe SURVIVED a hit — kills speak
+   *  through onKill. No rng consumed, run digests unchanged. */
+  onFoeHurt?(kind: FoeKind, x: number, z: number, dmg: number, chain: boolean): void;
   onGraze(x: number, z: number): void;
   onHurt(x: number, z: number): void;
   onDash(x: number, z: number): void;
@@ -674,7 +677,7 @@ export class Sim {
             this.events.onShieldBreak(f.x, f.z);
             continue;
           }
-          const killed = this.damageFoe(f, dmg);
+          const killed = this.damageFoe(f, dmg, this.chain > 0);
           if (!killed) {
             // knockback along the shard's travel
             const sl = Math.hypot(s.vx, s.vz) || 1;
@@ -685,7 +688,7 @@ export class Sim {
           if (this.mods.splash > 0) {
             for (const o of this.foes) {
               if (o === f || o.spawnT > 0 || o.shieldUp) continue;
-              if (Math.hypot(o.x - f.x, o.z - f.z) < 3.5) this.damageFoe(o, this.mods.splash);
+              if (Math.hypot(o.x - f.x, o.z - f.z) < 3.5) this.damageFoe(o, this.mods.splash, true);
             }
           }
           if (killed) continue;
@@ -743,7 +746,7 @@ export class Sim {
   /* foes                                                                */
   /* ------------------------------------------------------------------ */
 
-  private damageFoe(f: Foe, dmg: number): boolean {
+  private damageFoe(f: Foe, dmg: number, chain = false): boolean {
     // BOSS PHASE FLOOR: a warden hangs on by a thread until its final phase
     // has played — burst builds can never skip the learning curve
     if (f.boss && f.state < 3) {
@@ -754,7 +757,10 @@ export class Sim {
       }
     }
     f.hp -= dmg;
-    if (f.hp > 0) return false;
+    if (f.hp > 0) {
+      this.events.onFoeHurt?.(f.kind, f.x, f.z, dmg, chain);
+      return false;
+    }
     // score: elites pay ×1.5, bosses scale by biome, mutators sweeten the pot
     let base = f.kind === 'warden' ? WAVES.wardenScore : SCORE[f.kind];
     if (f.boss) base = bossScore(this.biome);

@@ -165,6 +165,14 @@ export default function TitleScreen() {
             ? 'TOUCH: STICK TO DRIFT · BUTTONS TO THROW & DASH'
             : 'HEADPHONES RECOMMENDED — THE SUN SINGS BACK'}
         </p>
+
+        {/* systems lab — the top-down survivor experiment */}
+        <a
+          href="/?lab=afterglow"
+          className="hs-tracking text-[9px] text-[#f2e6cf]/35 underline decoration-[rgba(255,196,120,0.25)] underline-offset-4 transition-colors hover:text-[#f2e6cf]/60 sm:text-[10px]"
+        >
+          AFTERGLOW — SYSTEMS LAB
+        </a>
       </div>
     </div>
   );

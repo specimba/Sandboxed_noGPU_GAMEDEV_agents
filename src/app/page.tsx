@@ -13,17 +13,18 @@ import TitleScreen from '@/components/game/TitleScreen';
 import TouchControls from '@/components/game/TouchControls';
 
 /**
- * Host: default mounts AFTERGLOW (the pivot); `/?legacy=1` mounts the
- * EMBER RITE storyboard stack, unmodified and self-managed, reachable from
- * the AFTERGLOW title screen. Legacy components import @/game/engine at
- * module scope (proven SSR-safe — the old page did the same); the canvas
- * components stay dynamic/ssr:false like before.
+ * Host: the 3D shooter roguelike (EMBER RITE / HOLLOW SUN line) IS the
+ * product and owns the default route. The AFTERGLOW top-down survivor is a
+ * SYSTEMS LAB (its deterministic sim, draft and feel-kit disciplines feed
+ * the 3D line) — reachable at /?lab=afterglow. SPRINT 12 verdict: demoting
+ * the 3D game to a "legacy" query param was a product regression; this
+ * routing is the correction.
  */
 
+const EmberCanvas = dynamic(() => import('@/components/game/GameCanvas'), { ssr: false });
 const AfterglowCanvas = dynamic(() => import('@/components/afterglow/AfterglowCanvas'), { ssr: false });
-const LegacyGameCanvas = dynamic(() => import('@/components/game/GameCanvas'), { ssr: false });
 
-type Stack = 'boot' | 'afterglow' | 'legacy';
+type Stack = 'boot' | 'ember' | 'afterglow';
 
 /** read the stack choice from the URL without an effect / CSR bailout */
 function subscribeStack(onChange: () => void): () => void {
@@ -31,7 +32,9 @@ function subscribeStack(onChange: () => void): () => void {
   return () => window.removeEventListener('popstate', onChange);
 }
 function getStackSnapshot(): Stack {
-  return new URLSearchParams(window.location.search).get('legacy') === '1' ? 'legacy' : 'afterglow';
+  return new URLSearchParams(window.location.search).get('lab') === 'afterglow'
+    ? 'afterglow'
+    : 'ember';
 }
 function getStackServerSnapshot(): Stack {
   return 'boot';
@@ -45,6 +48,16 @@ export default function Home() {
       className="fixed inset-0 select-none overflow-hidden bg-black text-white"
       style={{ touchAction: 'none' }}
     >
+      {stack === 'ember' && (
+        <>
+          <EmberCanvas />
+          <Hud />
+          <TitleScreen />
+          <Overlays />
+          <TouchControls />
+        </>
+      )}
+
       {stack === 'afterglow' && (
         <>
           <AfterglowCanvas />
@@ -53,16 +66,6 @@ export default function Home() {
           <AfterglowDraftOverlay />
           <AfterglowDeathOverlay />
           <AfterglowTouchControls />
-        </>
-      )}
-
-      {stack === 'legacy' && (
-        <>
-          <LegacyGameCanvas />
-          <Hud />
-          <TitleScreen />
-          <Overlays />
-          <TouchControls />
         </>
       )}
 
