@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { loadAssetGeometry } from './assetLib';
-import { ARENA, COLORS } from './constants';
+import { ARENA, COLORS, HOUND } from './constants';
 import type { FoeKind, Sim } from './sim';
 import { makeGlowTexture, ParticlePool } from './fx';
 import { coreMaterial, makeDiamondTexture, makeStreakTexture, stylizedMaterial } from './materials';
@@ -23,6 +23,7 @@ const FOE_GEO: Record<FoeKind, THREE.BufferGeometry> = {
   weaver: new THREE.TorusGeometry(0.66, 0.15, 6, 3).rotateX(Math.PI / 2), // hex weaver ring, flat
   caster: new THREE.CylinderGeometry(0.22, 0.52, 1.8, 4), // grave obelisk
   bulwark: new THREE.BoxGeometry(1.7, 1.5, 1.7), // tomb slab that walks
+  hound: new THREE.ConeGeometry(0.55, 1.9, 3).rotateX(Math.PI / 2).scale(1.25, 0.6, 1), // lean wedge, tip = +Z
   warden: new THREE.OctahedronGeometry(2.2, 0).scale(1, 1.35, 1), // the monolith titan
 };
 
@@ -33,6 +34,7 @@ const FOE_COL: Record<FoeKind, number> = {
   weaver: 0xff2d6e,
   caster: 0xb8e63d,
   bulwark: 0xffb35c,
+  hound: 0xff4a1f, // deep ember — the burn-line color
   warden: COLORS.warden,
 };
 
@@ -77,6 +79,15 @@ const FOE_MAT: Record<FoeKind, THREE.ShaderMaterial> = {
     rimK: 0.9,
     rimPow: 3,
   }),
+  hound: stylizedMaterial({
+    base: COLORS.obsidian,
+    lit: COLORS.obsidianLit,
+    rim: FOE_COL.hound,
+    rimK: 1.3,
+    emis: FOE_COL.hound,
+    emisK: 0.12,
+    pulse: 0.2, // ember-crack shimmer while it stalks
+  }),
   warden: stylizedMaterial({
     base: 0x140d08,
     lit: COLORS.obsidianLit,
@@ -106,6 +117,7 @@ const FOE_HEART: Record<FoeKind, { color: number; scale: number; opacity: number
   weaver: { color: 0xff2d6e, scale: 1.6, opacity: 0.3 },
   caster: { color: 0xc9ff6a, scale: 1.5, opacity: 0.35 },
   bulwark: { color: 0xffb35c, scale: 1.8, opacity: 0.3 },
+  hound: { color: 0xff6a2d, scale: 1.5, opacity: 0.38 },
   warden: { color: 0xff5a2d, scale: 4.5, opacity: 0.4 },
 };
 
@@ -470,6 +482,17 @@ export class View {
       // pool entries are born 'drifter' — re-seat them onto the forged body
       for (const v of this.foePool) if (v.kind === 'drifter') v.mesh.geometry = geo;
     });
+    void loadAssetGeometry('cinder_hound').then((geo) => {
+      if (!geo || this.disposed) return;
+      geo.computeBoundingBox();
+      const bb = geo.boundingBox;
+      if (!bb) return;
+      const size = bb.getSize(new THREE.Vector3());
+      const k = 1.7 / size.y; // match the lean wedge footprint (0.55 cone ×1.9)
+      geo.scale(k, k, k);
+      FOE_GEO.hound = geo; // Blender-tier hound body (shared, never disposed)
+      for (const v of this.foePool) if (v.kind === 'hound') v.mesh.geometry = geo;
+    });
   }
 
   /* ---------------------------------------------------------------- */
@@ -593,8 +616,8 @@ export class View {
       const gm = v.glow.material as THREE.SpriteMaterial;
       gm.opacity = hd.opacity + (burning ? 0.2 + 0.1 * Math.sin(this.time * 18) : 0);
       v.glow.scale.setScalar(hd.scale * (burning ? 1.25 : 1));
-      if (f.kind === 'bulwark') {
-        // the plate must read true — group yaw = armor facing, no spin
+      if (f.kind === 'bulwark' || f.kind === 'hound') {
+        // the plate / the snout must read true — group yaw = locked facing
         v.group.rotation.y = f.face;
         v.mesh.rotation.y = 0;
       } else {
@@ -615,13 +638,17 @@ export class View {
         h.mat.opacity = 0.55 + 0.25 * Math.sin(this.time * 6 + f.id);
       }
 
-      // striker / caster telegraph lines while aiming
-      if ((f.kind === 'striker' && f.state === 1) || (f.kind === 'caster' && f.state === 1)) {
+      // striker / hound / caster telegraph lines while aiming
+      if (
+        (f.kind === 'striker' && f.state === 1) ||
+        (f.kind === 'hound' && f.state === 1) ||
+        (f.kind === 'caster' && f.state === 1)
+      ) {
         const t = this.telegraphs.find((l) => !l.line.visible);
         if (t) {
           const pos = t.line.geometry.getAttribute('position') as THREE.BufferAttribute;
           pos.setXYZ(0, f.x, 0.9, f.z);
-          const dur = f.kind === 'striker' ? 0.55 : 0.5;
+          const dur = f.kind === 'striker' ? 0.55 : f.kind === 'hound' ? HOUND.windupTime : 0.5;
           const dl = Math.hypot(f.tx - f.x, f.tz - f.z) || 1;
           const grow = 1 - Math.max(0, f.timer) / dur;
           pos.setXYZ(1, f.x + ((f.tx - f.x) / dl) * dl * Math.min(1, grow * 1.4), 0.9, f.z + ((f.tz - f.z) / dl) * dl * Math.min(1, grow * 1.4));

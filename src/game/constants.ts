@@ -76,6 +76,24 @@ export const BURN = {
   maxStacks: 6,
 };
 
+/** CINDER HOUND — a telegraphed charger: lurks at mid range, locks its
+ *  facing through a 0.7s burn-line telegraph, then dashes the line it
+ *  named. Its own recovery is the punish window (x1.5 dmg taken). */
+export const HOUND = {
+  hp: 3,
+  radius: 0.85,
+  points: 3, // wave-budget points (drifter=1 striker=2 weaver/caster/hound=3 bulwark=4)
+  score: 160,
+  triggerRange: 16, // pd threshold that begins the wind-up
+  windupTime: 0.7, // telegraph; facing LOCKED at entry — sidestep the line
+  dashSpeed: 30, // striker dashes 27; the hound commits harder
+  dashTime: 0.45, // ≈13.5u covered per dash
+  recoverTime: 0.8, // stationary after the dash
+  recoverVuln: 1.5, // damage taken multiplier while recovering
+  cooldown: 1.6, // lurk time before the next charge may begin
+  lurkSpeed: 3.2, // slow hover while cooling down
+};
+
 /** CHAINSPARK — a slain foe arcs death-light to the nearest kindred. Target
  *  choice is nearest-first (no rng); sparks never re-spark. */
 export const SPARK = {
@@ -102,7 +120,8 @@ export const WAVES = {
   spawnIntervalBase: 1.5,
   spawnIntervalPerWave: 0.055,
   spawnIntervalMin: 0.62,
-  /** wave N budget = base + perWave * N; drifter=1 striker=2 weaver=3 pts */
+  /** wave N budget = base + perWave * N; drifter=1 striker=2 weaver=3
+   *  hound=3 caster=3 bulwark=4 pts */
   budgetBase: 4,
   budgetPerWave: 2.6,
   wardenEvery: 5,
@@ -137,6 +156,7 @@ export const SCORE = {
   striker: 80,
   weaver: 120,
   caster: 140,
+  hound: HOUND.score,
   bulwark: 220,
   graze: 5,
   multPerBounce: 0.5, // chain multiplier: 1 + bounces * 0.5

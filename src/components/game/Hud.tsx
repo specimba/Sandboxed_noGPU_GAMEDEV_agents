@@ -14,6 +14,7 @@ const BANNER_CLS: Record<string, string> = {
   room: 'text-[#f2e6cf]',
   wave: 'text-[#f2e6cf]',
   warden: 'text-[#f2e6cf]',
+  biome: 'text-[#ffc766]', // the biome name IS run-state — one-gold law
 };
 
 export default function Hud() {
@@ -184,14 +185,16 @@ export default function Hud() {
         </div>
       </div>
 
-      {/* room / boss banner — engraved caps between hairlines */}
+      {/* room / boss / biome banner — engraved caps between hairlines */}
       {banner && (
         <div
           key={banner.id}
-          className="hs-banner absolute left-1/2 top-1/3 flex -translate-x-1/2 flex-col items-center gap-2.5"
+          className={`hs-banner ${banner.kind === 'biome' ? 'hs-banner--biome' : ''} absolute left-1/2 top-1/3 flex -translate-x-1/2 flex-col items-center gap-2.5`}
         >
           <span aria-hidden="true" className="hs-hairline w-40 sm:w-60" />
-          <span className={`hs-tracking px-4 text-center text-3xl font-bold sm:text-5xl ${BANNER_CLS[banner.kind]}`}>
+          <span
+            className={`hs-tracking max-w-[86vw] px-4 text-center leading-tight font-bold ${banner.kind === 'biome' ? 'text-2xl sm:text-4xl' : 'text-3xl sm:text-5xl'} ${BANNER_CLS[banner.kind] ?? BANNER_CLS.room}`}
+          >
             {banner.text}
           </span>
           <span className="hs-tracking text-[10px] text-[#f2e6cf]/60 sm:text-xs">{banner.sub}</span>

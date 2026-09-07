@@ -4,7 +4,7 @@
  * seed-determinism of the whole burn/spark path. Usage:
  *   bun run scripts/simdrive-forge.ts
  */
-import { BURN, SPARK } from '../src/game/constants';
+import { BURN, HOUND, SPARK } from '../src/game/constants';
 import { Sim, type SimEvents } from '../src/game/sim';
 import { RUN } from '../src/game/constants';
 
@@ -290,11 +290,199 @@ function scriptedRun(): Rec {
   assert(frames < CAP, 'E: hit frame cap');
 }
 
-console.log('=== HOLLOW SUN forge harness (EMBER ROT + CHAINSPARK) ===');
-console.log(`burn beats exercised, spark arcs exercised, determinism digests compared`);
+/* ------------------------------------------------------------------ */
+/* F — cinder hound: the telegraphed charger law                       */
+/* ------------------------------------------------------------------ */
+{
+  // F1 — wind-up is uninterruptible: non-lethal damage during the telegraph
+  //      neither cancels it nor re-aims it; the dash follows the locked line.
+  const { rec, ev } = makeRecorder();
+  const sim = new Sim(ev);
+  sim.reset();
+  sim.setSeed(4242);
+  sim.startRoom(1, 2); // biome 1 room 2 — wave 5+ guarantees hounds
+  let gotHound = false;
+  for (let i = 0; i < 900 && !gotHound; i++) {
+    sim.update(1 / 60, 1 / 60, 0, 0, 0, 0, false, false);
+    sim.invuln = Math.max(sim.invuln, 0.2);
+    gotHound = sim.foes.some((f) => f.kind === 'hound' && f.spawnT <= 0);
+  }
+  assert(gotHound, 'F: no live hound in biome-1 room-2 within cap');
+  // stage: the hound alone near the ember, everyone else banished — so a
+  // strike-nearest is unambiguous (block C staging convention)
+  const hound = sim.foes.find((f) => f.kind === 'hound' && f.spawnT <= 0)!;
+  sim.px = 0;
+  sim.pz = 0;
+  for (const f of sim.foes) {
+    if (f !== hound) {
+      f.x = 30;
+      f.z = 0;
+    }
+  }
+  hound.x = 5;
+  hound.z = 0;
+  hound.vx = 0;
+  hound.vz = 0;
+  hound.timer = 0; // charge may begin immediately
+  let inWindup = false;
+  for (let i = 0; i < 120 && !inWindup; i++) {
+    sim.update(1 / 60, 1 / 60, 0, 0, 0, 0, false, false);
+    sim.invuln = Math.max(sim.invuln, 0.2);
+    inWindup = hound.state === 1;
+  }
+  assert(inWindup, 'F1: hound never entered wind-up');
+  const lockDx = hound.dx;
+  const lockDz = hound.dz;
+  const hpBefore = hound.hp;
+  sim.debugStrikeNearest(1); // non-lethal hit DURING the telegraph
+  assert(hound.hp === hpBefore - 1, 'F1: strike during wind-up did not land on the hound');
+  assert(hound.state === 1, 'F1: wind-up was interrupted by damage');
+  assert(hound.dx === lockDx && hound.dz === lockDz, 'F1: wind-up re-aimed after damage');
+  let dashed = false;
+  for (let i = 0; i < 60 && !dashed; i++) {
+    sim.update(1 / 60, 1 / 60, 0, 0, 0, 0, false, false);
+    sim.invuln = Math.max(sim.invuln, 0.2);
+    if (hound.state === 2) dashed = true;
+  }
+  assert(dashed, 'F1: hound did not reach dash within windupTime + ε');
+
+  // F2 — the dash is a dead-straight line at HOUND.dashSpeed
+  const sx = hound.x;
+  const sz = hound.z;
+  let maxDev = 0;
+  let minSpeed = 99;
+  for (let i = 0; i < 15; i++) {
+    sim.update(1 / 60, 1 / 60, 0, 0, 0, 0, false, false);
+    sim.invuln = Math.max(sim.invuln, 0.2);
+    if (hound.state !== 2) break;
+    const px2 = hound.x - sx;
+    const pz2 = hound.z - sz;
+    // perpendicular component vs the locked line direction
+    const dev = Math.abs(px2 * -lockDz + pz2 * lockDx);
+    maxDev = Math.max(maxDev, dev);
+    minSpeed = Math.min(minSpeed, Math.hypot(hound.vx, hound.vz));
+  }
+  assert(maxDev < 0.01, `F2: dash deviated ${maxDev.toFixed(4)}u off the locked line`);
+  assert(minSpeed > HOUND.dashSpeed - 1, `F2: dash speed dipped to ${minSpeed.toFixed(2)}`);
+
+  // F3 — recovery is the punish window: x1.5 damage taken there
+  let recovered = false;
+  for (let i = 0; i < 90 && !recovered; i++) {
+    sim.update(1 / 60, 1 / 60, 0, 0, 0, 0, false, false);
+    sim.invuln = Math.max(sim.invuln, 0.2);
+    if (hound.state === 3) recovered = true;
+  }
+  assert(recovered, 'F3: hound never reached recovery');
+  assert(hound.hp > 0, 'F3: hound died before the recovery read');
+  hound.hp = 4;
+  hound.maxHp = 4;
+  sim.debugStrikeNearest(2); // 2 dmg at recovery → x1.5 → 3 → survives at 1
+  assert(sim.foes.includes(hound) && hound.hp === 1, `F3: recovery strike left hp=${hound.hp}, expected 1 (4 - 2x${HOUND.recoverVuln})`);
+
+  // F4 — EMBER ROT stacks on a hound like on any foe (kind-agnostic law)
+  const recB = makeRecorder();
+  const simB = new Sim(recB.ev, { burn: 2 });
+  simB.reset();
+  simB.setSeed(777);
+  simB.startRoom(1, 2);
+  let hb: (typeof simB.foes)[number] | null = null;
+  for (let i = 0; i < 900 && !hb; i++) {
+    simB.update(1 / 60, 1 / 60, 0, 0, 0, 0, false, false);
+    simB.invuln = Math.max(simB.invuln, 0.2);
+    hb = simB.foes.find((f) => f.kind === 'hound' && f.spawnT <= 0) ?? null;
+  }
+  assert(!!hb, 'F4: no hound to burn');
+  if (hb) {
+    simB.px = 0;
+    simB.pz = 0;
+    for (const f of simB.foes) {
+      if (f !== hb) {
+        f.x = 30;
+        f.z = 0;
+      }
+    }
+    hb.x = 2;
+    hb.z = 0;
+    hb.vx = 0;
+    hb.vz = 0;
+    simB.debugStrikeNearest(1); // survivor hit → burn stacks
+    assert(hb.burn === 2, `F4: hound burn stacks ${hb.burn}, expected 2`);
+    // the beat ladder runs on enemy time: first tick pays the full stack
+    let ticks = 0;
+    for (let i = 0; i < 90 && ticks === 0; i++) {
+      simB.update(1 / 60, 1 / 60, 0, 0, 0, 0, false, false);
+      simB.invuln = Math.max(simB.invuln, 0.2);
+      ticks = recB.rec.burnTicks.length;
+    }
+    assert(ticks > 0, 'F4: burn never ticked on the hound');
+    assert(recB.rec.burnTicks[0].dmg === 2, 'F4: first beat must pay the full stack');
+  }
+
+  // F5 — CHAINSPARK arcs FROM a hound kill to the nearest kindred
+  const recS = makeRecorder();
+  const simS = new Sim(recS.ev, { spark: 1 });
+  simS.reset();
+  simS.setSeed(99);
+  simS.startRoom(1, 2);
+  let houndS: (typeof simS.foes)[number] | null = null;
+  for (let i = 0; i < 900 && !houndS; i++) {
+    simS.update(1 / 60, 1 / 60, 0, 0, 0, 0, false, false);
+    simS.invuln = Math.max(simS.invuln, 0.2);
+    houndS = simS.foes.find((f) => f.kind === 'hound' && f.spawnT <= 0) ?? null;
+  }
+  assert(!!houndS, 'F5: no hound to slay');
+  const partner = simS.foes.find((f) => f !== houndS && f.spawnT <= 0);
+  assert(!!partner, 'F5: no kindred partner for the arc');
+  if (houndS && partner) {
+    simS.px = 0;
+    simS.pz = 0;
+    for (const f of simS.foes) {
+      if (f !== houndS && f !== partner) {
+        f.x = 30; // beyond SPARK.radius — only the staged partner can catch the arc
+        f.z = 0;
+      }
+    }
+    houndS.x = 2;
+    houndS.z = 0;
+    partner.x = 6;
+    partner.z = 0;
+    const killedS = simS.debugStrikeNearest(999); // the hound dies
+    assert(killedS, 'F5: 999 dmg must slay the staged hound');
+    assert(recS.rec.sparks.length === 1, `F5: expected exactly 1 arc from the hound kill, got ${recS.rec.sparks.length}`);
+    const s = recS.rec.sparks[0];
+    assert(s && s.dmg === SPARK.dmg, 'F5: hound arc must carry SPARK.dmg');
+    assert(s && r(s.fx) === 2 && r(s.fz) === 0, 'F5: arc origin must be the slain hound');
+    assert(s && r(s.tx) === 6 && r(s.tz) === 0, 'F5: arc must land on the staged kindred');
+  }
+
+  // F6 — determinism: two seeded runs through biome-1 room 2 produce
+  //      identical digests (hound rng use shifts streams only ACROSS seeds)
+  function houndDigest(seed: number): string {
+    const { rec, ev } = makeRecorder();
+    const s = new Sim(ev, { burn: 1 });
+    s.reset();
+    s.setSeed(seed);
+    s.startRoom(1, 2);
+    for (let i = 0; i < 1800; i++) {
+      s.update(1 / 60, 1 / 60, 0, 0, 0, 0, i % 90 === 0, false);
+      s.invuln = Math.max(s.invuln, 0.2);
+    }
+    const houndKills = rec.kills.filter((k) => k.kind === 'hound').length;
+    const houndsAlive = s.foes.filter((f) => f.kind === 'hound').length;
+    return `${s.score}|${s.foes.length}|${houndKills}|${houndsAlive}|${s.embers}`;
+  }
+  const d1 = houndDigest(31337);
+  const d2 = houndDigest(31337);
+  assert(d1 === d2, `F6: determinism broken (${d1} != ${d2})`);
+  const houndSightings = Number(d1.split('|')[2]) + Number(d1.split('|')[3]);
+  assert(houndSightings > 0, `F6: digest run saw no hounds at all (${d1})`);
+}
+
+console.log('=== HOLLOW SUN forge harness (EMBER ROT + CHAINSPARK + CINDER HOUND) ===');
+console.log(`burn beats exercised, spark arcs exercised, hound law exercised, determinism digests compared`);
 if (failures.length > 0) {
   console.log('\nFAIL:');
   for (const f of failures) console.log(` ✗ ${f}`);
   process.exit(1);
 }
-console.log('\nPASS: stack law, beat ladder, arc targeting, determinism, full-run compatibility.');
+console.log('\nPASS: stack law, beat ladder, arc targeting, hound charge law, determinism, full-run compatibility.');

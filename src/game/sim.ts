@@ -2,6 +2,7 @@ import {
   ARENA,
   BURN,
   FOE,
+  HOUND,
   OVERDRIVE,
   PLAYER,
   RUN,
@@ -32,7 +33,7 @@ import {
  * Overdrive and the score→sun feedback all live here.
  */
 
-export type FoeKind = 'drifter' | 'striker' | 'weaver' | 'caster' | 'bulwark' | 'warden';
+export type FoeKind = 'drifter' | 'striker' | 'weaver' | 'caster' | 'bulwark' | 'hound' | 'warden';
 export type ShardState = 'orbit' | 'fly' | 'chain' | 'return';
 
 export interface SimEvents {
@@ -781,6 +782,8 @@ export class Sim {
         return false;
       }
     }
+    // CINDER HOUND recovery: mid-dash-past you, it pays extra to die
+    if (f.kind === 'hound' && f.state === 3) dmg *= HOUND.recoverVuln;
     f.hp -= dmg;
     if (f.hp > 0) {
       // EMBER ROT: direct hits stack burning light on the survivor
@@ -870,6 +873,9 @@ export class Sim {
     } else if (kind === 'bulwark') {
       hp = 6;
       r = 1.3;
+    } else if (kind === 'hound') {
+      hp = HOUND.hp;
+      r = HOUND.radius;
     } else if (kind === 'warden') {
       hp = boss ? bossHp(this.biome) : WAVES.wardenHpBase;
       r = 2.2;
@@ -894,7 +900,12 @@ export class Sim {
       boss,
       spawnT: kind === 'warden' ? 1.4 : kind === 'bulwark' ? 0.7 : 0.45,
       state: boss ? 1 : 0, // boss phase
-      timer: kind === 'caster' ? 1.2 + this.rng() * 0.8 : 0,
+      timer:
+        kind === 'caster'
+          ? 1.2 + this.rng() * 0.8
+          : kind === 'hound'
+            ? HOUND.cooldown * 0.5 + this.rng() * 0.4
+            : 0,
       tx: 0,
       tz: 0,
       dx: 0,
@@ -978,6 +989,60 @@ export class Sim {
           }
           break;
         }
+        case 'hound': {
+          // CINDER HOUND: lurk → locked wind-up → straight dash → exposed
+          // recovery. The dash line is named by the wind-up and never re-aims.
+          if (f.state === 0) {
+            // lurk: hold the 12..18 band, slow tangential drift
+            const tangX = -pdz / pd;
+            const tangZ = pdx / pd;
+            const radial = pd > 18 ? -0.6 : pd < 12 ? 0.6 : 0;
+            const wantVx = tangX * HOUND.lurkSpeed * eff + (pdx / pd) * radial * HOUND.lurkSpeed;
+            const wantVz = tangZ * HOUND.lurkSpeed * eff + (pdz / pd) * radial * HOUND.lurkSpeed;
+            f.vx += (wantVx - f.vx) * Math.min(1, dt * 2.2);
+            f.vz += (wantVz - f.vz) * Math.min(1, dt * 2.2);
+            f.timer -= dt;
+            if (pd < HOUND.triggerRange && f.timer <= 0) {
+              f.state = 1;
+              f.timer = HOUND.windupTime;
+              // lock the line NOW — the telegraph names exactly where it goes
+              const dl = pd || 1;
+              f.dx = pdx / dl;
+              f.dz = pdz / dl;
+              f.tx = f.x + f.dx * 20;
+              f.tz = f.z + f.dz * 20;
+              f.face = Math.atan2(f.dx, f.dz);
+            }
+          } else if (f.state === 1) {
+            // wind-up — uninterruptible, velocity dies, line burns
+            f.vx *= Math.max(0, 1 - dt * 10);
+            f.vz *= Math.max(0, 1 - dt * 10);
+            f.timer -= dt;
+            if (f.timer <= 0) {
+              f.state = 2;
+              f.timer = HOUND.dashTime;
+            }
+          } else if (f.state === 2) {
+            // dash — dead straight, full commit
+            f.vx = f.dx * HOUND.dashSpeed * eff;
+            f.vz = f.dz * HOUND.dashSpeed * eff;
+            f.timer -= dt;
+            if (f.timer <= 0) {
+              f.state = 3;
+              f.timer = HOUND.recoverTime;
+            }
+          } else {
+            // recovery — the punish window (damageFoe pays x1.5 here)
+            f.vx *= Math.max(0, 1 - dt * 7);
+            f.vz *= Math.max(0, 1 - dt * 7);
+            f.timer -= dt;
+            if (f.timer <= 0) {
+              f.state = 0;
+              f.timer = HOUND.cooldown;
+            }
+          }
+          break;
+        }
         case 'weaver': {
           // hold the 15..21 band, strafe clockwise
           const tangX = -pdz / pd;
@@ -992,7 +1057,7 @@ export class Sim {
             if (f.burstT <= 0) {
               f.burstLeft -= 1;
               f.burstT = 0.13;
-              this.fireAt(f, (Math.random() - 0.5) * 0.18);
+              this.fireAt(f, (this.rng() - 0.5) * 0.18); // seeded — the sim is deterministic under a fixed seed
             }
           } else {
             f.timer -= dt;
@@ -1216,6 +1281,9 @@ export class Sim {
       if (n >= 5 && roll < 0.18 && points >= 4) {
         q.push('bulwark');
         points -= 4;
+      } else if (n >= 5 && roll < 0.3 && points >= 3) {
+        q.push('hound');
+        points -= 3;
       } else if (n >= 4 && roll < 0.4 && points >= 3) {
         q.push('caster');
         points -= 3;
@@ -1234,6 +1302,7 @@ export class Sim {
     if (n >= 3 && !q.includes('weaver')) q.push('weaver');
     if (n >= 2 && !q.includes('striker')) q.push('striker');
     if (n >= 5 && !q.includes('caster')) q.push('caster');
+    if (n >= 5 && !q.includes('hound')) q.push('hound');
     if (n >= 8 && !q.includes('bulwark')) q.push('bulwark');
     for (let i = q.length - 1; i > 0; i--) {
       const j = Math.floor(this.rng() * (i + 1));

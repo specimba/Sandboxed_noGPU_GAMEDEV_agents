@@ -332,6 +332,16 @@ main button:focus-visible {
 }
 .hs-banner { animation: hsBanner 2.2s ease-out forwards; }
 
+/* biome arrival banner — 1.4s beat: in, hold ~1.1s, out (matches the fog
+   swell + floor pulse the engine fires at the same instant) */
+@keyframes hsBannerBiome {
+  0% { opacity: 0; transform: translate(-50%, 10px) scale(0.985); }
+  12% { opacity: 1; transform: translate(-50%, 0) scale(1); }
+  79% { opacity: 1; }
+  100% { opacity: 0; transform: translate(-50%, -8px) scale(1.008); }
+}
+.hs-banner--biome { animation: hsBannerBiome 1.45s ease-out forwards; }
+
 /* toast entrance */
 @keyframes hsToastIn {
   from { opacity: 0; transform: translateY(8px); }
@@ -347,7 +357,7 @@ main button:focus-visible {
 
 /* reduced motion: kill decorative animation */
 @media (prefers-reduced-motion: reduce) {
-  .hs-flicker, .hs-pulse, .hs-banner, .hs-toast, .hs-seg--hot { animation: none !important; }
+  .hs-flicker, .hs-pulse, .hs-banner, .hs-banner--biome, .hs-toast, .hs-seg--hot { animation: none !important; }
 }
 
 /* title scrim — pure-CSS composition over the LIVE 3D attract scene.

@@ -4,6 +4,32 @@ Rule R2 (docs/QUALITY_AUDIT.md): each entry lists objective improvements over th
 
 ---
 
+## SPRINT 15 · BUILD 1 — "WILDFANG" (a new predator; biomes become places; off-screen is no longer blind)
+
+**Previous state:** Sprint 14 fixed the rising-drone music bug and recomposed the HUD/death panel, but all six foe kinds date to the roguelite expansion, the three biomes announce themselves with a bare text banner (the first biome with nothing at all), and threats outside the viewport are invisible until they hit you.
+
+### Improved — mechanics (SEVENTH foe kind: the CINDER HOUND, forged through the 3-stack)
+- **New charger AI** (`src/game/sim.ts` + `HOUND` table in `constants.ts`): the hound lurks the 12–18u band, locks its facing through a **0.7s burn-line telegraph** (the dash line is named at wind-up entry and never re-aims — sidestep it), then dashes the line at **30u/s** (striker: 27), and pays for a miss with a **0.8s recovery that takes ×1.5 damage** — the punish window is the mechanic. Wind-up is uninterruptible by damage (proven headless).
+- **Wave integration**: hounds enter at wave 5 (GLASS HOLLOW room 2) via budget band + deterministic floor; 3 budget pts, 160 score, hp 3, r 0.85. Fully compatible with EMBER ROT stacks and CHAINSPARK arcs (kind-agnostic laws asserted in harness block F).
+- **Blender 4.2 forge** (`scripts/blender/forge_hound.py`, new): lean crouched quadruped wedge — snout toward Blender −Y → glTF +Z = three.js forward, so the mesh charges snout-first; buried legs, blade tail, spine ember-crack plates, swept ears. **576 tris ≤ 600 budget**, gate: `optimize` quant applied=15 skipped=0, `verify-assets` **pass=15 fail=0** (count 14→15), runtime GLB swap verified live in-engine (posCount 1242 ≫ fallback). Pipeline note: the sandbox lost `/home/z/tools` — Blender 4.2 was re-downloaded and restored to `/home/z/tools/blender-4.2.0-linux-x64` this sprint.
+- Evidence: `.qa/sprint15/15-hound-windup.png` (telegraph + hound mid-wind-up), harness block F1–F7 PASS.
+
+### Improved — graphics/UX (biome arrival beat: the run now reads as a descent)
+- **Arrival beat at every biome boundary** (and run start): a 1.5s gold biome banner (`ASHFALL VESTIBULE — THE DESCENT BEGINS` / `DEEPER INTO THE DEAD STAR`) + a **fog swell** (density 0.016→0.028→0.016 over 1.4s, uniform-only) + a **floor pulse ring** from the ember. Keyed at the only two `setBiome` sites, so room 2/3/boss can never double-fire by construction.
+- **Double-banner defect fixed**: the biome banner replaced the redundant `ROOM 1` banner (arrivalHold consumes it exactly once); also fixed `startRun`'s store reset wiping the fresh banner synchronously.
+- Mobile fit: biome banner drops to `text-2xl` and wraps inside `max-w-[86vw]` (was clipping past both screen edges at 390px). Evidence: `.qa/sprint15/15-mobile-arrival.png` (banner + fog swell + pulse ring in one frame), `.qa/sprint15/15-arrival-biome0.png` (pulse ring + veil mid-swell).
+
+### Improved — UX fairness (off-screen threat pips)
+- **`src/game/foePips.ts`** (new): pooled DOM edge pips (pool 8, warm amber `#ffc766`, z-9 under the HUD) — off-screen foes clamp to the screen edge as outward-pointing diamonds, **nearest threat = loudest** (opacity 1.1 − d/44, clamped 0.3–0.95), behind-camera NDC mirrored so behind foes clamp sensibly, hidden in boss rooms, transform-only per frame (reduced-motion compliant, +0 draw calls). Evidence: `.qa/sprint15/15-threat-pips.png` (3 pips edge-clamped at y=880/900, distance-scaled opacities).
+
+### Improved — architecture / QA
+- **The sim is now fully deterministic under a fixed seed**: the hound's determinism digest (harness F6) exposed a latent defect — weaver burst spread consumed `Math.random()` (the only unseeded rng in the sim). Now `this.rng()`. Two same-seed runs produce byte-identical score/kill/foe digests (asserted).
+- **`scripts/simdrive-forge.ts` block F** (new): wind-up uninterruptibility + no re-aim under damage, dead-straight dash (perp deviation < 0.01u, speed ≈ 30), recovery ×1.5 readback (staged hp 4 → strike 2 → hp 1), hound burn stack law, spark-from-hound-kill arc targeting (exact origin/target/dmg), seeded-run digest determinism. Wired into `make qa`.
+- Perf law held: fresh-run `perf()` 71 calls / peak 80 (ceiling 100, sprint-14 envelope 70/72–86); hound rides the existing 40-seat pool + shared geo/mat (+0 persistent calls); pips and arrival beat are DOM/uniform-only. 0 console errors, 0 page errors.
+- Gates: `bunx tsc --noEmit` PASS, `bun run lint` PASS, `make qa` PASS (simdrive won dawn 647 + afterglow 9/9 + forge incl. hound law).
+
+---
+
 ## SPRINT 13 · BUILD 1 — "SUNFORGE" (the 3-stack ships new content)
 
 **Previous state:** Sprint 12 restored the 3D line but replayed the existing 11-GLB library; the title screen covered the live renderer with an AI-generated texture image; no new combat content since the roguelite expansion; the pipeline Makefile could not even run (`make` failed: space-indented recipes).

@@ -9,6 +9,7 @@ import {
 } from './constants';
 import { AudioEngine } from './audio';
 import { DamageNumbers } from './damageNumbers';
+import { FoePips } from './foePips';
 import { CameraRig } from './cameraRig';
 import { ParticlePool, RingPool } from './fx';
 import { Input } from './input';
@@ -72,6 +73,7 @@ const BURST: Record<FoeKind, number> = {
   weaver: 280,
   caster: 260,
   bulwark: 420,
+  hound: 320,
   warden: 900,
 };
 
@@ -92,6 +94,7 @@ export class Engine {
   private hitstop = 0;
   private hitstopCd = 0;
   private dmgNums = new DamageNumbers();
+  private pips = new FoePips();
   private slowT = 0;
   private hudT = 0;
   private heartT = 0;
@@ -108,6 +111,9 @@ export class Engine {
   private bossesKilled = 0;
   private boonsTaken: Record<string, number> = {};
   private lastBoonChoices: BoonDef[] = [];
+  /** biome arrival beat armed — the next ROOM banner is redundant (the
+   *  arrival banner already named the place) and is skipped exactly once */
+  private arrivalHold = false;
 
   constructor(canvas: HTMLCanvasElement) {
     // eslint-disable-next-line @typescript-eslint/no-this-alias
@@ -191,6 +197,12 @@ export class Engine {
     this.audio.setBiome(0);
     this.audio.setMusicLevel(0);
     this.audio.setMusicPaused(false);
+    this.pips.clear();
+    // BIOME ARRIVAL BEAT — the descent begins: banner + fog swell + floor pulse
+    this.arrivalHold = true;
+    this.scene.fogSwell();
+    this.scene.floorPulse(this.sim.px, this.sim.pz);
+    this.store.getState().showBanner(biomeName(0), 'THE DESCENT BEGINS', 'biome');
     this.rig.engage(this.sim.px, this.sim.pz);
     this.sim.startRoom(0, 1);
     this.store.getState().set({
@@ -204,7 +216,8 @@ export class Engine {
       overdrive: 0,
       overdriveActive: false,
       sun: 0,
-      banner: null,
+      // NOTE: no `banner: null` here — the biome arrival beat above owns the
+      // banner on run start; abandon() clears it on the title path
       boonsTaken: [],
       bossBar: null,
       won: false,
@@ -265,7 +278,12 @@ export class Engine {
       this.runRoom = 1;
       this.scene.setBiome(this.runBiome);
       this.audio.setBiome(this.runBiome);
-      this.store.getState().showBanner(biomeName(this.runBiome), 'DEEPER INTO THE DEAD STAR', 'room');
+      // BIOME ARRIVAL BEAT — one beat per biome, fired here and at startRun
+      // (the only two setBiome sites): banner + fog swell + floor pulse
+      this.arrivalHold = true;
+      this.scene.fogSwell();
+      this.scene.floorPulse(this.sim.px, this.sim.pz);
+      this.store.getState().showBanner(biomeName(this.runBiome), 'DEEPER INTO THE DEAD STAR', 'biome');
     }
     this.sim.startRoom(this.runBiome, this.runRoom);
     this.store.getState().set({
@@ -328,6 +346,7 @@ export class Engine {
 
   abandon(): void {
     this.sim.reset();
+    this.pips.clear();
     this.store.getState().set({ phase: 'title', banner: null });
     this.rig.setTitleMode();
     this.audio.setMusicPaused(true);
@@ -363,6 +382,7 @@ export class Engine {
     this.fx.dispose();
     this.rings.dispose();
     this.dmgNums.dispose();
+    this.pips.dispose();
     this.scene.renderer.dispose();
     this.scene.sun.dispose();
   }
@@ -457,6 +477,9 @@ export class Engine {
         const st = this.store.getState();
         if (isBossRoom(this.runRoom)) {
           // boss banner fires from onWardenSpawn
+        } else if (this.arrivalHold) {
+          // the arrival beat already named this place — no ROOM double-banner
+          this.arrivalHold = false;
         } else {
           const mut = this.sim.mutator.name ? ` — ${this.sim.mutator.name}` : '';
           st.showBanner(`ROOM ${this.runRoom}`, `${biomeName(this.runBiome)}${mut}`, 'room');
@@ -523,6 +546,7 @@ export class Engine {
       onDeath: () => {
         this.audio.death();
         this.audio.setMusicPaused(true); // the stinger plays alone
+        this.pips.clear();
         this.rig.addShake(1);
         this.slowT = 1.3;
         this.deathT = 1.35;
@@ -642,6 +666,7 @@ export class Engine {
     this.rings.update(dtReal);
     this.fx.update(dtReal);
     this.dmgNums.update(this.scene.camera, dtReal);
+    this.pips.update(this.scene.camera, this.sim, isBossRoom(this.runRoom));
     this.audio.setOverdrive(this.sim.odActive);
 
     // danger ambience + heartbeat at one ember
