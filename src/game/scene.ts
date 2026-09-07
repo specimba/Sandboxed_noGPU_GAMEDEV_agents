@@ -206,6 +206,8 @@ export class Scene {
   /** rim monolith field — stored for future animation */
   private monolithMats: THREE.ShaderMaterial[] = [];
   private monolithMeshes: THREE.Mesh[] = [];
+  /** biome-dressed props (glass spires, heart roots) — toggled by setBiome */
+  private biomeProps: THREE.Mesh[] = [];
   private starLight: THREE.PointLight;
   private sunEnergy = 0;
   private tgtCold = new THREE.Color(BIOMES[0].grid);
@@ -362,6 +364,52 @@ export class Scene {
         const m = new THREE.Mesh(geo, mat);
         m.position.set(Math.cos(a) * 10, 0.05, Math.sin(a) * 10);
         this.scene.add(m);
+      }
+    });
+
+    // GLASS HOLLOW spires (forge v3) — broken crystal growths, biome 2 only
+    void loadAssetGeometry('glass_spire', true).then((geo) => {
+      if (!geo) return;
+      geo.computeBoundingBox();
+      const bb = geo.boundingBox;
+      if (!bb) return;
+      const size = bb.getSize(new THREE.Vector3());
+      const k = 4.6 / size.y;
+      geo.scale(k, k, k);
+      for (let i = 0; i < 6; i++) {
+        const a = (i / 6) * Math.PI * 2 + 2.1;
+        const r = 26 + (i % 3) * 3.5;
+        const mat = stylizedMaterial({ base: 0x1a0f1c, lit: 0x33182f, rim: 0xff5c8a, rimK: 0.85, rimPow: 2.2, emis: 0xff5c8a, emisK: 0.07, fog: true });
+        const m = new THREE.Mesh(geo, mat);
+        m.position.set(Math.cos(a) * r, 0, Math.sin(a) * r);
+        m.rotation.y = a * 1.7;
+        m.userData.biomeIdx = 1;
+        m.visible = false;
+        this.scene.add(m);
+        this.biomeProps.push(m);
+      }
+    });
+
+    // THE HEART roots (forge v3) — knurled obsidian roots, biome 3 only
+    void loadAssetGeometry('heart_root', true).then((geo) => {
+      if (!geo) return;
+      geo.computeBoundingBox();
+      const bb = geo.boundingBox;
+      if (!bb) return;
+      const size = bb.getSize(new THREE.Vector3());
+      const k = 5.2 / size.y;
+      geo.scale(k, k, k);
+      for (let i = 0; i < 5; i++) {
+        const a = (i / 5) * Math.PI * 2 + 0.9;
+        const r = 24 + (i % 2) * 5;
+        const mat = stylizedMaterial({ base: 0x140d08, lit: 0x2a1d12, rim: 0xffd9a0, rimK: 0.7, rimPow: 2.4, emis: 0xffb454, emisK: 0.05, fog: true });
+        const m = new THREE.Mesh(geo, mat);
+        m.position.set(Math.cos(a) * r, 0, Math.sin(a) * r);
+        m.rotation.y = a * 2.3;
+        m.userData.biomeIdx = 2;
+        m.visible = false;
+        this.scene.add(m);
+        this.biomeProps.push(m);
       }
     });
   }
@@ -673,6 +721,9 @@ export class Scene {
     this.tgtHot.set(b.hot);
     this.tgtFog.set(b.fog);
     this.tgtSun.set(b.sun);
+    // biome dressing — each forge prop set belongs to exactly one biome
+    const active = Math.min(2, Math.max(0, i));
+    for (const m of this.biomeProps) m.visible = m.userData.biomeIdx === active;
   }
 
   render(): void {

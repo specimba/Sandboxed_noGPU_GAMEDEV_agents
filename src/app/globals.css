@@ -350,14 +350,41 @@ main button:focus-visible {
   .hs-flicker, .hs-pulse, .hs-banner, .hs-toast, .hs-seg--hot { animation: none !important; }
 }
 
-/* AI-generated stone wash (assetgen SDK tier → public/assets/textures) */
-.hs-title-tex {
-  background-image: url('/assets/textures/obsidian_ember.png');
-  background-size: cover;
-  background-position: center;
-  opacity: 0.16;
-  mix-blend-mode: screen;
-  filter: saturate(0.85);
+/* title scrim — pure-CSS composition over the LIVE 3D attract scene.
+   Four stacked layers in warm obsidian blacks only:
+   1. engraved strata   — faint hairline wash, CSS descendant of the retired
+                          AI texture (no image assets)
+   2. top vignette      — seats the kicker, gone before the lantern
+   3. bottom scrim      — anchors pitch / controls / CTAs / footer
+   4. edge falloff      — soft cinematic seat without blanking the orbit
+   The elevated Hollow Lantern band between kicker and pitch stays clear. */
+.hs-title-scrim {
+  background-image:
+    repeating-linear-gradient(
+      to bottom,
+      rgba(255, 196, 120, 0.03) 0px,
+      rgba(255, 196, 120, 0.03) 1px,
+      transparent 1px,
+      transparent 4px
+    ),
+    linear-gradient(
+      to bottom,
+      rgba(3, 2, 1, 0.7) 0%,
+      rgba(3, 2, 1, 0.28) 30%,
+      rgba(3, 2, 1, 0) 52%
+    ),
+    linear-gradient(
+      to top,
+      rgba(3, 2, 1, 0.88) 0%,
+      rgba(3, 2, 1, 0.55) 20%,
+      rgba(3, 2, 1, 0.2) 42%,
+      rgba(3, 2, 1, 0) 62%
+    ),
+    radial-gradient(
+      115% 95% at 50% 42%,
+      rgba(3, 2, 1, 0) 55%,
+      rgba(3, 2, 1, 0.38) 100%
+    );
 }
 
 /* ============================================================

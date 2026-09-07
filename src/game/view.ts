@@ -129,8 +129,16 @@ interface HaloView {
   mat: THREE.MeshBasicMaterial;
 }
 
+interface SparkView {
+  line: THREE.Line;
+  mat: THREE.LineBasicMaterial;
+  life: number;
+}
+
 const MAX_BULLETS = 340;
 const MAX_HEAVY = 60;
+const SHADOW_POOL = 41; // 1 ember dart + 40 foes
+const SPARK_SEGS = 8;
 
 export class View {
   private scene: THREE.Scene;
@@ -172,6 +180,14 @@ export class View {
   private haloUsed = 0;
   private haloGeo = new THREE.RingGeometry(0.8, 0.94, 36).rotateX(-Math.PI / 2);
 
+  /** grounded contact shadows — kills the "everything floats" defect */
+  private shadowTex: THREE.CanvasTexture;
+  private shadows: THREE.Mesh[] = [];
+  private shadowGeo = new THREE.CircleGeometry(1, 20).rotateX(-Math.PI / 2);
+
+  /** CHAINSPARK death-light arcs */
+  private sparkViews: SparkView[] = [];
+
   private telegraphs: { line: THREE.Line; mat: THREE.LineBasicMaterial }[] = [];
 
   private reticle: THREE.Group;
@@ -186,6 +202,32 @@ export class View {
     this.warmTex = makeGlowTexture('rgba(255,208,130,0.95)', 'rgba(255,96,32,0)');
     this.diamondTex = makeDiamondTexture();
     this.streakTex = makeStreakTexture();
+    this.shadowTex = makeGlowTexture('rgba(0,0,0,0.85)', 'rgba(0,0,0,0)');
+
+    // ---- contact shadows: one soft dark blob per grounded entity ----
+    for (let i = 0; i < SHADOW_POOL; i++) {
+      const m = new THREE.Mesh(
+        this.shadowGeo,
+        new THREE.MeshBasicMaterial({ map: this.shadowTex, transparent: true, opacity: 0.5, depthWrite: false }),
+      );
+      m.renderOrder = 2;
+      m.position.y = 0.04;
+      m.visible = false;
+      scene.add(m);
+      this.shadows.push(m);
+    }
+
+    // ---- spark arcs: jagged death-light lines, additive, fast-fading ----
+    for (let i = 0; i < 6; i++) {
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array((SPARK_SEGS + 1) * 3), 3));
+      const mat = new THREE.LineBasicMaterial({ color: 0xffe9a0, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false });
+      const line = new THREE.Line(geo, mat);
+      line.frustumCulled = false;
+      line.visible = false;
+      scene.add(line);
+      this.sparkViews.push({ line, mat, life: 0 });
+    }
 
     // ---- the EMBER DART: faceted obsidian hull, swept fins, canopy heart ----
     const hullGeo = new THREE.OctahedronGeometry(0.5, 0);
@@ -416,9 +458,38 @@ export class View {
       geo.scale(k, k, k);
       FOE_GEO.warden = geo; // Blender-tier warden body (shared, never disposed)
     });
+    void loadAssetGeometry('husk_drifter').then((geo) => {
+      if (!geo || this.disposed) return;
+      geo.computeBoundingBox();
+      const bb = geo.boundingBox;
+      if (!bb) return;
+      const size = bb.getSize(new THREE.Vector3());
+      const k = 2.2 / size.y; // match the ash-husk footprint (0.95 octa ×1.25)
+      geo.scale(k, k, k);
+      FOE_GEO.drifter = geo; // Blender-tier husk body (shared, never disposed)
+      // pool entries are born 'drifter' — re-seat them onto the forged body
+      for (const v of this.foePool) if (v.kind === 'drifter') v.mesh.geometry = geo;
+    });
   }
 
   /* ---------------------------------------------------------------- */
+
+  /** CHAINSPARK visual: a jagged additive arc from (fx,fz) to (tx,tz) */
+  fireSpark(fx: number, fz: number, tx: number, tz: number): void {
+    const s = this.sparkViews.find((p) => p.life <= 0) ?? this.sparkViews[0];
+    const pos = s.line.geometry.getAttribute('position') as THREE.BufferAttribute;
+    for (let i = 0; i <= SPARK_SEGS; i++) {
+      const t = i / SPARK_SEGS;
+      const edge = i === 0 || i === SPARK_SEGS;
+      const jx = edge ? 0 : (Math.random() - 0.5) * 1.2;
+      const jz = edge ? 0 : (Math.random() - 0.5) * 1.2;
+      pos.setXYZ(i, fx + (tx - fx) * t + jx, 1.0 + (Math.random() - 0.5) * 0.6, fz + (tz - fz) * t + jz);
+    }
+    pos.needsUpdate = true;
+    s.life = 0.14;
+    s.line.visible = true;
+    s.mat.opacity = 0.95;
+  }
 
   sync(sim: Sim, aimX: number, aimZ: number, showAim: boolean, dt: number): void {
     this.time += dt;
@@ -447,6 +518,13 @@ export class View {
         drag: 3.2,
       });
     }
+
+    // contact shadow — the dart grounds itself
+    const psh = this.shadows[0];
+    psh.visible = true;
+    psh.position.set(sim.px, 0.04, sim.pz);
+    psh.scale.setScalar(1.15);
+    (psh.material as THREE.MeshBasicMaterial).opacity = sim.dashT > 0 ? 0.32 : 0.5;
 
     // shards
     for (let i = 0; i < this.shardViews.length; i++) {
@@ -478,6 +556,7 @@ export class View {
 
     // foes — hide all, then re-assign from sim
     let fi = 0;
+    let shI = 1;
     for (const f of sim.foes) {
       if (fi >= this.foePool.length) break;
       const v = this.foePool[fi++];
@@ -498,6 +577,22 @@ export class View {
       const pop = f.kind === 'warden' ? 0.35 : 0.15;
       const sc = Math.max(0.02, spawnK) * (1 + pop * (1 - spawnK));
       v.group.scale.setScalar(sc * (f.elite === 'swift' ? 0.85 : 1));
+
+      // grounded contact shadow (pool index 0 = the dart)
+      if (shI < this.shadows.length) {
+        const sh = this.shadows[shI++];
+        sh.visible = true;
+        sh.position.set(f.x, 0.04, f.z);
+        sh.scale.setScalar(f.r * 1.5 * Math.max(0.05, spawnK));
+        (sh.material as THREE.MeshBasicMaterial).opacity = 0.42 * Math.max(0.2, spawnK);
+      }
+
+      // EMBER ROT read — a burning foe's heart flickers hot and wide
+      const hd = FOE_HEART[f.kind];
+      const burning = f.burn > 0;
+      const gm = v.glow.material as THREE.SpriteMaterial;
+      gm.opacity = hd.opacity + (burning ? 0.2 + 0.1 * Math.sin(this.time * 18) : 0);
+      v.glow.scale.setScalar(hd.scale * (burning ? 1.25 : 1));
       if (f.kind === 'bulwark') {
         // the plate must read true — group yaw = armor facing, no spin
         v.group.rotation.y = f.face;
@@ -538,10 +633,18 @@ export class View {
       }
     }
     for (let i = fi; i < this.foePool.length; i++) this.foePool[i].group.visible = false;
+    for (let i = shI; i < this.shadows.length; i++) this.shadows[i].visible = false;
     for (const t of this.telegraphs) {
       if (t.line.visible) {
         t.mat.opacity -= dt * 4;
         if (t.mat.opacity <= 0) t.line.visible = false;
+      }
+    }
+    for (const s of this.sparkViews) {
+      if (s.life > 0) {
+        s.life -= dt;
+        s.mat.opacity = Math.max(0, (s.life / 0.14) * 0.95);
+        if (s.life <= 0) s.line.visible = false;
       }
     }
 
@@ -624,6 +727,17 @@ export class View {
     for (const h of this.haloPool) {
       this.scene.remove(h.mesh);
       h.mat.dispose();
+    }
+    for (const s of this.shadows) {
+      this.scene.remove(s);
+      (s.material as THREE.MeshBasicMaterial).dispose();
+    }
+    this.shadowGeo.dispose();
+    this.shadowTex.dispose();
+    for (const s of this.sparkViews) {
+      this.scene.remove(s.line);
+      s.mat.dispose();
+      s.line.geometry.dispose();
     }
     for (const t of this.telegraphs) {
       this.scene.remove(t.line);
