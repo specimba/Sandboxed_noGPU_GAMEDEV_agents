@@ -402,6 +402,22 @@ export class Engine {
         this.dmgNums.spawn(x, z, dmg, chain);
         void kind;
       },
+      onBurnTick: (x, z, dmg) => {
+        // burning light peels off the foe — no hitstop, no sfx spam (the law)
+        this.fx.spawn(x, 1.2, z, (Math.random() - 0.5) * 2.4, 2.6, (Math.random() - 0.5) * 2.4, {
+          life: 0.55,
+          size: 0.42,
+          color: BURN_C,
+          drag: 1.4,
+        });
+        void dmg;
+      },
+      onSpark: (fx, fz, tx, tz) => {
+        this.view.fireSpark(fx, fz, tx, tz);
+        this.audio.shieldBreak(); // crackle stands in until a dedicated zap lands
+        this.rig.addShake(0.05);
+        this.fx.burst(tx, tz, 16, 9, { color: SPARK_C, life: 0.35, size: 0.45, up: 0.2 });
+      },
       onGraze: (x, z) => {
         this.audio.graze();
         this.fx.spawn(x, 1, z, (Math.random() - 0.5) * 4, 2, (Math.random() - 0.5) * 4, { life: 0.3, size: 0.4, color: WHITE_C });
@@ -534,6 +550,10 @@ export class Engine {
     const phase = this.store.getState().phase;
 
     if (phase === 'title') {
+      // living attract: the sim idles forward so shards keep orbiting the
+      // ember while the rig circles the Lantern — the star breathes
+      this.sim.update(dtReal, dtReal, 0, 0, 0, 0, false, false);
+      this.scene.setEnergy(0.16 + 0.09 * Math.sin(performance.now() * 0.00045));
       this.scene.update(dtReal);
       this.rig.update(dtReal, this.scene.camera, 0, 0, 0, 0, false, false);
       this.view.sync(this.sim, 0, 0, false, dtReal);
@@ -763,3 +783,5 @@ const WARDEN_C = new THREE.Color(0xff5a2d);
 const EMBER_C = new THREE.Color(0xffe9bd);
 const WHITE_C = new THREE.Color(0xffffff);
 const GOLD_C = new THREE.Color(0xffe9a0);
+const BURN_C = new THREE.Color(0xff7a3d);
+const SPARK_C = new THREE.Color(0xffe9a0);

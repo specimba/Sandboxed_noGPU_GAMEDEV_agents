@@ -30,9 +30,10 @@ export default function TitleScreen() {
 
   return (
     <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center">
-      {/* AI-generated obsidian texture (assetgen SDK tier) — subtle stone wash */}
-      <div aria-hidden="true" className="hs-title-tex absolute inset-0" />
-      <div className="absolute inset-0 bg-gradient-to-b from-black/70 via-transparent to-black/80" />
+      {/* live 3D attract scene IS the backdrop — CSS-only scrim (bottom-anchored
+          base + top vignette + engraved strata) seats the UI while the elevated
+          Hollow Lantern band between kicker and pitch stays clear */}
+      <div aria-hidden="true" className="hs-title-scrim absolute inset-0" />
       <div className="pointer-events-auto relative flex max-h-full w-full max-w-2xl flex-col items-center gap-5 overflow-y-auto px-6 py-8 text-center">
 
         {/* kicker between hairlines */}
