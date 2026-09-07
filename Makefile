@@ -7,7 +7,7 @@
 BLENDER ?= $(wildcard /home/z/tools/blender-4.2.0-linux-x64/blender)
 XVFB_DISPLAY ?= 77
 
-.PHONY: assets assets-blender assets-library previews inspect optimize textures check qa qa-afterglow dev verify pipeline help
+.PHONY: assets assets-blender assets-library previews inspect optimize forge-library check qa qa-afterglow dev verify pipeline help
 
 help:
 	@echo "make assets          - regenerate procedural .glb meshes (tier 1, pure TS)"
@@ -16,6 +16,7 @@ help:
 	@echo "make previews        - render one preview PNG per .glb to .qa/assets (Workbench under Xvfb, Cycles CPU fallback)"
 	@echo "make inspect         - VLM visual verdicts for the previews (ADVISORY gate; never blocks) -> .qa/asset-inspect.json"
 	@echo "make optimize        - gltf-transform gate: weld+dedup+prune+KHR_mesh_quantization on every .glb (decoder-free in three.js)"
+	@echo "make forge-library   - sprint-13 Blender v3 forge: husk_drifter + glass_spire + heart_root content assets"
 	@echo "make textures        - regenerate AI textures via SDK CLI (tier 3)"
 	@echo "make check           - tsc + eslint"
 	@echo "make qa              - headless full-run simulation (EMBER RITE simdrive + AFTERGLOW drive)"
@@ -52,9 +53,11 @@ inspect: previews
 optimize:
 	bun scripts/optimize-assets.ts
 
-textures:
-	mkdir -p public/assets/textures
-	z-ai image -p "seamless dark obsidian stone texture, near-black charcoal volcanic rock, faint warm ember cracks glowing deep amber in crevices, flat top-down texture, subtle chiseled facets, dark moody game material, high quality, detailed" -o public/assets/textures/obsidian_ember.png -s 1024x1024
+# sprint 13 forge: Blender v3 content assets (husk_drifter, glass_spire,
+# heart_root) — new content through the full pipeline, not library re-runs
+forge-library:
+	@test -x "$(BLENDER)" || { echo "forge-library: blender not found at $(BLENDER) — SKIP"; exit 0; }
+	$(BLENDER) -b -P scripts/blender/forge_library.py -- out public/assets/meshes
 
 check:
 	bunx tsc --noEmit
@@ -63,6 +66,7 @@ check:
 qa:
 	bun scripts/simdrive.ts
 	bun scripts/simdrive-afterglow.ts
+	bun scripts/simdrive-forge.ts
 
 # AFTERGLOW M0 pivot: fresh deep-sim arena survivor core under src/game/afterglow/
 qa-afterglow:
