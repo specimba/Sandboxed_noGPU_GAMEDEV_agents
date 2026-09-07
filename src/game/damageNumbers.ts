@@ -42,9 +42,11 @@ export class DamageNumbers {
       'position:absolute;inset:0;overflow:hidden;pointer-events:none;z-index:12;';
     for (let i = 0; i < POOL; i++) {
       const el = document.createElement('div');
+      el.className = 'hs-dmg-plate'; // obsidian chip — digits never camouflage
       el.style.cssText =
         'position:absolute;left:0;top:0;font-weight:700;font-variant-numeric:tabular-nums;' +
-        'letter-spacing:0.02em;color:#ffd98f;text-shadow:0 0 6px rgba(255,150,60,0.75),0 1px 2px rgba(0,0,0,0.8);' +
+        'letter-spacing:0.02em;color:#ffd98f;padding:1px 5px;' +
+        'text-shadow:0 0 6px rgba(255,150,60,0.75),0 1px 2px rgba(0,0,0,0.8);' +
         'transform:translate(-50%,-50%);opacity:0;will-change:transform,opacity;';
       el.textContent = '';
       this.host.appendChild(el);

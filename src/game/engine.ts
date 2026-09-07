@@ -189,6 +189,8 @@ export class Engine {
     this.slowT = 0;
     this.scene.setBiome(0);
     this.audio.setBiome(0);
+    this.audio.setMusicLevel(0);
+    this.audio.setMusicPaused(false);
     this.rig.engage(this.sim.px, this.sim.pz);
     this.sim.startRoom(0, 1);
     this.store.getState().set({
@@ -312,6 +314,7 @@ export class Engine {
   pause(): void {
     if (this.store.getState().phase !== 'playing') return;
     this.store.getState().set({ phase: 'paused' });
+    this.audio.setMusicPaused(true);
     this.audio.uiClick();
   }
 
@@ -319,6 +322,7 @@ export class Engine {
     if (this.store.getState().phase !== 'paused') return;
     this.store.getState().set({ phase: 'playing' });
     this.audio.unlock();
+    this.audio.setMusicPaused(false);
     this.audio.uiClick();
   }
 
@@ -326,6 +330,7 @@ export class Engine {
     this.sim.reset();
     this.store.getState().set({ phase: 'title', banner: null });
     this.rig.setTitleMode();
+    this.audio.setMusicPaused(true);
     this.audio.uiClick();
   }
 
@@ -446,7 +451,9 @@ export class Engine {
         this.store.getState().pushToast(`${bossName(this.runBiome)} FELLED — SHARD OF THE SUN +1`, 'gold');
       },
       onWaveStart: (n) => {
-        void n;
+        // music depth: waves 1-2 sub only → 3-4 +pad → 5+ +arp; boss rooms roar
+        this.audio.setMusicLevel(Math.min(2, Math.floor((n - 1) / 2)));
+        this.audio.waveStart(n);
         const st = this.store.getState();
         if (isBossRoom(this.runRoom)) {
           // boss banner fires from onWardenSpawn
@@ -515,6 +522,7 @@ export class Engine {
       },
       onDeath: () => {
         this.audio.death();
+        this.audio.setMusicPaused(true); // the stinger plays alone
         this.rig.addShake(1);
         this.slowT = 1.3;
         this.deathT = 1.35;
@@ -634,7 +642,7 @@ export class Engine {
     this.rings.update(dtReal);
     this.fx.update(dtReal);
     this.dmgNums.update(this.scene.camera, dtReal);
-    this.audio.setOverdrive(this.sim.odActive, this.sim.odActive ? 1 - this.sim.odT / OVERDRIVE.duration : 0);
+    this.audio.setOverdrive(this.sim.odActive);
 
     // danger ambience + heartbeat at one ember
     let nearest = 99;

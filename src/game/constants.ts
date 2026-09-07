@@ -15,8 +15,8 @@ export const COLORS = {
   foe: 0xff3b52,
   foeDeep: 0x8f1230,
   foeBullet: 0xff6a4a,
-  /** arena grid — cold teal that ignites to gold as the star rekindles */
-  gridCold: 0x123236,
+  /** arena grid — cold obsidian umber that ignites to gold as the star rekindles */
+  gridCold: 0x241a12,
   gridHot: 0xffab52,
   warden: 0xff5a2d,
   /** EMBER RITE shells — dark chiseled obsidian + bone highlights */
@@ -123,10 +123,10 @@ export const RUN = {
   dawnWinBonus: 100,
 };
 
-/** biome palettes — grid cold/hot, fog, sun tint (EMBER RITE grade) */
+/** biome palettes — grid cold/hot, fog, sun tint (EMBER RITE grade; all ember/obsidian family) */
 export const BIOMES = [
-  { grid: 0x123236, hot: 0xffab52, fog: 0x0a0708, sun: 0xffb454 }, // ashfall
-  { grid: 0x2a1236, hot: 0xff5c8a, fog: 0x0b050d, sun: 0xff8a6a }, // glass hollow
+  { grid: 0x241a12, hot: 0xffab52, fog: 0x0a0708, sun: 0xffb454 }, // ashfall
+  { grid: 0x2a1612, hot: 0xff5c8a, fog: 0x0d0508, sun: 0xff8a6a }, // glass hollow
   { grid: 0x3a3436, hot: 0xfff0d0, fog: 0x0d0b0e, sun: 0xfff0c8 }, // the heart
 ] as const;
 

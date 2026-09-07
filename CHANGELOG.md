@@ -74,3 +74,39 @@ Rule R2 (docs/QUALITY_AUDIT.md): each entry lists objective improvements over th
 - Score numeral still unmoored (should live in an hs-panel)
 - First-60s onboarding storyboard (scripted first ricochet-kill) not yet built
 - Determinism hash assertions for the 3D simdrive (dev agent 12-a, "do first") not yet ported
+
+---
+
+## SPRINT 14 · BUILD 1 — "RESONANCE" (the drone dies; music begins)
+
+**Previous state:** the game's only sustained "music" was a 55 Hz triple-sawtooth drone whose gain was swollen per-frame by `setDanger` (pinned loud for minutes at late waves) and whose pitch was tugged between `setBiome` (τ0.6) and a per-frame `setOverdrive` reset (τ0.15) — the owner's verdict: "music is like a single frequency persistently increasing and getting irritating I finally muted it." Death panel hierarchy was inverted (giant score shouting down the title, REKINDLE buried under a stat wall — owner's screenshot), top score floated bare over the brightest band, bottom HUD physically overlapped at ≤420px (measured 71px at 390px).
+
+### Improved — audio: real adaptive music replaces the buzzing drone (owner's #1 complaint)
+- **`src/game/audio.ts` rewritten (music half):** lookahead scheduler (100ms tick, 400ms horizon, AudioContext-clock) composes three wave-gated layers — sub pulse (A1 root + fifth, beats 1&3) → 4-voice triangle pad chords every 2 bars → pentatonic arp plucks (same PENTATONIC pool as the ricochet ladder, so one-shots always harmonize). `setMusicLevel` builds the arrangement with wave depth (waves 1-2 sub / 3-4 +pad / 5+ +arp, wired in `engine.onWaveStart`).
+- **Danger no longer swells a tone** — it DUCKS the music bus (floor 0.65×) and raises a hard-capped low tension bed (≤0.026, bandpassed noise). `setDanger` keeps its per-frame call site but quantizes+state-diffs internally (no-op unless the ¼-step changes).
+- **The biome/overdrive frequency tug-of-war is dead:** `setOverdrive(active)` no longer touches any oscillator frequency — it opens the music lowpass (800→2400 Hz) and lifts the arp an octave; only `setBiome` writes frequency (event-driven, one glide per change).
+- **Hygiene:** the silent zombie overdrive pad (4 saws at gain 0) deleted; every scheduled note auto-stops (zero accumulation); scheduler resyncs after tab-hidden throttling (no pileup/burst); music pauses on death/pause/abandon/tab-hide (`setMusicPaused`), cleared before `ctx.close()` in `dispose()`.
+- **Dead `waveStart` stinger wired in** — the ember route never called it; now each wave opens with a two-note triad that fits the arrangement.
+- **Verification receipts:** real-click begin → `ctx.state=running`, scheduler step advancing (8→14 in ~1.5s = 8ths @120BPM); live danger duck observed (`musicGain 0.800→0.734`, tension bed 0→0.0059 under a q=0.25 threat); forced `setOverdrive(true)` correctly reverts next frame (engine owns state, diffed setters hold).
+
+### Improved — graphics/UI: the death screen and HUD read like a shipped game
+- **Death panel recomposed** (`Overlays.tsx`) to the hierarchy law title > score > CTA > stats: THE EMBER FADES leads, FINAL SCORE captioned beneath, REKINDLE promoted above a tightened stat grid — was: 5xl score dwarfing the title with the CTA last. Evidence: `.qa/sprint14/14-death-panel.png` vs owner's screenshot.
+- **Duplicate score killed:** the top-center HUD score now hides on dead/reward (it used to peek from behind the death panel — visible in the owner's screenshot).
+- **Score lives in an engraved `.hs-panel` chip** (was bare text over the scene's brightest band — the Sprint-13 declared debt).
+- **Bottom HUD cannot overlap anymore:** EMBERS and SHARDS+DASH are one flex row (`inset-x-3 justify-between` — overlap impossible by construction, was 71px collision at 390px); overdrive meter lifts above the row on narrow screens (`bottom-16 sm:bottom-4`); room strip drops below the score chip on mobile (`top-14 sm:top-3`); pips shrink ≤420px. Evidence: `.qa/sprint14/14-mobile-run-v2.png` (390×844, zero collisions).
+- **Overlay scrim:** death/pause/shrine share `.hs-overlay-scrim` (warm obsidian radial wash + blur) so the world recedes instead of competing — replaces flat `bg-black/70` + weak blur.
+- **Damage numbers get obsidian backing plates** (`.hs-dmg-plate`) — digits no longer camouflage into sparks/projectiles (designer P2 item).
+
+### Improved — palette law (no blue/indigo residue)
+- `gridCold` 0x123236 ("cold teal") → 0x241a12 obsidian umber; GLASS HOLLOW grid 0x2a1236 (indigo-leaning) → 0x2a1612 warm; fog retinted to match. The whole grade now sits in the ember/obsidian family. Evidence: warm floor hexes across all `.qa/sprint14/` shots.
+
+### Gate receipts
+- `bunx tsc --noEmit` — PASS · `bun run lint` — PASS · `make qa` — simdrive PASS + afterglow 9/9 + forge PASS (audio changes are browser-only; headless harnesses untouched by design)
+- `__hollowsun.perf()` mid-run @390px: **70 draw calls / 72 peak** (ceiling 100) · 0 console errors, 0 page errors across title/run/death/mobile passes
+- Browser-verified: begin (real click → audio running) → combat HUD → forced layer/duck probes → death panel → mobile 390×844 — `.qa/sprint14/14-title.png`, `14-run-hud.png`, `14-combat-plates.png`, `14-death-panel.png`, `14-mobile-run.png`, `14-mobile-run-v2.png`
+
+### Known debt (declared, R3)
+- Off-screen foe pips + chain-payout count-up (designer P2 remainder) — Sprint 15
+- Biome arrival beat + per-biome music roots beyond the ratio glide (designer P3) — Sprint 15
+- Music arrangement is one fixed 2-bar loop per depth tier; longer forms (8-bar phrases, per-biome motifs) pending
+- First-60s scripted onboarding + 3D simdrive determinism digests remain from the Sprint-12 debt list

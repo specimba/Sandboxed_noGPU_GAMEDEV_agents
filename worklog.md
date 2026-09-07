@@ -709,3 +709,61 @@ Stage Summary:
 - Two new rare boons (EMBER ROT burn DoT, CHAINSPARK arc) verified by a new dedicated headless harness + determinism digests; make qa now runs 3 harnesses.
 - Fixed a latent repo defect: the pipeline Makefile was never make-runnable until this sprint.
 - Debt declared (R3): dedicated zap sfx, <420px HUD crowding, 3D simdrive determinism digests, first-60s storyboard.
+
+---
+Task ID: 14-a
+Agent: developer-audio-resonance
+Task: Sprint 14 "RESONANCE" audio audit + adaptive-music proposal (diagnosis/proposal only — zero source changes; owner complaint: "music is like a single frequency persistently increasing and getting irritating").
+
+Work Log:
+- Read worklog tail (Sprints 12-14) + audio.ts in full (393 lines) + engine.ts 160-360/444-471/600-660 + constants.ts PENTATONIC/OVERDRIVE. Verified every orchestrator fact with receipts (see report): drone = 3 saws 55/55.4/82.4Hz → lowpass 220 → gain 0.05 (audio.ts:130-171); setDanger per-frame swell 0.05→0.10 τ=0.4 (audio.ts:188-191, engine.ts:645); setOverdrive per-frame writes drone freqs toward hardcoded [55,55.4,82.4] τ=0.15 (audio.ts:180-184, engine.ts:637) vs setBiome's ratio roots τ=0.6 (audio.ts:74-82, engine.ts:265/191) — tug-of-war CONFIRMED, plus bonus finding: pad oscillators are pushed into droneOscs[] (audio.ts:169) and the overdrive pad (4 saws + bandpass 440) is a silent zombie layer.
+- VERDICT: root-cause analysis CORRECT. The "single persistently rising frequency" = 55Hz saw drone pinned near max gain for minutes at waves 7-9 (nearest/16 ≈ 1), with biome pitch changes instantly dragged back by the per-frame τ=0.15 overwrite → unstable drifting pitch. setTargetAtTime is re-armed every frame so gain never settles.
+- Designed RESONANCE music system (full spec in report): lookahead scheduler (setInterval 100ms, ≤400ms ahead, AudioContext clock, resync guard kills pileup + catch-up burst), 3 gated layers (sub pulse → pad chords → pentatonic arp) on state-diffed setMusicLevel, biome roots keep exact 1/1.26/1.5 ratios on the SUB only (A1→C#2→E2 ≈ semitone-true) while chords/arp stay in the A-minor/C-major-pentatonic pool shared with PENTATONIC one-shots (biome-1 C# bass under A-C-E = Am(maj7) color), danger = quantized duck (music 1.0→0.65× floor) + hard-capped tension bed (≤0.03, noise texture, zero frequency ramps), overdrive = filter open 800→2400Hz + arp octave lift on boolean change (drone freq writes DELETED — tug-of-war class of bug extinguished), setMusicPaused from pause/resume/abandon, dispose clears interval then closes ctx.
+- No files touched except this entry. Verified gates context: make qa = simdrive + simdrive-afterglow + simdrive-forge, all headless (no AudioContext) → zero sim risk; TS coupling = engine.ts:637 passes t01 → signature change must land in same commit.
+
+Stage Summary:
+- Root cause CONFIRMED with file:line receipts; one correction/addition: the pad layer is a silent zombie (4 saws in droneOscs) and setOverdrive's freq loop is the sole tug-of-war writer — delete both rather than patch.
+- Proposal: replace drone with scheduled adaptive music (sub/pad/arp gated by setMusicLevel), danger becomes quantized duck + capped tension (never a rising tone), overdrive acts on filter/octave only, all frequency writes change-driven. Engine diffs are ~7 one-liners (637 call-sight change, 645 untouched, setMusicLevel ×3 sites, setMusicPaused ×3 sites).
+- Risks: low. Only cross-file coupling is setOverdrive signature (same-commit edit); qa harnesses never touch audio; browser-only preserved (scheduler born in unlock() behind the window.AudioContext guard).
+- 6-step implementation order handed to orchestrator (audio bus+scheduler → composer → state-diffed setters → engine call sites → pause hooks → gates).
+
+---
+Task ID: 14-b
+Agent: designer-resonance
+Task: VISUAL PIVOT AUDIT & PROPOSAL (designer seat) — diagnose why HOLLOW SUN still doesn't read as "a real game" from the screenshots, deliver 3 ranked visual pivots + sprint pick. Diagnosis/proposal only; zero source or asset writes.
+
+Work Log:
+- Read worklog tail (sprints 12-13). EVIDENCE GAP: none of the declared sprint-13 receipts (.qa/sprint13-*.png, .qa/13b/) exist on disk — Glob/ls confirm; audit therefore ran on the surviving sprint-12 shots + the owner's screenshot + a fresh live session.
+- VLM art-director passes (glm-5v-turbo): owner shot upload/chrome_GmzNugSIbv.png (death panel over hex floor), .qa/sprint12-ember-run.png, -hit-a.png, -hit-b.png, -ember-title.png.
+- Live read-only session via agent-browser (browser closed after): title DOM OK (hs-title-scrim stack, BEGIN CTA); started a run to inspect the HUD. Facts: __hollowsun.perf() = 80 calls / peak 83 (budget <100 OK), 4 .hs-panel live; the top-center score is BARE text inside `flex items-center` with parent background rgba(0,0,0,0) (Hud.tsx:47-55) — declared debt confirmed live. At 390x844 the bottom row MEASURED overlaps: left panel x12-172, right panel x101-377, center w-48 element also at y≈790-827 — the <420px debt is a real collision, and globals.css has NO max-width media query at all (only prefers-reduced-motion).
+- Palette-law sweep in source: constants.ts:19/128 gridCold 0x123236 is teal ("cold teal" per its own comment) and biome-2 grid 0x2a1236 is indigo-leaning; VLM independently flagged a cool tint in floor hexes (sprint12-ember-hit-a.png). This is the only blue/indigo-family residue found.
+- Headless caveat recorded: in-session fps read ~9 (frameMs EMA ~88) — almost certainly SwiftShader software GL in the automation browser, NOT claimed as a device defect; recommend a GPU-browser perf receipt from orchestrator.
+- No files written except this entry; dev server untouched (HTTP reads only); browser closed.
+
+Stage Summary:
+- AUDIT, 5 strongest defects (with evidence): (1) death/pause panel hierarchy — score 28,380 out-shouts the title, CTA "REKINDLE" buried under a grey stat wall, panel floats over a razor-sharp hex floor with no scrim/blur, duplicate score top-center (owner screenshot). (2) Score readout is unpaneled bare text over the brightest band of the scene (live eval + Hud.tsx:47-55). (3) <420px bottom HUD clusters physically overlap (measured at 390px). (4) Combat legibility: no off-screen threat indicators (Task-14 backlog debt) and damage numbers can camouflage into sparks/projectiles (VLM on sprint12-ember-hit-a); biome arrivals are prop swaps with no arrival beat, so 3 biomes feel like one arena (sprint13-biome2 receipt missing; code shows only lerp). (5) Palette-law residue: gridCold teal + biome-2 indigo grid (constants.ts:19,128-130) — warm-family retune is a 2-line constants diff.
+- PROPOSALS (ranked): P1 "HUD debt payoff" (S/M, 0 draw calls): score into a compact .hs-panel, Overlays.tsx death panel recompose (title > score > CTA prominence, 2-col stat grid, backdrop-blur scrim), one ≤420px media query stacking the bottom row. P2 "Combat legibility kit" (M, +0 GPU calls via pooled DOM like damageNumbers.ts): edge-clamped off-screen foe pips (warm amber), .hs-dmg-plate backing for damage numbers, chain-payout count-up pulse. P3 "Biome arrival beat + palette cleanup" (M, +2-3 transient calls): 1.2s fog swell + center floor pulse ring + banner hold on setBiome; retune gridCold/biome-2 grid to ember/obsidian family (constants.ts only).
+- PICK for Sprint 14: PRIMARY = P1 (fixes the exact screen the owner screenshotted, zero perf risk, clears a measured mobile collision); SECONDARY = P2's pips + damage plates (the in-game game-feel legibility core). P3 rides next sprint; its 2-line constants retune may piggyback on any commit touching constants.ts.
+- 6-line order for P1: (1) globals.css: .hs-score-panel variant + @media (max-width:420px) bottom-row stack rule; (2) Hud.tsx: wrap score div (line ~46) in the panel, merge bottom-center cluster left on mobile; (3) Overlays.tsx: demote score size, lift REKINDLE above the stat grid, 2-col label/value rows; (4) globals.css: .hs-overlay-scrim (backdrop-filter blur + rgba(3,2,1,.72) wash, reduced-motion safe); (5) gates: tsc/lint + agent-browser re-measure overlap=0 at 390px + perf() ≤100 receipt; (6) CHANGELOG + .qa/14b screenshots per R2 (and regenerate missing sprint-13 receipts or mark them lost).
+---
+Task ID: 14-MINUTES (orchestrator)
+Agent: main orchestrator
+Task: Sprint 14 "RESONANCE" team meeting — audio bug fix + visual pivot; conclusions, agreement, implementation plan
+
+Work Log:
+- Owner feedback in: (1) audio bug — "music is like a single frequency persistently increasing and getting irritating I finally muted it"; (2) "our game still may need pivots about visuals... keep going development progression real one"; (3) process directive — orchestrate sub-agents properly; no agent changes whole things without orchestrator agreement; efficient meetings concluded with agreement + progress + implementation plan.
+- Orchestrator pre-work (facts, not guesses): repo clean at 5460d5f; complaint traced to src/game/audio.ts startDrone() — 3 sawtooths 55/55.4/82.4 Hz through lowpass 220 as the ONLY sustained "music"; engine.ts:645 setDanger() per frame swells droneGain 0.05→0.10, pinned at late waves (never resolves); engine.ts:637 setOverdrive() per frame writes drone frequencies back to hardcoded bases, fighting setBiome()'s ratio retune (τ0.15 vs τ0.6) — pitch tug-of-war. One-shot SFX good; mount graph clean (single AudioContext).
+- Meeting held with two READ-ONLY proposal agents (no code writes permitted):
+  - 14-a developer-audio-resonance: confirmed root cause with receipts; proposed adaptive music system (lookahead scheduler; wave-gated layers sub pulse → pad chords → pentatonic arp; biome ratio roots; danger = capped tension bed + music duck, never a rising tone; overdrive = filter open + arp octave; state-diffed setters; scheduler cleared on dispose; zombie silent pad deleted).
+  - 14-b designer-resonance: audited owner screenshot + live HUD (measured 71px overlap at 390px; score unpaneled; death panel hierarchy inverted); ranked P1 HUD debt payoff / P2 combat legibility / P3 biome arrival beat + palette cleanup.
+
+AGREEMENT (orchestrator sign-off — this is the implementation contract):
+- APPROVED (14-a, full): audio.ts music rewrite + engine.ts diff points; setOverdrive signature drops t01 — must land in the same commit.
+- APPROVED (14-b P1): Hud.tsx score into .hs-panel + hide duplicate top score on dead/reward; Overlays.tsx death panel recomposed title > score > CTA > stats; .hs-overlay-scrim on death/pause/reward; bottom HUD as flex row (overlap impossible by construction) + ≤420px pip shrink.
+- APPROVED (14-b P2, partial): .hs-dmg-plate backing behind damage numbers. Off-screen pips + payout count-up → Sprint 15.
+- APPROVED (piggyback): constants.ts gridCold 0x123236 (teal) and biome-2 grid 0x2a1236 (indigo-leaning) → ember/obsidian family per palette law.
+- DEFERRED: P3 biome arrival beat, off-screen pips, payout burst — Sprint 15 candidates.
+- Implementation authority: orchestrator holds the pen this sprint.
+
+Stage Summary:
+- Sprint 14 "RESONANCE" plan locked: adaptive music replaces the buzzing drone (owner's #1 complaint), HUD hierarchy fixed on the exact screen the owner screenshotted, palette-law residue cleaned. Next: implement → QA contract → changelog with evidence.

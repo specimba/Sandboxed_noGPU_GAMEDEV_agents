@@ -2,20 +2,65 @@ import { PENTATONIC } from './constants';
 
 /**
  * HOLLOW SUN audio — 100% synthesized WebAudio, zero assets.
- * The signature: ricochet chains climb a pentatonic ladder, one note per
- * bounce, so every good throw plays a melody.
+ *
+ * SPRINT 14 "RESONANCE": the static saw drone is dead (it was the owner's
+ * "single frequency persistently increasing" — a 55 Hz buzz whose gain was
+ * swollen per-frame by setDanger and whose pitch was tugged between
+ * setBiome and setOverdrive). Music is now a lookahead-scheduled adaptive
+ * layer: sub pulse → pad chords → pentatonic arp, gated by wave depth,
+ * re-tinted per biome, DUCKING under danger behind a hard-capped tension
+ * bed, and opening its filter in Overdrive. One-shot SFX keep their voice.
+ *
+ * Laws:
+ *  - every sustained frequency write happens in setBiome ONLY (event-driven);
+ *  - setters called per-frame are state-diffed (no per-frame automation);
+ *  - every scheduled note auto-stops — zero node accumulation;
+ *  - the scheduler resyncs after tab-hidden throttling (no pileup, no burst).
  */
+
+const STEP_DUR = 0.25; // 8th notes @ 120 BPM
+const LOOKAHEAD = 0.4; // seconds of music scheduled ahead of the clock
+const SCHED_MS = 100; // scheduler tick
+const MUSIC_BASE = 0.8; // music bus gain (danger only ever ducks below this)
+const FILTER_BASE = 800; // music lowpass when calm
+const FILTER_OPEN = 2400; // music lowpass in overdrive
+const TENSION_CAP = 0.026; // hard ceiling for the danger bed — texture, not tone
+const SUB_ROOT = 55;
+const BIOME_RATIOS = [1, 1.26, 1.5];
+
+/** pad chords per biome — all A-minor family so one-shots stay consonant */
+const PAD_CHORDS: number[][] = [
+  [110, 130.81, 164.81, 196], // Am7
+  [110, 138.59, 164.81, 196], // Am(maj7) — the C# bittersweet tint
+  [110, 130.81, 164.81, 220], // Am7 + A3 sparkle
+];
+
+/** arp pool — the same pentatonic family as ricochet/moteTick/shardGain */
+const ARP_POOL = PENTATONIC.slice(0, 8);
 
 export class AudioEngine {
   private ctx: AudioContext | null = null;
   private master: GainNode | null = null;
-  private droneGain: GainNode | null = null;
-  private droneOscs: OscillatorNode[] = [];
-  private padGain: GainNode | null = null;
   private muted = false;
   private noiseBuf: AudioBuffer | null = null;
   private lastGrazeT = 0;
   private lastMoteT = -10;
+
+  /* music bus + scheduler state */
+  private musicGain: GainNode | null = null;
+  private musicFilter: BiquadFilterNode | null = null;
+  private subGain: GainNode | null = null;
+  private subOscs: OscillatorNode[] = [];
+  private tensionGain: GainNode | null = null;
+  private tensionSrc: AudioBufferSourceNode | null = null;
+  private schedTimer: number | null = null;
+  private nextNoteTime = 0;
+  private step = 0;
+  private biome = 0;
+  private musicLevel = 0;
+  private dangerQ = -1;
+  private odOn = false;
+  private musicPaused = false;
 
   get ready(): boolean {
     return this.ctx !== null && this.ctx.state === 'running';
@@ -42,7 +87,7 @@ export class AudioEngine {
       const data = this.noiseBuf.getChannelData(0);
       for (let i = 0; i < len; i++) data[i] = Math.random() * 2 - 1;
 
-      this.startDrone();
+      this.startMusic();
     }
     if (this.ctx.state === 'suspended') void this.ctx.resume();
   }
@@ -55,31 +100,224 @@ export class AudioEngine {
   }
 
   dispose(): void {
-    for (const o of this.droneOscs) {
+    if (this.schedTimer !== null) {
+      clearInterval(this.schedTimer);
+      this.schedTimer = null;
+    }
+    for (const o of this.subOscs) {
       try {
         o.stop();
       } catch {
         /* already stopped */
       }
     }
-    this.droneOscs = [];
+    this.subOscs = [];
+    try {
+      this.tensionSrc?.stop();
+    } catch {
+      /* already stopped */
+    }
+    this.tensionSrc = null;
     if (this.ctx) {
       void this.ctx.close();
       this.ctx = null;
       this.master = null;
+      this.musicGain = null;
+      this.musicFilter = null;
+      this.subGain = null;
+      this.tensionGain = null;
     }
   }
 
-  /* biome drone root: A1 → C#2 → E2 */
+  /* ---------------------------------------------------------------- */
+  /* adaptive music                                                    */
+  /* ---------------------------------------------------------------- */
+
+  /** biome drone root: A1 → C#2 → E2 — the ONLY place sub frequencies move */
   setBiome(b: number): void {
     if (!this.ctx) return;
-    const ratios = [1, 1.26, 1.5];
-    const r = ratios[Math.min(ratios.length - 1, Math.max(0, b))];
-    const bases = [55, 55.4, 82.4];
-    for (let i = 0; i < 3 && i < this.droneOscs.length; i++) {
-      this.droneOscs[i].frequency.setTargetAtTime(bases[i] * r, this.ctx.currentTime, 0.6);
+    const nb = Math.min(BIOME_RATIOS.length - 1, Math.max(0, b));
+    if (nb === this.biome) return; // state-diff: one glide per real change
+    this.biome = nb;
+    const r = BIOME_RATIOS[nb];
+    const bases = [SUB_ROOT, SUB_ROOT * 1.5];
+    for (let i = 0; i < 2 && i < this.subOscs.length; i++) {
+      this.subOscs[i].frequency.setTargetAtTime(bases[i] * r, this.ctx.currentTime, 0.3);
     }
   }
+
+  /** wave depth gate: 0 = sub only · 1 = +pad chords · 2 = +arp plucks */
+  setMusicLevel(n: number): void {
+    const nl = Math.min(2, Math.max(0, Math.round(n)));
+    if (nl === this.musicLevel) return;
+    this.musicLevel = nl;
+  }
+
+  /** pause/resume the scheduler (death, menus, tab-hidden) — no fading notes */
+  setMusicPaused(p: boolean): void {
+    if (p === this.musicPaused) return;
+    this.musicPaused = p;
+    if (!p && this.ctx) {
+      this.nextNoteTime = Math.max(this.nextNoteTime, this.ctx.currentTime + 0.05);
+    }
+  }
+
+  /**
+   * DANGER — replaces the old endless swell. Quantized + state-diffed so the
+   * per-frame engine call costs ~nothing when unchanged. Danger DUCKS the
+   * music (floor 0.65×) and raises a hard-capped low tension bed. No
+   * frequency automation, ever.
+   */
+  setDanger(level: number): void {
+    if (!this.ctx || !this.musicGain || !this.tensionGain) return;
+    const q = Math.round(Math.min(1, Math.max(0, level)) * 4) / 4;
+    if (q === this.dangerQ) return;
+    this.dangerQ = q;
+    const t = this.ctx.currentTime;
+    this.musicGain.gain.setTargetAtTime(MUSIC_BASE * (1 - q * 0.35), t, 0.5);
+    this.tensionGain.gain.setTargetAtTime(TENSION_CAP * q, t, 0.6);
+  }
+
+  /** OVERDRIVE — opens the music filter + lifts the arp an octave. It no
+   *  longer touches any oscillator frequency (the old biome tug-of-war). */
+  setOverdrive(active: boolean): void {
+    if (!this.ctx || !this.musicFilter) return;
+    if (active === this.odOn) return;
+    this.odOn = active;
+    this.musicFilter.frequency.setTargetAtTime(active ? FILTER_OPEN : FILTER_BASE, this.ctx.currentTime, 0.25);
+  }
+
+  /** music bus: subOscs + scheduled pad/arp → lowpass → musicGain → master */
+  private startMusic(): void {
+    if (!this.ctx || !this.master) return;
+
+    this.musicFilter = this.ctx.createBiquadFilter();
+    this.musicFilter.type = 'lowpass';
+    this.musicFilter.frequency.value = FILTER_BASE;
+    this.musicFilter.Q.value = 0.7;
+
+    this.musicGain = this.ctx.createGain();
+    this.musicGain.gain.value = MUSIC_BASE;
+
+    this.musicFilter.connect(this.musicGain);
+    this.musicGain.connect(this.master);
+
+    // persistent sub pair — silent between pulses (envelope lives on subGain)
+    this.subGain = this.ctx.createGain();
+    this.subGain.gain.value = 0.0001;
+    this.subGain.connect(this.musicFilter);
+    for (const [freq, type] of [
+      [SUB_ROOT, 'sine'],
+      [SUB_ROOT * 1.5, 'triangle'],
+    ] as const) {
+      const o = this.ctx.createOscillator();
+      o.type = type;
+      o.frequency.value = freq;
+      o.connect(this.subGain);
+      o.start();
+      this.subOscs.push(o);
+    }
+
+    // danger tension bed — looped noise, silent until setDanger raises it
+    if (this.noiseBuf) {
+      this.tensionGain = this.ctx.createGain();
+      this.tensionGain.gain.value = 0;
+      const bp = this.ctx.createBiquadFilter();
+      bp.type = 'bandpass';
+      bp.frequency.value = 200;
+      bp.Q.value = 0.8;
+      const src = this.ctx.createBufferSource();
+      src.buffer = this.noiseBuf;
+      src.loop = true;
+      src.connect(bp);
+      bp.connect(this.tensionGain);
+      this.tensionGain.connect(this.master);
+      src.start();
+      this.tensionSrc = src;
+    }
+
+    // lookahead scheduler — resync guard makes tab-throttling harmless
+    this.nextNoteTime = this.ctx.currentTime + 0.1;
+    this.schedTimer = window.setInterval(() => this.schedule(), SCHED_MS);
+  }
+
+  private schedule(): void {
+    if (!this.ctx || this.musicPaused) return;
+    const ct = this.ctx.currentTime;
+    if (this.nextNoteTime < ct) this.nextNoteTime = ct + 0.05; // resync, no pileup
+    while (this.nextNoteTime < ct + LOOKAHEAD) {
+      this.scheduleStep(this.step, this.nextNoteTime);
+      this.nextNoteTime += STEP_DUR;
+      this.step++;
+    }
+  }
+
+  /** the composer — reads only state fields, schedules auto-stopping notes */
+  private scheduleStep(step: number, t: number): void {
+    const inBar = step % 8;
+    const bar = Math.floor(step / 8);
+
+    // sub pulse — beats 1 & 3
+    if (inBar === 0 || inBar === 4) this.pulseSub(t);
+
+    // pad chord — every 2 bars once waves deepen
+    if (this.musicLevel >= 1 && step % 16 === 0) this.pulsePad(t);
+
+    // pentatonic arp — 8th-note plucks at full depth
+    if (this.musicLevel >= 2) {
+      const idx = (step * 5 + bar * 3) % ARP_POOL.length;
+      const note = this.odOn && step % 2 === 1 ? ARP_POOL[idx] * 2 : ARP_POOL[idx];
+      this.pluck(note, t);
+    }
+  }
+
+  private pulseSub(t: number): void {
+    if (!this.ctx || !this.subGain) return;
+    const dur = STEP_DUR * 1.6;
+    const g = this.subGain.gain;
+    g.setValueAtTime(0.0001, t);
+    g.linearRampToValueAtTime(0.22, t + 0.02);
+    g.exponentialRampToValueAtTime(0.0001, t + dur);
+  }
+
+  private pulsePad(t: number): void {
+    if (!this.ctx || !this.musicFilter) return;
+    const dur = STEP_DUR * 16; // 2 bars
+    const chord = PAD_CHORDS[this.biome];
+    for (const f of chord) {
+      const o = this.ctx.createOscillator();
+      o.type = 'triangle';
+      o.frequency.value = f;
+      const g = this.ctx.createGain();
+      g.gain.setValueAtTime(0, t);
+      g.gain.linearRampToValueAtTime(0.035, t + 1.1);
+      g.gain.setValueAtTime(0.035, t + dur - 0.9);
+      g.gain.exponentialRampToValueAtTime(0.0008, t + dur);
+      o.connect(g);
+      g.connect(this.musicFilter);
+      o.start(t);
+      o.stop(t + dur + 0.05);
+    }
+  }
+
+  private pluck(note: number, t: number): void {
+    if (!this.ctx || !this.musicFilter) return;
+    const o = this.ctx.createOscillator();
+    o.type = 'triangle';
+    o.frequency.value = note;
+    const g = this.ctx.createGain();
+    g.gain.setValueAtTime(0, t);
+    g.gain.linearRampToValueAtTime(0.07, t + 0.015);
+    g.gain.exponentialRampToValueAtTime(0.0008, t + 0.34);
+    o.connect(g);
+    g.connect(this.musicFilter);
+    o.start(t);
+    o.stop(t + 0.4);
+  }
+
+  /* ---------------------------------------------------------------- */
+  /* stingers + one-shots                                              */
+  /* ---------------------------------------------------------------- */
 
   recall(): void {
     this.noise(0.18, 0.12, 'bandpass', 2600, 900);
@@ -121,73 +359,6 @@ export class AudioEngine {
     this.tone(523.25, 0.3, 'triangle', 0.12);
     this.tone(659.26, 0.4, 'triangle', 0.1, undefined, 0.1);
     this.tone(783.99, 0.5, 'triangle', 0.08, undefined, 0.2);
-  }
-
-  /* ---------------------------------------------------------------- */
-  /* ambience                                                          */
-  /* ---------------------------------------------------------------- */
-
-  private startDrone(): void {
-    if (!this.ctx || !this.master) return;
-    this.droneGain = this.ctx.createGain();
-    this.droneGain.gain.value = 0.05;
-    const filter = this.ctx.createBiquadFilter();
-    filter.type = 'lowpass';
-    filter.frequency.value = 220;
-    this.droneGain.connect(filter);
-    filter.connect(this.master);
-    for (const [freq, detune] of [
-      [55, 0],
-      [55.4, 4],
-      [82.4, -6],
-    ] as const) {
-      const o = this.ctx.createOscillator();
-      o.type = 'sawtooth';
-      o.frequency.value = freq;
-      o.detune.value = detune;
-      o.connect(this.droneGain);
-      o.start();
-      this.droneOscs.push(o);
-    }
-
-    // overdrive pad — silent until enabled
-    this.padGain = this.ctx.createGain();
-    this.padGain.gain.value = 0;
-    const padFilter = this.ctx.createBiquadFilter();
-    padFilter.type = 'bandpass';
-    padFilter.frequency.value = 440;
-    padFilter.Q.value = 1.4;
-    this.padGain.connect(padFilter);
-    padFilter.connect(this.master);
-    for (const freq of [110, 164.8, 220, 329.6]) {
-      const o = this.ctx!.createOscillator();
-      o.type = 'sawtooth';
-      o.frequency.value = freq;
-      o.detune.value = (Math.random() - 0.5) * 12;
-      o.connect(this.padGain);
-      o.start();
-      this.droneOscs.push(o);
-    }
-  }
-
-  setOverdrive(active: boolean, t01: number): void {
-    if (!this.ctx || !this.padGain) return;
-    const target = active ? 0.055 : 0;
-    this.padGain.gain.setTargetAtTime(target * (1 - t01 * 0.4), this.ctx.currentTime, active ? 0.08 : 0.3);
-    // world slowed: pitch the ambience down
-    if (this.droneGain) {
-      // detune via playbackRate is not on osc; nudge frequency instead
-      for (let i = 0; i < 3; i++) {
-        const o = this.droneOscs[i];
-        const base = [55, 55.4, 82.4][i];
-        o.frequency.setTargetAtTime(active ? base * 0.72 : base, this.ctx.currentTime, 0.15);
-      }
-    }
-  }
-
-  setDanger(level: number): void {
-    if (!this.ctx || !this.droneGain) return;
-    this.droneGain.gain.setTargetAtTime(0.05 + level * 0.05, this.ctx.currentTime, 0.4);
   }
 
   heartbeat(): void {
@@ -241,9 +412,9 @@ export class AudioEngine {
 
   ricochet(bounceIndex: number): void {
     const note = PENTATONIC[Math.min(PENTATONIC.length - 1, bounceIndex)];
-    this.tone(note, 0.34, 'triangle', 0.30);
+    this.tone(note, 0.34, 'triangle', 0.3);
     this.tone(note * 2, 0.18, 'sine', 0.12);
-    this.noise(0.06, 0.10, 'highpass', 3200);
+    this.noise(0.06, 0.1, 'highpass', 3200);
   }
 
   throwShard(): void {

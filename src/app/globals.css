@@ -494,3 +494,29 @@ main button:focus-visible {
 @media (prefers-reduced-motion: reduce) {
   .ag-hurt, .ag-lowhp, .ag-drawline, .ag-banner-word { animation: none; }
 }
+
+/* — SPRINT 14 "RESONANCE" ————————————————————————————————————————— */
+
+/* overlay scrim: warm obsidian wash + blur so the world recedes behind
+   the death / pause / shrine panels (replaces flat bg-black + weak blur) */
+.hs-overlay-scrim {
+  background: radial-gradient(120% 90% at 50% 44%, rgba(3, 2, 1, 0.55) 0%, rgba(3, 2, 1, 0.82) 100%);
+  backdrop-filter: blur(7px) saturate(0.8);
+  -webkit-backdrop-filter: blur(7px) saturate(0.8);
+}
+
+/* damage-number backing plate: obsidian chip so digits never camouflage
+   into sparks or projectiles */
+.hs-dmg-plate {
+  background: rgba(3, 2, 1, 0.62);
+  border: 1px solid rgba(255, 196, 120, 0.14);
+  border-radius: 2px;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.5);
+}
+
+/* ≤420px: tighten HUD density — pips shrink so the bottom flex row and
+   overdrive cluster stay clear of each other and of the thumb zones */
+@media (max-width: 420px) {
+  .hs-pip { width: 9px; height: 9px; }
+  .hs-pip--sm { width: 7px; height: 7px; }
+}

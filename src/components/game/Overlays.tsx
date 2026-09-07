@@ -36,7 +36,7 @@ export default function Overlays() {
 
   if (phase === 'reward') {
     return (
-      <div className="absolute inset-0 z-30 flex items-center justify-center bg-black/70 px-4 backdrop-blur-[2px]">
+      <div className="hs-overlay-scrim absolute inset-0 z-30 flex items-center justify-center px-4">
         <div className="flex w-full max-w-3xl flex-col items-center gap-5">
           {/* header between hairlines */}
           <div className="flex w-full items-center gap-4">
@@ -94,7 +94,7 @@ export default function Overlays() {
 
   if (phase === 'paused') {
     return (
-      <div className="absolute inset-0 z-30 flex items-center justify-center bg-black/60 px-4 backdrop-blur-[2px]">
+      <div className="hs-overlay-scrim absolute inset-0 z-30 flex items-center justify-center px-4">
         <div className="hs-frame hs-panel flex w-full max-w-xs flex-col items-center p-6 text-center">
           <span aria-hidden="true" className="hs-c" />
           <h2 className="hs-tracking text-lg text-[#f2e6cf] sm:text-xl">THE EMBER RESTS</h2>
@@ -137,47 +137,26 @@ export default function Overlays() {
   if (phase === 'dead') {
     const isBest = score >= best && score > 0;
     return (
-      <div className="absolute inset-0 z-30 flex items-center justify-center bg-black/70 px-4 backdrop-blur-[2px]">
+      <div className="hs-overlay-scrim absolute inset-0 z-30 flex items-center justify-center px-4">
         <div className="hs-frame hs-panel flex w-full max-w-sm flex-col items-center px-6 py-8 text-center sm:px-8">
           <span aria-hidden="true" className="hs-c" />
+          {/* hierarchy law: title > score > CTA > stats (was: giant score
+              shouting down the title while REKINDLE drowned under the wall) */}
           <h2
             className={`hs-tracking text-2xl font-bold sm:text-3xl ${won ? 'text-[#ffc766]' : 'text-[#ff5a4a]'}`}
           >
             {won ? 'THE SUN REKINDLES' : 'THE EMBER FADES'}
           </h2>
-          <span aria-hidden="true" className="hs-hairline my-5 w-full" />
+          <span aria-hidden="true" className="hs-hairline my-4 w-full" />
+          <span className="hs-tracking text-[9px] text-[#f2e6cf]/45">FINAL SCORE</span>
           <div
-            className="text-4xl font-bold tabular-nums text-[#f2e6cf] sm:text-5xl"
+            className="mt-1 text-3xl font-bold tabular-nums text-[#f2e6cf] sm:text-4xl"
             style={{ textShadow: '0 0 8px rgba(255,190,90,0.3)' }}
           >
             {score.toLocaleString()}
           </div>
-          <div className="mt-5 flex w-full flex-col text-left">
-            <div className="flex items-baseline justify-between border-b border-[rgba(255,196,120,0.12)] py-2">
-              <span className="hs-tracking text-[9px] text-[#f2e6cf]/45">WAVE REACHED</span>
-              <span className="text-xs tabular-nums text-[#f2e6cf]/85">{wave}</span>
-            </div>
-            <div className="flex items-baseline justify-between border-b border-[rgba(255,196,120,0.12)] py-2">
-              <span className="hs-tracking text-[9px] text-[#f2e6cf]/45">BRIGHTEST EMBER</span>
-              <span className="text-xs tabular-nums text-[#f2e6cf]/85">
-                {best.toLocaleString()} · WAVE {bestWave}
-              </span>
-            </div>
-            {seed > 0 && (
-              <div className="flex items-baseline justify-between border-b border-[rgba(255,196,120,0.12)] py-2">
-                <span className="hs-tracking text-[9px] text-[#f2e6cf]/45">SEED</span>
-                <span className="text-xs tabular-nums text-[#f2e6cf]/60">{seed}</span>
-              </div>
-            )}
-            <div className="flex items-baseline justify-between py-2">
-              <span className="hs-tracking text-[9px] text-[#f2e6cf]/45">DAWN EMBERS</span>
-              <span className="hs-tracking text-[10px] text-[#ffc766]">
-                +{dawnEarned} · {dawn.toLocaleString()} BANKED
-              </span>
-            </div>
-          </div>
           {isBest && !won && (
-            <span className="hs-pulse hs-tracking mt-1 text-xs text-[#ffc766]">★ BRIGHTEST EMBER YET ★</span>
+            <span className="hs-pulse hs-tracking mt-1.5 text-xs text-[#ffc766]">★ BRIGHTEST EMBER YET ★</span>
           )}
           <button
             type="button"
@@ -187,6 +166,30 @@ export default function Overlays() {
             <span aria-hidden="true" className="hs-c" />
             {won ? 'REKINDLE AGAIN' : 'REKINDLE'}
           </button>
+          <div className="mt-5 grid w-full grid-cols-1 gap-y-2.5 text-left">
+            <div className="flex items-baseline justify-between border-b border-[rgba(255,196,120,0.12)] pb-2">
+              <span className="hs-tracking text-[9px] text-[#f2e6cf]/45">WAVE REACHED</span>
+              <span className="text-xs tabular-nums text-[#f2e6cf]/85">{wave}</span>
+            </div>
+            <div className="flex items-baseline justify-between border-b border-[rgba(255,196,120,0.12)] pb-2">
+              <span className="hs-tracking text-[9px] text-[#f2e6cf]/45">BRIGHTEST EMBER</span>
+              <span className="text-xs tabular-nums text-[#f2e6cf]/85">
+                {best.toLocaleString()} · WAVE {bestWave}
+              </span>
+            </div>
+            {seed > 0 && (
+              <div className="flex items-baseline justify-between border-b border-[rgba(255,196,120,0.12)] pb-2">
+                <span className="hs-tracking text-[9px] text-[#f2e6cf]/45">SEED</span>
+                <span className="text-xs tabular-nums text-[#f2e6cf]/60">{seed}</span>
+              </div>
+            )}
+            <div className="flex items-baseline justify-between">
+              <span className="hs-tracking text-[9px] text-[#f2e6cf]/45">DAWN EMBERS</span>
+              <span className="hs-tracking text-[10px] text-[#ffc766]">
+                +{dawnEarned} · {dawn.toLocaleString()} BANKED
+              </span>
+            </div>
+          </div>
           <p className="hs-tracking mt-4 text-[9px] text-[#f2e6cf]/30">
             ENTER — REKINDLE · SPEND DAWN AT THE SHRINE
           </p>
