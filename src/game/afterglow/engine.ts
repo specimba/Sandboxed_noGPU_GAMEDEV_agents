@@ -8,8 +8,11 @@ import { AfterglowView } from './view';
 import { ParticlePool, RingPool } from '../fx';
 import { CameraRig } from './cameraRig';
 import { Input } from './input';
+import { ARENA_RADIUS } from './constants';
 import { Sim, type AfterglowEvents } from './sim';
 import { useAfterglowStore } from './store';
+import { AfterglowAudio } from './audio';
+import { DamageNumbers } from './damageNumbers';
 
 /**
  * AFTERGLOW engine — fixed-timestep orchestrator for the new sim.
@@ -57,8 +60,10 @@ const EMBER_C = new THREE.Color(0xffe9bd);
 const FOE_C = new THREE.Color(0xff7a4a);
 const HOT_C = new THREE.Color(0xff5a2d);
 const BOLT_C = new THREE.Color(0xffd98f);
+const EMBER_UP_C = new THREE.Color(0xffb454);
+const SMOKE_C = new THREE.Color(0x241410);
 
-const BURST: Record<string, number> = { wisp: 40, husk: 90, cinder: 28 };
+const BURST: Record<string, number> = { wisp: 40, husk: 120, cinder: 28 };
 
 export class AfterglowEngine {
   readonly renderer: THREE.WebGLRenderer;
@@ -66,11 +71,14 @@ export class AfterglowEngine {
   readonly camera: THREE.PerspectiveCamera;
   private composer: EffectComposer;
   private fx: ParticlePool;
+  private smoke: ParticlePool;
   private rings: RingPool;
   private view: AfterglowView;
   private rig = new CameraRig();
   private input: Input;
   private sim: Sim;
+  private audio: AfterglowAudio;
+  private damage: DamageNumbers;
   private store = useAfterglowStore;
 
   private raf = 0;
@@ -82,8 +90,10 @@ export class AfterglowEngine {
   private prevPZ = 0;
   private velX = 0;
   private velZ = 0;
-  private emberT = 0;
   private disposed = false;
+  // engine-side hit-stop: view/engine-owned time dilation (14-b spec)
+  private hitStopT = 0;
+  private hitStopCd = 0;
 
   constructor(canvas: HTMLCanvasElement) {
     // eslint-disable-next-line @typescript-eslint/no-this-alias
@@ -93,11 +103,12 @@ export class AfterglowEngine {
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
     this.renderer.setSize(window.innerWidth, window.innerHeight, false);
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.05;
+    this.renderer.toneMappingExposure = 0.95;
 
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color(0x070403);
-    this.scene.fog = new THREE.FogExp2(0x070403, 0.014);
+    // warm smoke haze — slightly lifted so silhouettes read off the void
+    this.scene.fog = new THREE.FogExp2(0x120906, 0.011);
 
     this.camera = new THREE.PerspectiveCamera(52, window.innerWidth / window.innerHeight, 0.1, 220);
     this.camera.position.set(0, 20, 24);
@@ -105,16 +116,21 @@ export class AfterglowEngine {
     // post: restrained bloom over the ember palette IS the look here
     this.composer = new EffectComposer(this.renderer);
     this.composer.addPass(new RenderPass(this.scene, this.camera));
-    this.composer.addPass(new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 0.55, 0.55, 0.55));
+    this.composer.addPass(new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 0.8, 0.38, 0.62));
     this.composer.addPass(new OutputPass());
 
     this.fx = new ParticlePool(this.scene, 2048);
+    // dark smoke puffs (husk deaths) — NormalBlending, the second pool tone
+    this.smoke = new ParticlePool(this.scene, 256, { blending: THREE.NormalBlending });
     this.rings = new RingPool(this.scene, 14, 0xffb454);
-    this.view = new AfterglowView(this.scene, this.fx);
+    this.view = new AfterglowView(this.scene, this.fx, this.rings);
     this.input = new Input();
 
     this.sim = new Sim(this.makeSeed(), this.makeEvents());
     this.view.syncPillars(this.sim);
+    this.audio = new AfterglowAudio();
+    this.audio.attach(this.sim);
+    this.damage = new DamageNumbers();
 
     this.store.getState().set({
       phase: 'title',
@@ -154,6 +170,7 @@ export class AfterglowEngine {
   begin(): void {
     const p = this.store.getState().phase;
     if (p !== 'title' && p !== 'dead') return;
+    this.audio.unlock(); // gesture law: first click creates/resumes audio ctx
     this.startRun();
   }
 
@@ -182,6 +199,12 @@ export class AfterglowEngine {
   toggleMute(): void {
     const m = !this.store.getState().muted;
     this.store.getState().set({ muted: m });
+    this.audio.setMuted(m);
+  }
+
+  /** draft card hover blip (rate-limited inside the audio adapter) */
+  draftHover(): void {
+    this.audio.hover();
   }
 
   dispose(): void {
@@ -191,7 +214,10 @@ export class AfterglowEngine {
     window.removeEventListener('resize', this.onResize);
     this.input.dispose();
     this.view.dispose();
+    this.audio.dispose();
+    this.damage.dispose();
     this.fx.dispose();
+    this.smoke.dispose();
     this.rings.dispose();
     this.composer.dispose();
     this.renderer.dispose();
@@ -208,6 +234,7 @@ export class AfterglowEngine {
   private startRun(): void {
     // fresh sim = fresh seed = fresh pillar layout (deterministic per seed)
     this.sim = new Sim(this.makeSeed(), this.makeEvents());
+    this.audio.attach(this.sim); // BEFORE start() so wave-1 start chime fires
     this.sim.start();
     this.view.syncPillars(this.sim);
     this.prevPX = this.sim.player.x;
@@ -241,17 +268,46 @@ export class AfterglowEngine {
 
   private makeEvents(): AfterglowEvents {
     return {
+      onFoeHurt: (kind, x, z, dmg, src) => {
+        // damage numbers on discrete hits; burn DoT ticks are filtered out
+        // (they'd strobe every frame) — view-side only, sim untouched
+        if (src !== 'burn') this.damage.spawn(x, z, dmg, src === 'chain');
+        void kind;
+      },
       onFoeDie: (kind, x, z) => {
+        // engine-side hit-stop on every kill — husks land harder
+        this.tryHitStop(kind === 'husk' ? 0.11 : 0.07);
         this.fx.burst(x, z, BURST[kind] ?? 40, kind === 'husk' ? 16 : 12, {
           color: FOE_C,
           life: 0.8,
           size: 0.5,
           up: 0.3,
         });
+        if (kind === 'husk') {
+          // dark smoke puffs — the wedge brute dies heavy
+          this.smoke.burst(x, z, 5, 2.2, { color: SMOKE_C, life: 1.4, size: 1.7, up: 0.9, drag: 1.0 });
+        } else {
+          // wisp/cinder: ember column rising out of the kill
+          for (let i = 0; i < 12; i++) {
+            this.fx.spawn(x, 0.7 + Math.random() * 0.5, z, (Math.random() - 0.5) * 1.1, 2.5 * (0.6 + Math.random() * 0.7), (Math.random() - 0.5) * 1.1, {
+              life: 0.75,
+              size: 0.45,
+              color: EMBER_UP_C,
+              drag: 0.7,
+            });
+          }
+        }
         this.rings.fire(x, z, kind === 'husk' ? 6 : 3.4, 0.45, 0xff8a5c);
         this.pushHud();
       },
       onHurt: (x, z, hp) => {
+        // husk charge connecting — the heaviest hit-stop in the game
+        for (const f of this.sim.foes) {
+          if ((f.state === 'windup' || f.state === 'charge') && Math.hypot(f.x - x, f.z - z) < 4) {
+            this.tryHitStop(0.12);
+            break;
+          }
+        }
         this.rig.addShake(0.5);
         this.view.flashHurt();
         this.fx.burst(x, z, 60, 14, { color: HOT_C, life: 0.6, size: 0.55, up: 0.3 });
@@ -267,6 +323,8 @@ export class AfterglowEngine {
       },
       onWaveClear: (n) => {
         this.store.getState().pushToast(`WAVE ${n} CLEARED`, 'gold');
+        // kindle ring sweeping from the player — the arena exhales
+        this.rings.fire(this.sim.player.x, this.sim.player.z, ARENA_RADIUS * 0.4, 1.2, 0xffb454);
       },
       onDraftOffer: (_n, choices) => {
         this.store.getState().set({ offers: [...choices] });
@@ -319,6 +377,13 @@ export class AfterglowEngine {
   /* main loop                                                         */
   /* ---------------------------------------------------------------- */
 
+  /** engine-side hit-stop with a 150ms retrigger cooldown */
+  private tryHitStop(seconds: number): void {
+    if (this.hitStopCd > 0) return;
+    this.hitStopT = seconds;
+    this.hitStopCd = 0.15;
+  }
+
   private frame = (now: number): void => {
     if (this.disposed) return;
     this.raf = requestAnimationFrame(this.frame);
@@ -332,6 +397,7 @@ export class AfterglowEngine {
       this.rig.update(dtReal, this.camera, 0, 0, 0, 0, false);
       this.view.sync(this.sim, dtReal);
       this.fx.update(dtReal);
+      this.smoke.update(dtReal);
       this.rings.update(dtReal);
       this.render();
       return;
@@ -340,7 +406,10 @@ export class AfterglowEngine {
     if (phase === 'dead') {
       this.rig.update(dtReal, this.camera, this.sim.player.x, this.sim.player.z, 0, 0, false);
       this.view.sync(this.sim, dtReal);
+      this.audio.update(this.sim); // keeps danger drone decaying after death
+      this.damage.update(this.camera, dtReal);
       this.fx.update(dtReal);
+      this.smoke.update(dtReal);
       this.rings.update(dtReal);
       this.render();
       return;
@@ -351,8 +420,16 @@ export class AfterglowEngine {
     if (this.input.consumeDash()) this.sim.requestDash();
     this.sim.setMove(this.input.moveX, -this.input.moveY); // screen up = −Z
 
+    // engine-side hit-stop: the sim crawls at 12%, fx/rings breathe at 40%,
+    // camera + HUD keep real time — time-based, framerate-independent
+    this.hitStopT = Math.max(0, this.hitStopT - dtReal);
+    this.hitStopCd = Math.max(0, this.hitStopCd - dtReal);
+    const slow = this.hitStopT > 0;
+    const simDt = slow ? dtReal * 0.12 : dtReal;
+    const fxDt = slow ? dtReal * 0.4 : dtReal;
+
     // fixed clock: accumulate real dt, step the sim per 1/60 substep
-    this.acc += dtReal;
+    this.acc += simDt;
     let steps = 0;
     while (this.acc >= STEP && steps < MAX_STEPS && !this.sim.over) {
       this.sim.step(STEP);
@@ -386,27 +463,13 @@ export class AfterglowEngine {
     this.prevPX = this.sim.player.x;
     this.prevPZ = this.sim.player.z;
 
-    // ambient drifting embers near the light
-    this.emberT -= dtReal;
-    if (this.emberT <= 0) {
-      this.emberT = 0.5;
-      const a = Math.random() * Math.PI * 2;
-      const d = 4 + Math.random() * 10;
-      this.fx.spawn(
-        this.sim.player.x + Math.cos(a) * d,
-        0.3,
-        this.sim.player.z + Math.sin(a) * d,
-        (Math.random() - 0.5) * 0.6,
-        0.8 + Math.random() * 0.8,
-        (Math.random() - 0.5) * 0.6,
-        { life: 2.2, size: 0.34, color: EMBER_C, drag: 0.4 },
-      );
-    }
-
     this.rig.update(dtReal, this.camera, this.sim.player.x, this.sim.player.z, this.velX, this.velZ, false);
-    this.view.sync(this.sim, dtReal);
-    this.fx.update(dtReal);
-    this.rings.update(dtReal);
+    this.view.sync(this.sim, fxDt);
+    this.audio.update(this.sim); // husk windup screams / heartbeat / danger
+    this.damage.update(this.camera, dtReal); // numbers keep real time
+    this.fx.update(fxDt);
+    this.smoke.update(fxDt);
+    this.rings.update(fxDt);
 
     // HUD at ~10Hz
     this.hudT += dtReal;

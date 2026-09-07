@@ -62,6 +62,10 @@ export interface AfterglowEvents {
   onPickup(): void;
   /** optional: a projectile died on a pillar (impact point) */
   onPillar?(x: number, z: number): void;
+  /** optional: a foe took damage (kind, position, raw dmg, source). Burn ticks fire too — the view filters src==='burn' out later. */
+  onFoeHurt?(kind: FoeKind, x: number, z: number, dmg: number, src: 'bolt' | 'chain' | 'burn'): void;
+  /** optional: a weapon volley fired from the player position toward angle (radians) */
+  onVolley?(x: number, z: number, angle: number): void;
 }
 
 export interface AfterglowPlayer {
@@ -605,6 +609,7 @@ export class Sim {
     const volleys = WEAPON.volleys + this.mods.volleys;
     const angle = Math.atan2(best.z - p.z, best.x - p.x);
     p.facing = angle;
+    let shot = 0;
     for (let v = 0; v < volleys; v++) {
       if (this.projectiles.length >= CAPS.projectiles) break;
       const off = (v - (volleys - 1) / 2) * WEAPON.spreadPerVolley;
@@ -619,8 +624,11 @@ export class Sim {
         pierceLeft: WEAPON.pierce,
         dmg,
       });
+      shot++;
     }
     this.fireCd = WEAPON.fireInterval * this.mods.intervalMul;
+    // pure notification — no rng, no state writes; only fires if a shot left the barrel
+    if (shot > 0) this.events.onVolley?.(p.x, p.z, angle);
   }
 
   private updateWave(dt: number): void {
@@ -706,7 +714,7 @@ export class Sim {
       // burn ticks even while the foe is doing anything else
       if (f.burnT > 0) {
         f.burnT -= dt;
-        this.damageFoe(f, BURN.dps * dt);
+        this.damageFoe(f, BURN.dps * dt, 'burn');
         if (f.dead) continue;
       }
 
@@ -851,7 +859,7 @@ export class Sim {
           const dz = f.z - pr.z;
           const rr = f.r + pr.r;
           if (dx * dx + dz * dz <= rr * rr) {
-            this.damageFoe(f, pr.dmg);
+            this.damageFoe(f, pr.dmg, 'bolt');
             if (this.mods.burnOnHit) f.burnT = BURN.duration;
             this.chainSpark(f, pr.dmg);
             pr.pierceLeft--;
@@ -884,7 +892,7 @@ export class Sim {
         }
       }
       if (!best) break;
-      this.damageFoe(best, dmg * CHAIN.dmgMul);
+      this.damageFoe(best, dmg * CHAIN.dmgMul, 'chain');
       if (this.mods.burnOnHit) best.burnT = BURN.duration;
       if (this.arcs.length < CAPS.arcs) {
         this.arcs.push({ x1: src.x, z1: src.z, x2: best.x, z2: best.z, life: CHAIN.arcLife });
@@ -950,14 +958,16 @@ export class Sim {
     this.arcs.length = w;
   }
 
-  /** funnel every damage source through here */
-  private damageFoe(f: AfterglowFoe, dmg: number): void {
+  /** funnel every damage source through here (src only tags the notification) */
+  private damageFoe(f: AfterglowFoe, dmg: number, src: 'bolt' | 'chain' | 'burn'): void {
     if (f.dead || f.state === 'spawn') return;
     f.hp -= dmg;
     if (f.hp <= 0) {
       f.hp = 0;
       f.dead = true;
     }
+    // pure notification — no rng, no state writes; invisible to serializeState()
+    this.events.onFoeHurt?.(f.kind, f.x, f.z, dmg, src);
   }
 
   private sweepDead(): void {

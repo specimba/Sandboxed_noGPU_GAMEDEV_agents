@@ -54,3 +54,4 @@ server.log
 /skills/
 # tool result scratch
 tool-results/
+.qa/

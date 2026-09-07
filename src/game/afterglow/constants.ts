@@ -115,8 +115,10 @@ export const WAVES = {
   duration: 60,
   /** duration never drops below this at high wave numbers (M0 keeps 60 flat) */
   minDuration: 45,
-  /** spawn schedule spreads across the first fraction of the wave */
-  spawnWindowFrac: 0.7,
+  /** spawn schedule spreads across the first fraction of the wave —
+   *  0.32 puts every wave's spawns inside the first ~19s (the old 0.7
+   *  spread 8 budget points across 42s = 30-40s dead-air stretches) */
+  spawnWindowFrac: 0.45,
   introTime: 3,
   breatherTime: 3,
   /** spawn-state ramp: invulnerable + no-collide while > 0 */

@@ -15,6 +15,7 @@ export class AudioEngine {
   private muted = false;
   private noiseBuf: AudioBuffer | null = null;
   private lastGrazeT = 0;
+  private lastMoteT = -10;
 
   get ready(): boolean {
     return this.ctx !== null && this.ctx.state === 'running';
@@ -333,5 +334,60 @@ export class AudioEngine {
 
   uiClick(): void {
     this.tone(880, 0.06, 'triangle', 0.1);
+  }
+
+  /* ---------------------------------------------------------------- */
+  /* AFTERGLOW additive SFX (Task 14-d) — volley / motes / draft / husk */
+  /* ---------------------------------------------------------------- */
+
+  /** light volley shot — bandpass noise sweep + rising sine chirp */
+  pew(): void {
+    this.noise(0.07, 0.1, 'bandpass', 2400, 900);
+    this.tone(900, 0.07, 'sine', 0.1, 1400);
+  }
+
+  /**
+   * mote pickup pitch ladder — pentatonic step per pickup, restarts the
+   * ladder after a 1.5s gap, rate-limited against bursts (graze pattern).
+   */
+  moteTick(n: number): void {
+    if (!this.ctx) return;
+    const now = this.ctx.currentTime;
+    if (now - this.lastMoteT < 0.04) return; // rate limit stampedes
+    const step = now - this.lastMoteT > 1.5 ? 0 : n;
+    this.lastMoteT = now;
+    const note = PENTATONIC[Math.min(PENTATONIC.length - 1, step)];
+    this.tone(note, 0.16, 'triangle', 0.12);
+    this.tone(note * 2, 0.08, 'sine', 0.05);
+  }
+
+  /** draft card hover — barely-there tick */
+  draftHover(): void {
+    this.tone(400, 0.05, 'sine', 0.05);
+  }
+
+  /** draft pick — two-note shard chime (shardGain family, shorter) */
+  draftPick(): void {
+    this.tone(PENTATONIC[5] ?? 523.25, 0.24, 'triangle', 0.14);
+    this.tone(PENTATONIC[7] ?? 659.26, 0.3, 'triangle', 0.12, undefined, 0.09);
+  }
+
+  /** husk charge telegraph — 140→90Hz saw SWELL so the scream is audible mid-windup, + low rumble */
+  huskScream(): void {
+    if (!this.ctx || !this.master) return;
+    const t0 = this.ctx.currentTime;
+    const o = this.ctx.createOscillator();
+    o.type = 'sawtooth';
+    o.frequency.setValueAtTime(140, t0);
+    o.frequency.exponentialRampToValueAtTime(90, t0 + 0.7);
+    const g = this.ctx.createGain();
+    g.gain.setValueAtTime(0.001, t0);
+    g.gain.linearRampToValueAtTime(0.2, t0 + 0.45); // the swell
+    g.gain.exponentialRampToValueAtTime(0.001, t0 + 0.72);
+    o.connect(g);
+    g.connect(this.master);
+    o.start(t0);
+    o.stop(t0 + 0.75);
+    this.noise(0.6, 0.1, 'lowpass', 800, 140);
   }
 }

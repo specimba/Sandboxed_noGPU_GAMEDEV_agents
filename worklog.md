@@ -526,3 +526,89 @@ Work Log:
 Stage Summary:
 - PIVOT BRIEF M0 GATE: PASSED. Fresh AFTERGLOW sim foundation is live under src/game/afterglow/ with the storyboard behind a legacy toggle; deterministic headless 9/9; pipeline v2 untouched (11/11); EMBER RITE regression clean; perf budget healthy for M1.
 - M1 next: build-craft web (≥60 items), statuses (burn→brittle/chill/overcharge), 3 biomes via pipeline v2, 2 bosses; journey tests; jam benchmark M3.
+
+---
+Task ID: 14-a
+Agent: visual-director
+Task: Designer critique + visual elevation proposal for AFTERGLOW M0 — diagnose why in-run reads as programmer art; return a prioritized, llvmpipe-safe art plan (research + proposal only, zero source changes).
+
+Work Log:
+- Saw the game: VLM-diagnosed all three fresh screenshots (.qa/critique/01-title/02-run-early/03-run-mid.png) with a harsh art-director prompt; corroborated with ground-truth pixel sampling via PIL (evidence: .qa/critique/14a-pixel-samples.md). Read house systems end-to-end: view.ts, materials.ts, engine.ts, cameraRig.ts, constants.ts, fx.ts, Hud/TitleScreen/Draft/Death .tsx, globals.css, worklog Tasks 12–13.
+- SMOKING GUN (root-caused, not vibes): pixel sampling proves the floor renders #6c3311–#864318 (mid sienna) in-run while the material asks base 0x0a0705 (near-black). Cause: stylizedMaterial's `topK` "top kiss" term multiplies the full rim color (0xff9a4a) by smoothstep(N.y)=1.0 across the ENTIRE up-facing plane — a term designed for upright silhouettes paints the whole arena mid-value orange. The ash ring (topK 0.05) washes the horizon the same hue. Result: ground, foe shells and foe rims sit in the SAME value/hue band → total camouflage (confirmed by VLM: "monochromatic mud", "ghillie suits made of dirt").
+- Confirmed/extended orchestrator's list: (1) value collapse everywhere; (2) zero contact shadows — everything floats; (3) foes are primitive geometry (husk IS a BoxGeometry, VLM: "1990s CAD tutorial"); wisp tetra reads as debug cube at 10fps; (4) player core = few pixels at HEIGHT 26, the visible thing is a glow sprite; (5) motes/bolts sub-dead-pixel; (6) 12 procedural rim monoliths read as floating black debug boxes; (7) banding receipts: 39 sharp 8-bit steps across a title-background scanline; (8) HUD is functionally styled (hs-* engraved glass is decent) but 9–10px everything, 5px HP bar, no event response; the "N" bottom-left is the Next.js dev indicator, not game UI.
+- KEY UNTAPPED ASSET: public/assets/meshes holds 11 pipeline-v2 GLBs (obelisk, monolith_a/b/c, monolith_cracked, shard_crystal, shard_cluster, inlay_hex, warden_slab, lantern_slab, dart_hull, all quantized + verify-assets 11/11) + obsidian_ember.png — view.ts uses NONE of them. The biggest cheap look-up is dressing the world with our own library.
+- Wrote the full prioritized P0/P1/P2 plan (north star, per-item hex/geometry/material/particle specs, file targets, effort, llvmpipe-safety argument) in the 14-a report to the orchestrator. Headline P0s: ground topK→0 + baked 1024px arena canvas texture (1 draw, kill-switch uniform); one-draw blob-shadow Points; per-species silhouette redesign (wisp tooth-shard / husk tapered wedge + horns merged geo / cinder tetra) with value-laddered ember rims; player halo/dash-trail/muzzle identity; mote/bolt rewrite on the fx.ts per-point-size shader pattern; ambient ember field + CSS vignette + shader dithering (no new post passes); event juice (hit pop, husk scream ring, CSS hurt vignette, banner kindle); bloom/fog retune within the existing chain. Budget: +3 draw calls (34→~37), all systems capped, no derivative normals on large flats, no float textures, sim untouched.
+- No source code modified. Evidence: .qa/critique/14a-pixel-samples.md + this entry.
+
+Stage Summary:
+- M0's cheapness is one root cause plus a haze of missing basics: the ground's topK term destroys the value ladder (everything mid-sienna → camouflage), and the run has no shadows, no silhouette identity, no atmosphere density, no event response — while 11 finished, verified GLB assets sit unused in public/.
+- The fix path is cheap and house-idiomatic: value discipline in materials.ts, grounding via pooled Points shadows, identity via geometry + rim-value separation, atmosphere via capped additive Points + CSS (llvmpipe-safe by construction), juice via view-side state the sim already exposes (hp drops, windup state, burnT). Draw-call law holds with 2.6× headroom after the plan.
+- Next actions open to orchestrator: green-light P0 sprint (est. 2 engineer-days), decide Next.js dev-indicator off for clean QA screenshots, and adopt the style bible: "Dark world, bright meaning — if it glows it matters."
+
+---
+Task ID: 14-b
+Agent: game-feel-engineer
+Task: Developer critique + proposal — diagnose why AFTERGLOW M0 feels like a tech demo, deliver prioritized game-feel + depth plan (research/proposal only, no source changes).
+
+Work Log:
+- Loaded agent-browser skill; played live at localhost:3000 across 3 runs: BEGIN → drove w/a/s/d with continuous polling → dash (Space) → draft offer → pick → death → KINDLE AGAIN. Screenshots to .qa/critique/: dev-01-first-foes, dev-02-combat, dev-03/04-death-overlay, dev-05-draft-overlay, dev-06-post-draft-breather. VLM-analyzed all of them plus the orchestrator's 01-03 set (glm-5v-turbo) for an objective "juicy vs dead" read.
+- Live receipts: run1 died t=37.7 mid-wave-1 (hp 100→60 in ~3s standing, then attrition); run2 died hp 0 in wave 1 (~2 min, hp bled exactly 15/loop); run3 reached draft t=66s at hp 23, picked steady_core (toast "+ STEADY CORE", breather 2.7s → wave 2). Wave 1 = 66s wall-clock with 30-40s of near-empty arena (budget 8 pts dribbled across 42s spawn window). perf() in-run: 34-36 draw calls / ~4.8k tris; console 0 errors; engine instance has NO audio member (keys enumerated) — title "SOUND — ON" flips a store bool nobody consumes.
+- Read all systems: sim.ts (1013L — damageFoe() at :954 is SILENT, no per-hit event/dmg; updateWeapon has no fire event; sim owns mote pickup/drift), constants.ts, draft.ts (12 items, 2 rarities), engine.ts (all 11 events consumed at least minimally: onFoeDie/onHurt/onDash/onWaveStart/Spawn/Death/Pillar → fx+rig; onWaveClear → toast only; onDraftPick/onMote → intentionally empty), view.ts (husk windup ramp + spear = the one great telegraph; wisp/cinder SHARE materials → per-foe hit-flash impossible without per-entry clones), cameraRig.ts (trauma²·0.55 shake exists but fires ONLY on hurt 0.5/death 0.8), store.ts, input.ts, Hud/Draft/Death/Title/TouchControls + globals.css keyframes (hsBanner 2.2s gentle fade, ag-card hover border only).
+- Confirmed audio.ts (src/game/audio.ts, 337L) is legacy-only (imported by src/game/{engine,view}.ts only) and is RICH: kill/hurt/dash/waveStart/waveClear/death/uiClick/heartbeat/setDanger/setBiome/shieldBreak/ricochet/throwShard/graze + unlock-on-gesture + noise/tone synth. Gaps for afterglow: no volley pew, no mote tick, no draft hover/pick, no husk scream, heartbeat() is caller-scheduled.
+- Read scripts/simdrive-afterglow.ts (events NOT hashed; serializeState is the digest source) + PIVOT_BRIEF.md M1 plan; verified PENTATONIC in legacy constants; re-ran `bun scripts/simdrive-afterglow.ts` = 9/9 PASS baseline. materials.ts house system checked for flash spec: uEmisK/uRimK/setRimK + makeStreakTexture() (unused by afterglow — free bolt/dash trail upgrade).
+- Zero source files modified; this entry is the only write.
+
+Stage Summary:
+- VERDICT: the M0 loop is mechanically correct and 100% mute-numb — every event is wired to at most one-shot particles, but combat has NO per-hit answer (no onFoeHurt → no damage numbers, no hit flash on wisp/cinder, no impact spark, no hit-stop, no kill shake), the whole game has NO audio, waves have 30-40s dead air, hurt is attrition without knockback/direction/vignette/heartbeat, the draft reads as "tax forms, not loot" (VLM), and the camera never responds to kills, volleys, or husk charges. Orchestrator suspicions confirmed with two corrections: (1) events are consumed but ANEMIC, not ignored; (2) shake/fovKick/death-burst DO exist — they just never fire for the 95% of actions that aren't "you got hurt".
+- Plan delivered (P0 audio wiring via existing AudioEngine + 5 additive SFX; per-hit bundle = optional onFoeHurt/onVolley sim notifications with digest-unchanged determinism argument + pooled DOM damage numbers + per-entry material clones for flash + engine-side timeScale hit-stop + kill shake; spawn/wave drama + setDanger tension curve; low-HP vignette+heartbeat; P1 GLIMMER muzzle/trails, dash afterimages, draft rarity drama + stat-delta previews, husk charge payoff, off-screen foe indicators (1 instanced draw), mote pitch-ladder; P2 depth = elites > wave pacing > constants tuning > tiered motes > first-boss; M1 reordered feel-first). All juice view-side, time-based curves, ≤+3 draw calls vs 34-36 baseline.
+- Next: orchestrator assigns P0 kit (est. one sprint: engine.ts + new afterglow/audio.ts + view.ts + Hud.tsx + globals.css + additive sim.ts optional events); keep 9/9 harness green via unchanged serializeState; gate perf().render.calls in make qa.
+
+---
+Task ID: 14-d
+Agent: feel-systems-engineer
+Task: AFTERGLOW audio + sim-notification layer (14-b P0-A + P0-B item 1) — two pure sim notification events, 5 additive synthesized SFX, AfterglowAudio adapter; deliverable for orchestrator wiring (engine untouched).
+
+Work Log:
+- sim.ts: added optional AfterglowEvents onFoeHurt?(kind,x,z,dmg,src:'bolt'|'chain'|'burn') fired inside damageFoe() (signature gained the src tag; same math/rng/order) and onVolley?(x,z,angle) fired once per volley in updateWeapon() (local shot counter, only when ≥1 projectile left). Burn ticks fire onFoeHurt too (view filters src==='burn' later, documented inline). Both are `?.` pure notifications — no rng, no state writes. Receipts: qa-afterglow 9/9 PASS, seed-7 end hash 372f8121 IDENTICAL to Task 13-a, legacy simdrive PASS.
+- audio.ts (additive): pew() (bandpass noise 2400→900 + sine 900→1400 chirp, 0.07s), moteTick(n) (pentatonic ladder, 1.5s window restart + 40ms rate limit, graze pattern), draftHover() (400Hz sine 0.05s @0.05), draftPick() (two-note PENTATONIC[5]/[7] chime, shardGain family), huskScream() (custom-osc 140→90Hz saw SWELL via linearRamp peak @0.45s — overdriveStart pattern — + lowpass rumble; the telegraph is audible). Legacy EMBER RITE callers untouched.
+- NEW src/game/afterglow/audio.ts: AfterglowAudio adapter wrapping one AudioEngine. attach(sim, opts?) CHAINS all 11 mapped handlers (original fires first — verified by pre-attach handler counters in self-test); unlock() for BEGIN/KINDLE gesture; per-frame update(sim) = husk windup-START scream (0.35s rate limit, persistent id-Set, zero alloc) + heartbeat every 1.1s below 30% hp + setDanger(0.5·nearby/6 + 0.5·(1−hpFrac)) at 4Hz; hover() for draft cards (60ms wall-clock limit); setMuted(); module-level enabled kill switch; every entry try/catch'd; counts object for QA; window.__agAudio hook (typeof-window guarded); sim clock used for all scheduling (headless-safe, run-restart detected via clock rewind).
+- Self-test (throwaway /home/z scripts, DELETED after, never in scripts/): seed-7 bot drive 1800 substeps — 13 volleys / 12 kills / 13 foeHurt / 19 pickups, chaining equality (pre=12 adapter=12), forced low-HP → 3 heartbeats, zero exceptions with window absent in bun; scream-path seed-2 no-input — 1 windup → exactly 1 scream at t=37.77s. Gates: tsc exit 0, lint exit 0, git diff confined to the three owned files.
+
+Stage Summary:
+- AFTERGLOW's mute-numbness root fix is delivered but NOT yet wired: adapter, SFX and sim notifications all stand alone. Orchestrator wires in one pass: construct AfterglowAudio next to the engine; audio.unlock() on begin click; audio.attach(sim) immediately after every new Sim() (startRun rebuilds sims per run); audio.update(sim) once per frame; store muted subscription → setMuted(); DraftOverlay hover → hover(). Nothing else needed.
+- Determinism law held: the notification events are invisible to serializeState() (hash receipts unchanged); events are consumed by no one in the harness, so 9/9 + 372f8121 stand as proof.
+- Extension points left open on purpose: onFoeHurt src-mapping table is silent by default (impact SFX = later juice pass), onSpawn/onMote/onPillar untouched, husk-death uses wardenDie() rate-limited 0.5s as the "extra low thump".
+---
+Task ID: 14-c
+Agent: visual-world-engineer (subagent, partial) + orchestrator completion & root-cause hunt
+Task: AFTERGLOW P0 visual elevation — ground value fix, baked detail mask, contact shadows, foe silhouettes, player identity, atmosphere, event juice, engine hit-stop.
+
+Work Log:
+- Subagent implemented ~80% of the designer P0 set (materials STYLIZED_MAP + dither, arenaTexture.ts, contact shadows, foe redesign, player halo/dashed pickup ring, ember field, dead-sun billboard, smoke pool, hit pop/flash, engine bloom retune + hit-stop fields) then hit context timeout without worklog/QA.
+- Orchestrator live-bisected the remaining "orange wash + horizontal band" via agent-browser eval (8 bisect screenshots in .qa/critique/bisect-*): NOT the sun, NOT bloom, NOT fog, NOT the lit term, NOT the map — hiding the floor mesh removed the wash entirely → floor material itself.
+- ROOT CAUSE (materials.ts): fresnel term `dot(normalize(vView), N)` crossed spaces — vView is VIEW-space, N is WORLD-space; under the steep rig the dot collapsed to ~0 so fres ≈ 1.0 EVERYWHERE, painting the entire floor (and quietly every other stylized solid) with the rim color 0xff9a4a. FIX: hoist `vec3 V = normalize(cameraPosition - vPos)` (world space), use for both the facet-normal flip and fresnel. Fixed a transient 'V' redefinition (duplicate decl at the fresnel site) the first edit pass left behind.
+- The baked texture was re-authored as a MID-GRAY MODULATION MASK (128/255 * 2.1 ≈ neutral 1.05, NoColorSpace raw sample) instead of albedo — empirical proof that ACES + linear->sRGB inflate raw albedo ~2x past authored intent (intended #1e130e rendered mid-orange).
+- Wave pacing (constants.ts): spawnWindowFrac 0.7 → 0.45 after 0.32 broke harness PROGRESSION/DIVERGENCE (bot stalled past wave 2) — 0.45 = 27s wave-1 spawn window, 9/9 green, dead-air stretches gone.
+- next.config.ts: devIndicators:false (clean QA shots).
+
+Stage Summary:
+- The orange-wash bug is dead: arena floor renders true obsidian black with engraved detail, ember rim ring glows, pillars/foes read via REAL geometric fresnel (edge-on bright, face-on dark). Acceptance frame: .qa/critique/final-4-midfight.png (GLIMMER tracers, cinder tetras with red telegraph ring, motes, embers, segmented HP HUD).
+- Gates: tsc 0, lint clean, simdrive-afterglow 9/9, legacy simdrive PASS, 0 console errors fresh session, perf 37 calls / 2.9k tris (budget <100).
+---
+Task ID: 14 (orchestrator; 14-a/14-b/14-c/14-d)
+Agent: lead (Z.ai Code)
+Task: "Base quality is not even a good start — brainstorm with your developer and designer agent team." Diagnose why M0 reads as a tech demo, then raise the base quality with parallel implementation tracks.
+
+Work Log:
+- Fresh browser evidence (title/run/combat screenshots) confirmed the user's verdict: flat sienna disc, box foes, zero atmosphere, silent game.
+- 14-a (visual-director): VLM + pixel-sampler critique; found the topK ground painting bug hypothesis, value-ladder law (floor ≤18%, rims 55-75%, meaning 85-100%), style bible "dark world, bright meaning"; full P0/P1/P2 spec.
+- 14-b (game-feel-engineer): verified damageFoe() is silent, audio.ts (20+ SFX) consumed only by legacy, "SOUND — ON" toggles a boolean nobody consumed; speced audio adapter + 5 SFX + optional sim notifications (onFoeHurt/onVolley, determinism-safe) + hit-stop/kill-shake/damage-numbers + M1 reorder (feel kit before content checklist).
+- 14-d (feel-systems, parallel): delivered AfterglowAudio adapter (chaining attach, unlock, per-frame update, counts QA hook) + 5 SFX (pew/moteTick/draftHover/draftPick/huskScream) + 2 optional sim events; 9/9 with seed-7 hash unchanged at the time.
+- 14-c (visual-world, parallel): ~80% implemented then timed out; orchestrator completed + root-caused the residual orange wash to the view/world-space fresnel mismatch (see 14-c entry) and re-authored the map path as a modulation mask.
+- Orchestrator integration: audio.attach in constructor + startRun (before sim.start() so wave-1 chime fires), unlock() on begin, setMuted in toggleMute, draftHover() public API wired to DraftOverlay onMouseEnter/onFocus; DamageNumbers (pooled 32 DOM, easeOutCubic rise, chain 0.8x) consuming onFoeHurt src!=='burn'; Hud restyle (10-cell HP segments + edge glow, diamond pips, volley pips, conic dash cooldown pip, store-subscription hurt vignette, low-hp dread vignette, banner draw-out motion); globals.css vignette/hurt/banner keys with prefers-reduced-motion; spawnWindowFrac 0.45.
+- Gates: bunx tsc --noEmit 0; eslint clean; make qa-afterglow 9/9; bun scripts/simdrive.ts PASS; agent-browser fresh session: 0 console errors, perf 37 calls / 2.9k tris / peak 40; audio counts prove volley=10 foeHurt=6 kill=5 waveStart=1 live; death flow (THE LIGHT FADES / KINDLE AGAIN) verified.
+- Evidence: .qa/critique/{01..03 baseline, bisect-1..8, 14c-*, final-1..5}.png; commits pushed to origin/main.
+
+Stage Summary:
+- The user's "not even a good start" is answered with receipts, not promises: root-caused render bug fixed (one line of GLSL), the game now has sound, damage feedback, hit-stop, telegraph audio screams (wired), a readable obsidian arena, and a HUD with hierarchy.
+- Known remaining gaps (P1 backlog): GLB library assets still undeployed in the arena (11 assets on the bench), draft overlay rarity drama, off-screen foe indicators, dash afterimages, elite/boss depth, bot stall past wave 2 at spawnWindowFrac 0.32 (0.45 ships; revisit with a smarter harness bot).

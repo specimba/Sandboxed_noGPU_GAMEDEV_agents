@@ -63,6 +63,8 @@ export default function DraftOverlay() {
                 key={id}
                 type="button"
                 onClick={() => getAfterglowEngine()?.pickDraft(id)}
+                onMouseEnter={() => getAfterglowEngine()?.draftHover()}
+                onFocus={() => getAfterglowEngine()?.draftHover()}
                 className={`ag-card hs-panel hs-frame min-h-[44px] flex flex-col items-start gap-2.5 px-4 py-4 text-left ${rare ? 'ag-card--rare' : ''}`}
                 style={{ animationDelay: `${i * 90}ms` }}
               >
