@@ -1,11 +1,13 @@
 import {
   ARENA,
+  BURN,
   FOE,
   OVERDRIVE,
   PLAYER,
   RUN,
   SCORE,
   SHARD,
+  SPARK,
   WAVES,
   type Elite,
 } from './constants';
@@ -41,6 +43,10 @@ export interface SimEvents {
   /** optional pure-notify hook (view sugar): a foe SURVIVED a hit — kills speak
    *  through onKill. No rng consumed, run digests unchanged. */
   onFoeHurt?(kind: FoeKind, x: number, z: number, dmg: number, chain: boolean): void;
+  /** optional pure-notify: a burn beat consumed a foe's stacks for dmg */
+  onBurnTick?(x: number, z: number, dmg: number, stacksLeft: number): void;
+  /** optional pure-notify: death-light arced from (fx,fz) to (tx,tz) for dmg */
+  onSpark?(fx: number, fz: number, tx: number, tz: number, dmg: number): void;
   onGraze(x: number, z: number): void;
   onHurt(x: number, z: number): void;
   onDash(x: number, z: number): void;
@@ -98,6 +104,8 @@ interface Foe {
   burstT: number;
   patternAngle: number; // warden radial offset
   face: number; // bulwark armor facing
+  burn: number; // EMBER ROT stacks
+  burnT: number; // seconds to next burn beat
 }
 
 interface Bullet {
@@ -540,6 +548,23 @@ export class Sim {
     this.marks.length = 0;
   }
 
+  /** QA hook: strike the nearest live foe as a direct shard-class hit — the
+   *  harness seam for burn/spark assertions (headless tests only) */
+  debugStrikeNearest(dmg: number): boolean {
+    let best: Foe | null = null;
+    let bestD = 1e9;
+    for (const f of this.foes) {
+      if (f.spawnT > 0) continue;
+      const d = Math.hypot(f.x - this.px, f.z - this.pz);
+      if (d < bestD) {
+        bestD = d;
+        best = f;
+      }
+    }
+    if (!best) return false;
+    return this.damageFoe(best, dmg, false, 'hit');
+  }
+
   private foeById(id: number): Foe | null {
     for (const f of this.foes) if (f.id === id) return f;
     return null;
@@ -746,7 +771,7 @@ export class Sim {
   /* foes                                                                */
   /* ------------------------------------------------------------------ */
 
-  private damageFoe(f: Foe, dmg: number, chain = false): boolean {
+  private damageFoe(f: Foe, dmg: number, chain = false, cause: 'hit' | 'burn' | 'spark' | 'splash' = 'hit'): boolean {
     // BOSS PHASE FLOOR: a warden hangs on by a thread until its final phase
     // has played — burst builds can never skip the learning curve
     if (f.boss && f.state < 3) {
@@ -758,9 +783,17 @@ export class Sim {
     }
     f.hp -= dmg;
     if (f.hp > 0) {
+      // EMBER ROT: direct hits stack burning light on the survivor
+      if (cause === 'hit' && this.mods.burn > 0) {
+        f.burn = Math.min(BURN.maxStacks, f.burn + this.mods.burn);
+        if (f.burnT <= 0) f.burnT = BURN.tick;
+      }
       this.events.onFoeHurt?.(f.kind, f.x, f.z, dmg, chain);
       return false;
     }
+    // CHAINSPARK: the kill arcs death-light to the nearest kindred — sparks
+    // never re-spark, so the light stops there
+    if (cause !== 'spark' && this.mods.spark > 0) this.fireSparks(f);
     // score: elites pay ×1.5, bosses scale by biome, mutators sweeten the pot
     let base = f.kind === 'warden' ? WAVES.wardenScore : SCORE[f.kind];
     if (f.boss) base = bossScore(this.biome);
@@ -785,6 +818,35 @@ export class Sim {
     this.events.onKill(f.kind, f.x, f.z);
     this.removeFoe(f);
     return true;
+  }
+
+  /** death-light arcs: nearest-first from the slain foe, each struck foe pays
+   *  SPARK.dmg. Pure geometry — no rng, fully deterministic. */
+  private fireSparks(from: Foe): void {
+    let fx = from.x;
+    let fz = from.z;
+    const struck = new Set<number>([from.id]);
+    let radius = SPARK.radius;
+    for (let n = 0; n < this.mods.spark; n++) {
+      let best: Foe | null = null;
+      let bestD = radius;
+      for (const o of this.foes) {
+        if (o.spawnT > 0 || struck.has(o.id)) continue;
+        const d = Math.hypot(o.x - fx, o.z - fz);
+        if (d < bestD) {
+          bestD = d;
+          best = o;
+        }
+      }
+      if (!best) break;
+      struck.add(best.id);
+      this.events.onSpark?.(fx, fz, best.x, best.z, SPARK.dmg);
+      const died = this.damageFoe(best, SPARK.dmg, true, 'spark');
+      fx = best.x;
+      fz = best.z;
+      radius = SPARK.chainRadius;
+      if (died) break; // the arc dies with its target
+    }
   }
 
   private removeFoe(f: Foe): void {
@@ -841,6 +903,8 @@ export class Sim {
       burstT: 0,
       patternAngle: this.rng() * TAU,
       face: Math.atan2(this.px - x, this.pz - z), // armor starts facing the ember
+      burn: 0,
+      burnT: 0,
     });
     if (kind === 'warden' && boss) this.events.onWardenSpawn(x, z);
   }
@@ -1068,6 +1132,22 @@ export class Sim {
 
       // contact damage
       if (pd < f.r + FOE.contactRadius) this.hurt();
+    }
+
+    // EMBER ROT beats — after the movement pass so burn deaths never desync
+    // the foe walk. Runs on enemy time (Overdrive slows the fire too).
+    if (this.mods.burn > 0) {
+      for (const f of this.foes.slice()) {
+        if (f.burn <= 0) continue;
+        f.burnT -= dt;
+        if (f.burnT <= 0) {
+          f.burnT = BURN.tick;
+          const dmg = f.burn;
+          f.burn = Math.max(0, f.burn - 1);
+          this.events.onBurnTick?.(f.x, f.z, dmg, f.burn);
+          this.damageFoe(f, dmg, false, 'burn');
+        }
+      }
     }
   }
 

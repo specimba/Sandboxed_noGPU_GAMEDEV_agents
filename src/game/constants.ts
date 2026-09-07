@@ -68,6 +68,22 @@ export const OVERDRIVE = {
   extendPerGraze: 0.35,
 };
 
+/** EMBER ROT burn — direct hits stack burning light on a foe; every beat the
+ *  stack count deals that much damage and consumes one stack. Lives on enemy
+ *  time (Overdrive slows it) and never consumes rng — determinism-safe. */
+export const BURN = {
+  tick: 0.75,
+  maxStacks: 6,
+};
+
+/** CHAINSPARK — a slain foe arcs death-light to the nearest kindred. Target
+ *  choice is nearest-first (no rng); sparks never re-spark. */
+export const SPARK = {
+  radius: 9, // first arc search radius
+  chainRadius: 7, // subsequent arcs from the struck foe
+  dmg: 2,
+};
+
 export const FOE = {
   bulletSpeed: 11.5,
   bulletRadius: 0.34,

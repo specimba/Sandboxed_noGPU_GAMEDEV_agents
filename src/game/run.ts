@@ -28,6 +28,8 @@ export interface Mods {
   odDuration: number; // overdrive duration bonus (s)
   revive: boolean; // Second Dawn
   startShards: number; // extra starting shards (shrine)
+  burn: number; // EMBER ROT stacks applied per direct hit
+  spark: number; // CHAINSPARK arcs per kill
 }
 
 export function baseMods(): Mods {
@@ -48,6 +50,8 @@ export function baseMods(): Mods {
     odDuration: 0,
     revive: false,
     startShards: 0,
+    burn: 0,
+    spark: 0,
   };
 }
 
@@ -78,6 +82,8 @@ export const BOONS: BoonDef[] = [
   { id: 'heatshell', name: 'HEAT SHELL', desc: 'Dash strike +2 dmg, knockback ×1.5', tier: 'rare', apply: (m) => { m.dashStrike += 2; m.dashKnock += 0.5; } },
   { id: 'ward', name: 'EMBER WARD', desc: '+1 max ember, heal 1', tier: 'rare', maxStacks: 2, apply: (m) => { m.maxEmbers += 1; } },
   { id: 'dawning', name: 'DAWNING WRATH', desc: 'Kills charge +5 Overdrive', tier: 'rare', apply: (m) => { m.odOnKill += 5; } },
+  { id: 'emberrot', name: 'EMBER ROT', desc: 'Hits ignite foes — burning light eats 1 beat at a time', tier: 'rare', maxStacks: 3, apply: (m) => { m.burn += 1; } },
+  { id: 'chainspark', name: 'CHAINSPARK', desc: 'Slain foes arc 2 dmg of death-light to the nearest kindred', tier: 'rare', maxStacks: 2, apply: (m) => { m.spark += 1; } },
   { id: 'patience', name: "SUN'S PATIENCE", desc: 'Overdrive lasts +2 s', tier: 'sun', maxStacks: 1, apply: (m) => { m.odDuration += 2; } },
 ];
 
