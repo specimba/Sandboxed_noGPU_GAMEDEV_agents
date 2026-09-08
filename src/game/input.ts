@@ -55,7 +55,12 @@ export class Input {
       }
     };
     const onKeyUp = (e: KeyboardEvent) => this.down.delete(e.code);
-    const onBlur = () => this.down.clear();
+    const onBlur = () => this.clearAll();
+    // some OS overlays / task switchers swallow the keyup WITHOUT a blur —
+    // hiding the document always drops held keys so a strafe can never stick
+    const onVis = () => {
+      if (document.hidden) this.clearAll();
+    };
 
     const onMouseMove = (e: MouseEvent) => {
       this.mouseX = e.clientX;
@@ -74,6 +79,7 @@ export class Input {
     w.addEventListener('keyup', onKeyUp);
     w.addEventListener('blur', onBlur);
     w.addEventListener('mousemove', onMouseMove);
+    document.addEventListener('visibilitychange', onVis);
     this.canvas.addEventListener('mousedown', onMouseDown);
     this.canvas.addEventListener('contextmenu', onContext);
 
@@ -82,6 +88,7 @@ export class Input {
       () => w.removeEventListener('keyup', onKeyUp),
       () => w.removeEventListener('blur', onBlur),
       () => w.removeEventListener('mousemove', onMouseMove),
+      () => document.removeEventListener('visibilitychange', onVis),
       () => this.canvas.removeEventListener('mousedown', onMouseDown),
       () => this.canvas.removeEventListener('contextmenu', onContext),
     ];
@@ -135,6 +142,32 @@ export class Input {
   }
   queueDash() {
     this.edgeDash = true;
+  }
+
+  /** drop every queued edge (phase transitions, overlays, focus loss) — a
+   *  stale edge must never fire on re-entry into play */
+  clearEdges(): void {
+    this.edgeThrow = false;
+    this.edgeDash = false;
+    this.edgePause = false;
+    this.edgeBegin = false;
+  }
+
+  /** keys + edges — the full safe-state for blur / visibility / resume */
+  clearAll(): void {
+    this.down.clear();
+    this.clearEdges();
+  }
+
+  /** live edge state for the ?debug=1 forensics snapshot (no mutation) */
+  debugEdges(): { throw: boolean; dash: boolean; pause: boolean; begin: boolean; downCount: number } {
+    return {
+      throw: this.edgeThrow,
+      dash: this.edgeDash,
+      pause: this.edgePause,
+      begin: this.edgeBegin,
+      downCount: this.down.size,
+    };
   }
 
   dispose() {

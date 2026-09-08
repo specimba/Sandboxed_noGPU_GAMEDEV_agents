@@ -58,6 +58,9 @@ interface GameState {
   boonsTaken: string[];
   boonChoices: BoonChoice[];
   bossBar: { name: string; frac: number } | null;
+  /** CC status — the ROOTED chip's state (the bind is ALWAYS on screen) */
+  rooted: boolean;
+  rootT: number;
   won: boolean;
   dawnEarned: number;
 
@@ -100,6 +103,8 @@ export const useGameStore = create<GameState>()((set) => ({
   overdrive: 0,
   overdriveActive: false,
   sun: 0,
+  rooted: false,
+  rootT: 0,
 
   roomLabel: '',
   mutatorLabel: '',

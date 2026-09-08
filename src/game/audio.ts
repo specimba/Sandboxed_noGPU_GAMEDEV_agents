@@ -342,6 +342,38 @@ export class AudioEngine {
     this.tone(150, 0.22, 'sawtooth', 0.12, 62);
   }
 
+  /* ---- HEX LOOM / crowd-control cues — one-shots, state-diffed upstream ---- */
+
+  /** dread tick under the hex telegraph — a loom winding up */
+  hexAnchor(): void {
+    this.tone(147, 0.5, 'sawtooth', 0.06, 131);
+    this.noise(0.4, 0.05, 'lowpass', 420);
+  }
+
+  /** the hex answers the floor — hit variant thumps, miss variant hisses */
+  hexDetonate(hit: boolean): void {
+    if (hit) {
+      this.thump(1.0, 74);
+      this.noise(0.3, 0.2, 'lowpass', 1100, 200);
+      this.tone(98, 0.22, 'square', 0.1, 62);
+    } else {
+      this.noise(0.12, 0.08, 'bandpass', 900, 300);
+    }
+  }
+
+  /** the bind lands — a low thunk with a crackling tail */
+  rootBind(): void {
+    this.tone(84, 0.32, 'sine', 0.3, 50);
+    this.tone(126, 0.16, 'triangle', 0.1);
+    this.noise(0.34, 0.13, 'lowpass', 900, 160);
+  }
+
+  /** the bind snaps — bright release */
+  rootBreak(): void {
+    this.noise(0.08, 0.16, 'highpass', 2800);
+    this.tone(720, 0.08, 'sine', 0.1, 1180);
+  }
+
   bossPhase(): void {
     // rising fifth + swell — the warden breathes
     this.tone(196, 0.5, 'sawtooth', 0.2, 294);

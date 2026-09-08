@@ -248,6 +248,25 @@ html, body {
 }
 .hs-pip--sm { width: 9px; height: 9px; }
 
+/* — off-screen threat pips (edge diamonds; amber = foe, red = heavy fire).
+   DEFECT REPAIR: sprint 15 shipped the className with no CSS — the pips
+   rendered as unstyled invisible squares. This is the authored identity. */
+.hs-threat-pip {
+  width: 10px;
+  height: 10px;
+  background: rgba(46, 32, 12, 0.72);
+  border: 1px solid rgba(255, 199, 102, 0.75);
+  border-radius: 1px;
+  box-shadow: 0 0 6px rgba(255, 199, 102, 0.28);
+}
+.hs-threat-pip--red {
+  width: 7px;
+  height: 7px;
+  border-color: rgba(255, 90, 74, 0.8);
+  background: rgba(46, 12, 9, 0.72);
+  box-shadow: 0 0 5px rgba(255, 90, 74, 0.3);
+}
+
 /* — engraved buttons: hairline that lightens on hover, never blooms — */
 .hs-btn {
   min-height: 44px;
@@ -529,4 +548,6 @@ main button:focus-visible {
 @media (max-width: 420px) {
   .hs-pip { width: 9px; height: 9px; }
   .hs-pip--sm { width: 7px; height: 7px; }
+  .hs-threat-pip { width: 8px; height: 8px; }
+  .hs-threat-pip--red { width: 6px; height: 6px; }
 }

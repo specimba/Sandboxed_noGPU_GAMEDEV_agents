@@ -2,6 +2,7 @@ import {
   ARENA,
   BURN,
   FOE,
+  HEX,
   HOUND,
   OVERDRIVE,
   PLAYER,
@@ -54,7 +55,14 @@ export interface SimEvents {
   onRecall(x: number, z: number): void;
   onShieldBreak(x: number, z: number): void;
   onBlock(x: number, z: number): void;
-  onHeavyShot(x: number, z: number): void;
+  onHeavyShot(x: number, z: number, tx?: number, tz?: number): void;
+  /** optional pure-notify: weaver anchored a hex zone at (x,z), t s to detonation.
+   *  No rng consumed, run digests unchanged — same law as onFoeHurt. */
+  onHexAnchor?(x: number, z: number, t: number): void;
+  /** optional pure-notify: a hex zone detonated; hit = the ember was caught */
+  onHexDetonate?(x: number, z: number, hit: boolean): void;
+  /** optional pure-notify: the ember is ROOTED for dur s (movement zeroed) */
+  onPlayerRoot?(x: number, z: number, dur: number): void;
   onBossPhase(x: number, z: number, phase: number): void;
   onRevive(x: number, z: number): void;
   onWardenSpawn(x: number, z: number): void;
@@ -103,6 +111,7 @@ interface Foe {
   dz: number;
   burstLeft: number; // weaver burst queue
   burstT: number;
+  hexCd: number; // weaver hex-zone cooldown (enemy time)
   patternAngle: number; // warden radial offset
   face: number; // bulwark armor facing
   burn: number; // EMBER ROT stacks
@@ -124,6 +133,16 @@ export interface SpawnMark {
   z: number;
   t: number;
   kind: FoeKind;
+}
+
+/** HEX LOOM zone — a named patch of floor; detonates when t expires.
+ *  Rendered by the view's own pipe (parallel to marks: a zone is not a foe
+ *  spawn and must never count into enemiesLeft). */
+export interface HexZone {
+  x: number;
+  z: number;
+  t: number; // seconds to detonation (enemy time)
+  weaverId: number;
 }
 
 const TAU = Math.PI * 2;
@@ -168,6 +187,11 @@ export class Sim {
   foes: Foe[] = [];
   bullets: Bullet[] = [];
   marks: SpawnMark[] = [];
+  hexes: HexZone[] = [];
+  /** player crowd control — ROOTED: movement zeroed, dash blocked, throwing
+   *  free. Ticks on PLAYER time. Public: the engine watchdog enforces the
+   *  failsafe law (never locked > CC.max × factor). */
+  pRootT = 0;
   private nextId = 1;
 
   // waves
@@ -228,6 +252,8 @@ export class Sim {
     this.foes = [];
     this.bullets = [];
     this.marks = [];
+    this.hexes = [];
+    this.pRootT = 0;
     this.wave = 1;
     this.waveState = 'idle';
     this.intermissionT = 0;
@@ -272,6 +298,8 @@ export class Sim {
     this.foes.length = 0;
     this.bullets.length = 0;
     this.marks.length = 0;
+    this.hexes.length = 0;
+    this.pRootT = 0;
     this.spawnQueue.length = 0;
     this.invuln = Math.max(this.invuln, 0.8);
     this.wave = biome * RUN.roomsPerBiome + room;
@@ -343,10 +371,14 @@ export class Sim {
     this.updatePlayer(dt, moveX, moveY, wantDash);
     this.updateShards(dt);
 
+    // the root binds the PLAYER — it ticks on player time
+    this.pRootT = Math.max(0, this.pRootT - dt);
+
     // foes & bullets live on enemy time (slowed by Overdrive)
     this.updateFoes(enemyDt);
     this.updateBullets(enemyDt);
     this.updateMarks(enemyDt);
+    this.updateHexes(enemyDt);
     this.updateWave(dt);
 
     // chain decay
@@ -373,7 +405,10 @@ export class Sim {
     this.invuln = Math.max(0, this.invuln - dt);
     this.dashCd = Math.max(0, this.dashCd - dt);
 
-    if (wantDash && this.dashCd <= 0 && this.dashT <= 0) {
+    // ROOTED: an in-flight dash dies the frame the bind lands; no new dash
+    if (this.pRootT > 0) this.dashT = 0;
+
+    if (wantDash && this.dashCd <= 0 && this.dashT <= 0 && this.pRootT <= 0) {
       // dash-recall: airborne shards whip home at 1.5× speed
       let recalled = false;
       for (const s of this.shards) {
@@ -416,6 +451,12 @@ export class Sim {
       this.dashT -= dt;
       this.pvx = this.dashDx * PLAYER.dashSpeed;
       this.pvz = this.dashDz * PLAYER.dashSpeed;
+    } else if (this.pRootT > 0) {
+      // ROOTED: input is ignored, velocity hard-decays under the bind —
+      // throwing stays free (the counterplay ladder keeps a weapon in hand)
+      const drag = Math.max(0, 1 - dt * 12);
+      this.pvx *= drag;
+      this.pvz *= drag;
     } else {
       const spd = this.mods.speed;
       const ax = moveX * PLAYER.accel * spd;
@@ -547,6 +588,8 @@ export class Sim {
     }
     this.spawnQueue.length = 0;
     this.marks.length = 0;
+    this.hexes.length = 0;
+    this.pRootT = 0;
   }
 
   /** QA hook: strike the nearest live foe as a direct shard-class hit — the
@@ -912,6 +955,7 @@ export class Sim {
       dz: 0,
       burstLeft: 0,
       burstT: 0,
+      hexCd: kind === 'weaver' ? 1.2 : 0, // first hex waits one beat
       patternAngle: this.rng() * TAU,
       face: Math.atan2(this.px - x, this.pz - z), // armor starts facing the ember
       burn: 0,
@@ -1044,6 +1088,19 @@ export class Sim {
           break;
         }
         case 'weaver': {
+          // HEX LOOM: name a patch of floor at the ember's feet — leave it or
+          // be rooted. Zero rng; all timers on enemy time.
+          f.hexCd -= dt;
+          if (
+            f.hexCd <= 0 &&
+            pd <= HEX.castRange &&
+            this.hexes.length < HEX.maxZones &&
+            !this.hexes.some((h) => h.weaverId === f.id)
+          ) {
+            f.hexCd = HEX.cooldown;
+            this.hexes.push({ x: this.px, z: this.pz, t: HEX.telegraph, weaverId: f.id });
+            this.events.onHexAnchor?.(this.px, this.pz, HEX.telegraph);
+          }
           // hold the 15..21 band, strafe clockwise
           const tangX = -pdz / pd;
           const tangZ = pdx / pd;
@@ -1109,7 +1166,7 @@ export class Sim {
                 grazed: false,
                 heavy: true,
               });
-              this.events.onHeavyShot(f.x, f.z);
+              this.events.onHeavyShot(f.x, f.z, f.tx, f.tz);
             }
           }
           break;
@@ -1265,6 +1322,22 @@ export class Sim {
       if (m.t <= 0) {
         this.marks.splice(i, 1);
         this.spawnFoe(m.kind, m.x, m.z, m.kind === 'warden' ? '' : this.rollElite(), m.kind === 'warden');
+      }
+    }
+  }
+
+  /** HEX LOOM detonations — enemy time (Overdrive slows the trap) */
+  private updateHexes(dt: number): void {
+    for (let i = this.hexes.length - 1; i >= 0; i--) {
+      const h = this.hexes[i];
+      h.t -= dt;
+      if (h.t > 0) continue;
+      const hit = Math.hypot(this.px - h.x, this.pz - h.z) <= HEX.radius;
+      this.hexes.splice(i, 1);
+      this.events.onHexDetonate?.(h.x, h.z, hit);
+      if (hit) {
+        this.pRootT = Math.max(this.pRootT, HEX.rootDur); // never stacks/extends
+        this.events.onPlayerRoot?.(h.x, h.z, HEX.rootDur);
       }
     }
   }

@@ -15,6 +15,9 @@ export const COLORS = {
   foe: 0xff3b52,
   foeDeep: 0x8f1230,
   foeBullet: 0xff6a4a,
+  /** light-bullet hot core (normal-blended so it never washes out into the
+   *  warm biomes the way the additive ember color did) */
+  foeBulletCore: 0xffd8b0,
   /** arena grid — cold obsidian umber that ignites to gold as the star rekindles */
   gridCold: 0x241a12,
   gridHot: 0xffab52,
@@ -74,6 +77,38 @@ export const OVERDRIVE = {
 export const BURN = {
   tick: 0.75,
   maxStacks: 6,
+};
+
+/** HEX LOOM — the reworked weaver: it periodically anchors a hex zone at
+ *  the ember's CURRENT position; 0.9s telegraph, then detonation. Caught
+ *  inside the radius = ROOTED (movement zeroed, dash blocked, throwing
+ *  free). Counterplay: leave the zone during the telegraph (walking covers
+ *  ~4.5u in 0.9s, a dash far more) or kill the weaver. All zone timers run
+ *  on ENEMY time (Overdrive slows the trap — player-favorable, same law as
+ *  BURN). Consumes ZERO rng — determinism law intact. */
+export const HEX = {
+  radius: 2.6, // detonation catch radius (u)
+  /** must exceed the weaver hold band's OUTER edge (21u) — the weaver parks
+   *  at pd≈21.1, and a castRange below that meant the hex could NEVER fire
+   *  (caught by harness block G1 before this ever reached a player) */
+  castRange: 22,
+  telegraph: 0.9, // anchor → detonation (enemy seconds)
+  rootDur: 0.8, // root duration on catch
+  cooldown: 3.5, // per-weaver hex cooldown (enemy seconds)
+  maxZones: 2, // global live-zone cap (perf guard)
+};
+
+/** CC feedback kit + failsafe law — timers live on the sim (public), the
+ *  kit values are VIEW/AUDIO-only (the sim never reads these). The engine
+ *  watchdog clamps any CC timer above max × failsafeFactor: the player is
+ *  never locked longer than that, ever. */
+export const CC = {
+  rootMax: 0.8, // == HEX.rootDur (design assert in simdrive-controls)
+  slowMax: 2.0, // slow states are dormant this sprint
+  failsafeFactor: 2,
+  rootRim: 0x8a7f72, // player-hull rim desat target while ROOTED (warm ash)
+  rootEmisK: 0.03, // hull emissive floor while rooted (base 0.12)
+  struggleShake: 0.012, // per-frame rig shake while rooted + holding movement
 };
 
 /** CINDER HOUND — a telegraphed charger: lurks at mid range, locks its
@@ -164,6 +199,7 @@ export const SCORE = {
 };
 
 export const FEEL = {
+  dashBuffer: 0.12, // a dash pressed this close to ready fires the frame it readies
   hitstopKill: 0.055,
   hitstopWarden: 0.22,
   hitstopMax: 0.16,

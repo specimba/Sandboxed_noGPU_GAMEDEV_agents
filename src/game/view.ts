@@ -1,9 +1,16 @@
 import * as THREE from 'three';
 import { loadAssetGeometry } from './assetLib';
-import { ARENA, COLORS, HOUND } from './constants';
+import { ARENA, CC, COLORS, HEX, HOUND } from './constants';
 import type { FoeKind, Sim } from './sim';
 import { makeGlowTexture, ParticlePool } from './fx';
-import { coreMaterial, makeDiamondTexture, makeStreakTexture, stylizedMaterial } from './materials';
+import {
+  coreMaterial,
+  makeDiamondTexture,
+  makeDiamondTextureDark,
+  makeStreakTexture,
+  stylizedMaterial,
+  type StylizedOpts,
+} from './materials';
 
 /**
  * HOLLOW SUN view — "EMBER RITE" entity layer.
@@ -38,48 +45,52 @@ const FOE_COL: Record<FoeKind, number> = {
   warden: COLORS.warden,
 };
 
-/** one chiseled shell material per kind — all 40 pool entries share it */
-const FOE_MAT: Record<FoeKind, THREE.ShaderMaterial> = {
-  drifter: stylizedMaterial({
+/** chiseled shell STYLE per kind — every pool entry builds its OWN material
+ *  through the stylizedMaterial() factory (which auto-registers it into the
+ *  uTime tick), so per-foe hit-flash / tints are possible. Materials are NOT
+ *  shared: .clone() would bypass the registry and freeze uTime. Draw-call
+ *  law holds: calls are per MESH, not per material. */
+const FOE_STYLE: Record<FoeKind, StylizedOpts> = {
+  drifter: {
     base: COLORS.obsidian,
     lit: COLORS.obsidianLit,
     rim: FOE_COL.drifter,
     rimK: 1.2,
     emis: FOE_COL.drifter,
     emisK: 0.1,
-  }),
-  striker: stylizedMaterial({
+  },
+  striker: {
     base: COLORS.obsidian,
     lit: COLORS.obsidianLit,
     rim: FOE_COL.striker,
     rimK: 1.3,
     emis: FOE_COL.striker,
     emisK: 0.1,
-  }),
-  weaver: stylizedMaterial({
+  },
+  weaver: {
     base: COLORS.obsidian,
     lit: COLORS.obsidianLit,
     rim: FOE_COL.weaver,
     rimK: 1.4,
     emis: FOE_COL.weaver,
     emisK: 0.1,
-  }),
-  caster: stylizedMaterial({
+  },
+  caster: {
     base: COLORS.obsidian,
     lit: COLORS.obsidianLit,
     rim: FOE_COL.caster,
     rimK: 1.2,
     emis: 0x9dc43a,
     emisK: 0.15,
-  }),
-  bulwark: stylizedMaterial({
+  },
+  bulwark: {
     base: COLORS.obsidian,
     lit: COLORS.obsidianLit,
     rim: FOE_COL.bulwark,
     rimK: 0.9,
     rimPow: 3,
-  }),
-  hound: stylizedMaterial({
+  },
+  hound: {
     base: COLORS.obsidian,
     lit: COLORS.obsidianLit,
     rim: FOE_COL.hound,
@@ -87,8 +98,8 @@ const FOE_MAT: Record<FoeKind, THREE.ShaderMaterial> = {
     emis: FOE_COL.hound,
     emisK: 0.12,
     pulse: 0.2, // ember-crack shimmer while it stalks
-  }),
-  warden: stylizedMaterial({
+  },
+  warden: {
     base: 0x140d08,
     lit: COLORS.obsidianLit,
     rim: FOE_COL.warden,
@@ -97,7 +108,7 @@ const FOE_MAT: Record<FoeKind, THREE.ShaderMaterial> = {
     emis: FOE_COL.warden,
     emisK: 0.12,
     pulse: 0.15,
-  }),
+  },
 };
 
 /** the bulwark's frontal armor — brighter than the body, the block zone reads */
@@ -124,10 +135,48 @@ const FOE_HEART: Record<FoeKind, { color: number; scale: number; opacity: number
 interface FoeView {
   group: THREE.Group;
   mesh: THREE.Mesh;
+  mat: THREE.ShaderMaterial; // per-entry (NOT shared) — hit-flash/tint capable
+  baseEmisK: number; // style's resting emissive strength
+  baseRim: THREE.Color; // style's identity rim
+  flashT: number; // hit-flash clock (0 idle)
   glow: THREE.Sprite;
   core: THREE.Mesh; // weaver's inner light
   plate: THREE.Mesh; // bulwark frontal armor
   kind: FoeKind;
+}
+
+interface HexView {
+  group: THREE.Group;
+  rimMat: THREE.MeshBasicMaterial;
+  fillMat: THREE.MeshBasicMaterial;
+}
+
+/** merged 6-spoke root bind — ONE draw call while rooted, hidden otherwise */
+function buildEntangleGeometry(): THREE.BufferGeometry {
+  const pos: number[] = [];
+  const idx: number[] = [];
+  let vi = 0;
+  for (let i = 0; i < 6; i++) {
+    const a = (i / 6) * Math.PI * 2 + Math.PI / 6;
+    const ca = Math.cos(a);
+    const sa = Math.sin(a);
+    const r0 = 0.3;
+    const r1 = 1.3;
+    const w = 0.06;
+    pos.push(
+      ca * r0 - sa * w, 0.1, sa * r0 + ca * w,
+      ca * r0 + sa * w, 0.1, sa * r0 - ca * w,
+      ca * r1 + sa * w, 0.1, sa * r1 - ca * w,
+      ca * r1 - sa * w, 0.1, sa * r1 + ca * w,
+    );
+    idx.push(vi, vi + 1, vi + 2, vi, vi + 2, vi + 3);
+    vi += 4;
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.setIndex(idx);
+  g.computeVertexNormals();
+  return g;
 }
 
 interface MarkView {
@@ -151,6 +200,11 @@ const MAX_BULLETS = 340;
 const MAX_HEAVY = 60;
 const SHADOW_POOL = 41; // 1 ember dart + 40 foes
 const SPARK_SEGS = 8;
+const FLASH_TIME = 0.09; // per-foe hit-flash window
+
+const PLAYER_RIM = new THREE.Color(0xffb454); // the dart's identity rim
+const ROOT_RIM = new THREE.Color(CC.rootRim); // ash desat while ROOTED
+const FLASH_RIM = new THREE.Color(0xffe9c0); // hit-flash rim wash
 
 export class View {
   private scene: THREE.Scene;
@@ -158,7 +212,18 @@ export class View {
   private glowTex: THREE.CanvasTexture;
   private warmTex: THREE.CanvasTexture;
   private diamondTex: THREE.CanvasTexture;
+  private darkDiamondTex: THREE.CanvasTexture;
   private streakTex: THREE.CanvasTexture;
+
+  /** CC kit — root visuals + reduced-motion + struggle flag (engine-fed) */
+  private hexPool: HexView[] = [];
+  private entangle: THREE.Mesh;
+  private entangleMat: THREE.MeshBasicMaterial;
+  private prevRoot = false;
+  private reduceFx = false;
+  /** dormant stun kit: three ember stars awaiting a stun source (never shown
+   *  this sprint — +0 draws; the kit ships ready for the next CC state) */
+  private stunStars = new THREE.Group();
 
   private playerGroup = new THREE.Group();
   private playerBody = new THREE.Group(); // y=1.0 craft, banks on z
@@ -213,6 +278,7 @@ export class View {
     this.glowTex = makeGlowTexture('rgba(255,255,255,0.95)', 'rgba(255,255,255,0)');
     this.warmTex = makeGlowTexture('rgba(255,208,130,0.95)', 'rgba(255,96,32,0)');
     this.diamondTex = makeDiamondTexture();
+    this.darkDiamondTex = makeDiamondTextureDark();
     this.streakTex = makeStreakTexture();
     this.shadowTex = makeGlowTexture('rgba(0,0,0,0.85)', 'rgba(0,0,0,0)');
 
@@ -302,10 +368,11 @@ export class View {
       this.shardViews.push({ mesh, glow });
     }
 
-    // ---- foes: designed silhouettes, shared shell + heart per kind ----
+    // ---- foes: designed silhouettes, per-entry shell + heart per kind ----
     for (let i = 0; i < 40; i++) {
       const group = new THREE.Group();
-      const mesh = new THREE.Mesh(FOE_GEO.drifter, FOE_MAT.drifter);
+      const mat = this.foeMatFor('drifter');
+      const mesh = new THREE.Mesh(FOE_GEO.drifter, mat);
       group.add(mesh);
       const heartDef = FOE_HEART.drifter;
       const glow = new THREE.Sprite(
@@ -323,22 +390,24 @@ export class View {
       group.add(plate);
       group.visible = false;
       scene.add(group);
-      this.foePool.push({ group, mesh, glow, core, plate, kind: 'drifter' });
+      this.foePool.push({ group, mesh, mat, baseEmisK: FOE_STYLE.drifter.emisK ?? 0, baseRim: new THREE.Color(FOE_STYLE.drifter.rim ?? 0xffffff), flashT: 0, glow, core, plate, kind: 'drifter' });
     }
 
-    // ---- bullets (one draw call) — diamond shards, not round dots ----
+    // ---- bullets (one draw call) — hot-core diamonds with a dark edge so
+    // ---- they keep a silhouette on every biome (normal blending: additive
+    // ---- washed out into the bright biome grids + bloom) ----
     this.bulletPos.setUsage(THREE.DynamicDrawUsage);
     this.bulletGeo.setAttribute('position', this.bulletPos);
     this.bulletGeo.setDrawRange(0, 0);
     const bMat = new THREE.PointsMaterial({
-      color: COLORS.foeBullet,
-      size: 0.9,
+      color: COLORS.foeBulletCore,
+      size: 0.95,
       sizeAttenuation: true,
       transparent: true,
-      opacity: 0.95,
-      blending: THREE.AdditiveBlending,
+      opacity: 0.97,
+      blending: THREE.NormalBlending,
       depthWrite: false,
-      map: this.diamondTex,
+      map: this.darkDiamondTex,
     });
     this.bulletPoints = new THREE.Points(this.bulletGeo, bMat);
     this.bulletPoints.frustumCulled = false;
@@ -363,6 +432,46 @@ export class View {
     this.heavyPoints.frustumCulled = false;
     this.heavyPoints.renderOrder = 9;
     scene.add(this.heavyPoints);
+
+    // ---- HEX LOOM zones: pooled hex telegraphs (≤HEX.maxZones live) ----
+    const hexRimGeo = new THREE.RingGeometry(HEX.radius * 0.86, HEX.radius, 6).rotateX(-Math.PI / 2);
+    const hexFillGeo = new THREE.CircleGeometry(HEX.radius * 0.86, 6).rotateX(-Math.PI / 2);
+    for (let i = 0; i < HEX.maxZones; i++) {
+      const rimMat = new THREE.MeshBasicMaterial({ color: FOE_COL.weaver, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide });
+      const fillMat = new THREE.MeshBasicMaterial({ color: FOE_COL.weaver, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide });
+      const group = new THREE.Group();
+      const rim = new THREE.Mesh(hexRimGeo, rimMat);
+      rim.renderOrder = 6;
+      const fill = new THREE.Mesh(hexFillGeo, fillMat);
+      fill.renderOrder = 5;
+      group.add(rim, fill);
+      group.position.y = 0.12;
+      group.visible = false;
+      scene.add(group);
+      this.hexPool.push({ group, rimMat, fillMat });
+    }
+
+    // ---- ROOT bind: merged 6-spoke entangle at the ember's feet ----
+    this.entangleMat = new THREE.MeshBasicMaterial({
+      color: FOE_COL.weaver,
+      transparent: true,
+      opacity: 0,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+    });
+    this.entangle = new THREE.Mesh(buildEntangleGeometry(), this.entangleMat);
+    this.entangle.renderOrder = 7;
+    this.entangle.visible = false;
+    scene.add(this.entangle);
+
+    // ---- dormant stun kit: three ember stars (never visible yet) ----
+    for (let i = 0; i < 3; i++) {
+      const star = new THREE.Mesh(new THREE.OctahedronGeometry(0.13, 0), coreMaterial(0xffe8c2, false));
+      this.stunStars.add(star);
+    }
+    this.stunStars.visible = false;
+    this.playerGroup.add(this.stunStars);
 
     // ---- spawn telegraph marks: foeDeep doom-floor + bright rim, thinner ----
     for (let i = 0; i < 14; i++) {
@@ -493,9 +602,64 @@ export class View {
       FOE_GEO.hound = geo; // Blender-tier hound body (shared, never disposed)
       for (const v of this.foePool) if (v.kind === 'hound') v.mesh.geometry = geo;
     });
+    void loadAssetGeometry('hex_weaver').then((geo) => {
+      if (!geo || this.disposed) return;
+      geo.computeBoundingBox();
+      const bb = geo.boundingBox;
+      if (!bb) return;
+      const size = bb.getSize(new THREE.Vector3());
+      const k = 1.5 / Math.max(size.x, size.y); // match the weaver ring footprint (0.66×2)
+      geo.scale(k, k, k);
+      FOE_GEO.weaver = geo; // Blender-tier hex lattice loom (shared, never disposed)
+      for (const v of this.foePool) if (v.kind === 'weaver') v.mesh.geometry = geo;
+    });
   }
 
   /* ---------------------------------------------------------------- */
+
+  /** per-pool-entry shell material — built through the factory so it lands
+   *  in the uTime tick registry (a raw .clone() would freeze the pulse) */
+  private foeMatFor(kind: FoeKind): THREE.ShaderMaterial {
+    const style = FOE_STYLE[kind];
+    const mat = stylizedMaterial(style);
+    return mat;
+  }
+
+  /** per-foe hit-flash: light up the pool entry nearest the hit (event-time,
+   *  not per-frame; foes are spaced by collision radii so the match is clean) */
+  flashAt(x: number, z: number): void {
+    let best: FoeView | null = null;
+    let bestD = 0.9;
+    for (const v of this.foePool) {
+      if (!v.group.visible) continue;
+      const d = Math.hypot(v.group.position.x - x, v.group.position.z - z);
+      if (d < bestD) {
+        bestD = d;
+        best = v;
+      }
+    }
+    if (best) best.flashT = FLASH_TIME;
+  }
+
+  /** heavy-volley direction line — ONE free telegraph-pool line, muzzle →
+   *  locked target; silently skipped when the pool is busy (aiming foes win) */
+  fireVolleyLine(x: number, z: number, tx: number, tz: number): void {
+    const t = this.telegraphs.find((l) => !l.line.visible);
+    if (!t) return;
+    const pos = t.line.geometry.getAttribute('position') as THREE.BufferAttribute;
+    pos.setXYZ(0, x, 0.9, z);
+    const dl = Math.hypot(tx - x, tz - z) || 1;
+    pos.setXYZ(1, x + ((tx - x) / dl) * dl, 0.9, z + ((tz - z) / dl) * dl);
+    pos.needsUpdate = true;
+    t.line.visible = true;
+    (t.mat.color as THREE.Color).set(0xd6ff8a);
+    t.mat.opacity = 0.85;
+  }
+
+  /** reduced-motion wiring (engine reads the media query, view obeys) */
+  setReduceFx(v: boolean): void {
+    this.reduceFx = v;
+  }
 
   /** CHAINSPARK visual: a jagged additive arc from (fx,fz) to (tx,tz) */
   fireSpark(fx: number, fz: number, tx: number, tz: number): void {
@@ -514,7 +678,7 @@ export class View {
     s.mat.opacity = 0.95;
   }
 
-  sync(sim: Sim, aimX: number, aimZ: number, showAim: boolean, dt: number): void {
+  sync(sim: Sim, aimX: number, aimZ: number, showAim: boolean, dt: number, struggle = false): void {
     this.time += dt;
 
     // ember dart
@@ -541,6 +705,37 @@ export class View {
         drag: 3.2,
       });
     }
+
+    // ---- ROOT kit: desat the hull, swirl the entangle, struggle nudge ----
+    const rooted = sim.pRootT > 0;
+    const hullMat = this.playerHull.material as THREE.ShaderMaterial;
+    if (rooted) {
+      const rk = Math.min(1, sim.pRootT / HEX.rootDur);
+      hullMat.uniforms.uEmisK.value = THREE.MathUtils.lerp(0.12, CC.rootEmisK, rk);
+      (hullMat.uniforms.uRim.value as THREE.Color).copy(PLAYER_RIM).lerp(ROOT_RIM, rk);
+      this.playerTail.material.opacity = 0.45 - 0.27 * rk;
+      this.entangle.visible = true;
+      this.entangle.position.set(sim.px, 0, sim.pz);
+      this.entangle.rotation.y += dt * 2.2;
+      this.entangle.scale.setScalar(0.85 + 0.65 * rk); // closes in as the bind expires
+      this.entangleMat.opacity = 0.85 * Math.min(1, rk * 4) * (0.6 + 0.4 * Math.sin(this.time * 10));
+      // movement-attempt shake: a tiny bank-axis rattle while the player fights the bind
+      if (struggle && !this.reduceFx) {
+        this.playerBody.rotation.x = Math.sin(this.time * 30) * 0.05 * rk;
+      } else {
+        this.playerBody.rotation.x *= Math.max(0, 1 - dt * 10);
+      }
+    } else {
+      if (this.prevRoot) {
+        // bind broke — restore the authored hull the same frame
+        hullMat.uniforms.uEmisK.value = 0.12;
+        (hullMat.uniforms.uRim.value as THREE.Color).copy(PLAYER_RIM);
+        this.playerTail.material.opacity = 0.45;
+        this.playerBody.rotation.x = 0;
+      }
+      this.entangle.visible = false;
+    }
+    this.prevRoot = rooted;
 
     // contact shadow — the dart grounds itself
     const psh = this.shadows[0];
@@ -586,7 +781,11 @@ export class View {
       if (v.kind !== f.kind) {
         v.kind = f.kind;
         v.mesh.geometry = FOE_GEO[f.kind];
-        v.mesh.material = FOE_MAT[f.kind];
+        v.mesh.material = this.foeMatFor(f.kind);
+        v.mat = v.mesh.material as THREE.ShaderMaterial;
+        v.baseEmisK = FOE_STYLE[f.kind].emisK ?? 0;
+        v.baseRim.set(FOE_STYLE[f.kind].rim ?? 0xffffff);
+        v.flashT = 0;
         const heartDef = FOE_HEART[f.kind];
         (v.glow.material as THREE.SpriteMaterial).color.set(heartDef.color);
         (v.glow.material as THREE.SpriteMaterial).opacity = heartDef.opacity;
@@ -626,6 +825,18 @@ export class View {
       }
       if (f.kind === 'drifter') v.mesh.rotation.x += dt * 1.1;
       if (f.kind === 'caster' && f.state === 1) v.mesh.rotation.x += dt * 6; // charging drill spin
+
+      // per-foe hit-flash — the shell answers the hit that landed
+      if (v.flashT > 0) {
+        v.flashT -= dt;
+        const fk = Math.max(0, v.flashT / FLASH_TIME);
+        v.mat.uniforms.uEmisK.value = v.baseEmisK + 0.9 * fk;
+        (v.mat.uniforms.uRim.value as THREE.Color).copy(v.baseRim).lerp(FLASH_RIM, fk);
+        if (v.flashT <= 0) {
+          v.mat.uniforms.uEmisK.value = v.baseEmisK;
+          (v.mat.uniforms.uRim.value as THREE.Color).copy(v.baseRim);
+        }
+      }
 
       // elite halo — the affix is the ring (VISUAL_AUDIO.md color law)
       if (f.elite && f.spawnT <= 0 && this.haloUsed < this.haloPool.length) {
@@ -705,6 +916,21 @@ export class View {
       v.baseMat.opacity = v.mat.opacity * 0.45;
     }
     for (let i = this.markCursor; i < this.markPool.length; i++) this.markPool[i].group.visible = false;
+
+    // HEX LOOM zones — the named floor, readable at a glance
+    let hi = 0;
+    for (const h of sim.hexes) {
+      if (hi >= this.hexPool.length) break;
+      const hv = this.hexPool[hi++];
+      hv.group.visible = true;
+      hv.group.position.set(h.x, 0.12, h.z);
+      const hk = Math.max(0, Math.min(1, h.t / HEX.telegraph)); // 1 fresh → 0 detonate
+      hv.group.scale.setScalar(0.9 + 0.22 * (1 - hk));
+      hv.group.rotation.y = this.time * 0.7;
+      hv.rimMat.opacity = (0.3 + 0.6 * (1 - hk)) * (0.75 + 0.25 * Math.sin(this.time * 14));
+      hv.fillMat.opacity = 0.08 + 0.2 * (1 - hk);
+    }
+    for (let i = hi; i < this.hexPool.length; i++) this.hexPool[i].group.visible = false;
     for (let i = this.haloUsed; i < this.haloPool.length; i++) this.haloPool[i].mesh.visible = false;
     this.haloUsed = 0;
 
@@ -745,6 +971,18 @@ export class View {
     for (const f of this.foePool) {
       this.scene.remove(f.group);
       (f.glow.material as THREE.Material).dispose();
+      f.mat.dispose(); // per-entry shell materials — each needs its own dispose
+    }
+    for (const hv of this.hexPool) {
+      this.scene.remove(hv.group);
+      hv.rimMat.dispose();
+      hv.fillMat.dispose();
+    }
+    this.scene.remove(this.entangle);
+    this.entangleMat.dispose();
+    this.entangle.geometry.dispose();
+    for (const s of this.stunStars.children) {
+      ((s as THREE.Mesh).material as THREE.Material).dispose();
     }
     for (const m of this.markPool) {
       this.scene.remove(m.group);
@@ -781,6 +1019,7 @@ export class View {
     this.glowTex.dispose();
     this.warmTex.dispose();
     this.diamondTex.dispose();
+    this.darkDiamondTex.dispose();
     this.streakTex.dispose();
   }
 }

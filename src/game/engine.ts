@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import {
   ARENA,
+  CC,
   FEEL,
   OVERDRIVE,
   PLAYER,
@@ -8,6 +9,7 @@ import {
   starEnergy,
 } from './constants';
 import { AudioEngine } from './audio';
+import { ccFailsafe, dashBufferStep } from './control';
 import { DamageNumbers } from './damageNumbers';
 import { FoePips } from './foePips';
 import { CameraRig } from './cameraRig';
@@ -62,6 +64,38 @@ let perfMsEma = 0;
 let perfDrawPeak = 0;
 const perfScratch: number[] = []; // reused by perfSnapshot's p95 sort
 
+/* ------------------------------------------------------------------ */
+/* ?debug=1 control forensics — the black box behind the stuck-control */
+/* investigation. Preallocated ring + transition-only console.debug;    */
+/* zero cost unless the URL carries ?debug=1 (owner directive law).     */
+/* ------------------------------------------------------------------ */
+
+const SUPPRESS_RING = 120; // ~2s of samples at ~10Hz
+interface SuppressSample {
+  t: number;
+  phase: string;
+  hitstop: number;
+  slowT: number;
+  dashBufT: number;
+  mx: number;
+  my: number;
+  edges: string;
+  downCount: number;
+}
+const suppressRing: SuppressSample[] = Array.from({ length: SUPPRESS_RING }, () => ({
+  t: 0,
+  phase: '',
+  hitstop: 0,
+  slowT: 0,
+  dashBufT: 0,
+  mx: 0,
+  my: 0,
+  edges: '',
+  downCount: 0,
+}));
+let suppressAt = 0;
+let suppressLen = 0;
+
 let active: Engine | null = null;
 export function getEngine(): Engine | null {
   return active;
@@ -93,6 +127,7 @@ export class Engine {
   private acc = 0;
   private hitstop = 0;
   private hitstopCd = 0;
+  private dashBufT = 0; // buffered dash edge (0.12s window, engine-side)
   private dmgNums = new DamageNumbers();
   private pips = new FoePips();
   private slowT = 0;
@@ -103,6 +138,25 @@ export class Engine {
   private raycaster = new THREE.Raycaster();
   private ndc = new THREE.Vector2();
   private disposed = false;
+
+  // ?debug=1 forensics state
+  private debug = false;
+  private lastRt = 0;
+  private lastSteps = 0;
+  private lastMx = 0;
+  private lastMy = 0;
+  private prevPhase = '';
+  private prevHitstop = 0;
+  private prevSuppressT = 0;
+  private rootAudioPrev = false;
+
+  // reduced motion — read once, obeyed by rig + view + struggle shake
+  private reduceMq: MediaQueryList | null = null;
+  private reduceFx = false;
+  private onReduceChange = (): void => {
+    this.reduceFx = this.reduceMq?.matches ?? false;
+    this.view.setReduceFx(this.reduceFx);
+  };
 
   // run progression
   private runBiome = 0;
@@ -125,6 +179,17 @@ export class Engine {
     this.input = new Input(canvas);
 
     this.sim = new Sim(this.makeEvents());
+
+    // ?debug=1 — control forensics live (rt / steps / input vector /
+    // suppress states). Read once; zero cost otherwise.
+    this.debug = new URLSearchParams(window.location.search).get('debug') === '1';
+
+    // reduced motion — the rig shake sites were hard-coded false forever;
+    // the media query finally reaches them (and the view's struggle nudge)
+    this.reduceMq = window.matchMedia('(prefers-reduced-motion: reduce)');
+    this.reduceFx = this.reduceMq.matches;
+    this.view.setReduceFx(this.reduceFx);
+    this.reduceMq.addEventListener('change', this.onReduceChange);
 
     const best = loadBest();
     const meta = loadMeta();
@@ -164,6 +229,8 @@ export class Engine {
       store: this.store,
       perf: () => this.perfSnapshot(),
       perfSnapshot: () => this.perfSnapshot(),
+      debug: this.debug,
+      forensics: () => this.forensics(),
     };
   }
 
@@ -192,7 +259,9 @@ export class Engine {
     this.lastBoonChoices = [];
     this.deathT = -1;
     this.hitstop = 0;
+    this.dashBufT = 0;
     this.slowT = 0;
+    this.input.clearEdges(); // no phantom dash/pause survives a run start
     this.scene.setBiome(0);
     this.audio.setBiome(0);
     this.audio.setMusicLevel(0);
@@ -286,6 +355,8 @@ export class Engine {
       this.store.getState().showBanner(biomeName(this.runBiome), 'DEEPER INTO THE DEAD STAR', 'biome');
     }
     this.sim.startRoom(this.runBiome, this.runRoom);
+    this.input.clearEdges(); // Escape pressed during the shrine must not pause the next room
+    this.dashBufT = 0;
     this.store.getState().set({
       phase: 'playing',
       boonChoices: [],
@@ -338,6 +409,8 @@ export class Engine {
 
   resume(): void {
     if (this.store.getState().phase !== 'paused') return;
+    this.input.clearEdges(); // edges queued while frozen never fire on resume
+    this.dashBufT = 0;
     this.store.getState().set({ phase: 'playing' });
     this.audio.unlock();
     this.audio.setMusicPaused(false);
@@ -376,6 +449,7 @@ export class Engine {
     cancelAnimationFrame(this.raf);
     window.removeEventListener('resize', this.onResize);
     document.removeEventListener('visibilitychange', this.onVisibility);
+    this.reduceMq?.removeEventListener('change', this.onReduceChange);
     this.input.dispose();
     this.audio.dispose();
     this.view.dispose();
@@ -425,6 +499,7 @@ export class Engine {
       },
       onFoeHurt: (kind, x, z, dmg, chain) => {
         this.dmgNums.spawn(x, z, dmg, chain);
+        this.view.flashAt(x, z); // the shell answers the hit — per-entry materials
         void kind;
       },
       onBurnTick: (x, z, dmg) => {
@@ -515,11 +590,29 @@ export class Engine {
         this.fx.burst(x, z, 26, 11, { color: WHITE_C, life: 0.28, size: 0.42, up: 0.2 });
         this.rings.fire(x, z, 2.4, 0.22, 0xfff4dc);
       },
-      onHeavyShot: (x, z) => {
+      onHeavyShot: (x, z, tx, tz) => {
         this.audio.heavyShot();
         this.rig.addShake(0.12);
         this.rings.fire(x, z, 3.0, 0.3, 0xc9ff6a);
         this.fx.burst(x, z, 30, 10, { color: new THREE.Color(0xc9ff6a), life: 0.4, size: 0.5, up: 0.2 });
+        // the lance names its line — readable at 21 u/s (telegraph-pool reuse)
+        if (tx !== undefined && tz !== undefined) this.view.fireVolleyLine(x, z, tx, tz);
+      },
+      onHexAnchor: (x, z, t) => {
+        this.audio.hexAnchor();
+        this.debugLog(`hex anchor @(${x.toFixed(1)},${z.toFixed(1)}) t=${t.toFixed(2)}`);
+      },
+      onHexDetonate: (x, z, hit) => {
+        this.audio.hexDetonate(hit);
+        this.rings.fire(x, z, hit ? 4.6 : 3.2, 0.45, 0xff2d6e);
+        if (hit) this.scene.floorPulse(x, z);
+        this.debugLog(`hex detonate @(${x.toFixed(1)},${z.toFixed(1)}) hit=${hit}`);
+      },
+      onPlayerRoot: (x, z, dur) => {
+        this.audio.rootBind();
+        this.rig.addShake(0.1);
+        this.store.getState().pushToast('ROOTED — LEAVE THE HEX NEXT TIME', 'red');
+        this.debugLog(`player root @(${x.toFixed(1)},${z.toFixed(1)}) dur=${dur.toFixed(2)}`);
       },
       onBossPhase: (x, z, phase) => {
         this.audio.bossPhase();
@@ -577,9 +670,27 @@ export class Engine {
     this.raf = requestAnimationFrame(this.frame);
     const dtReal = Math.min(0.1, (now - this.lastT) / 1000);
     this.lastT = now;
+    this.lastRt = dtReal;
     this.hitstopCd = Math.max(0, this.hitstopCd - dtReal);
+    // hitstop drains on WALL CLOCK — a stutter can never extend a freeze,
+    // and the watchdog clamps any runaway above the designed ceiling
+    if (this.hitstop > 0) this.hitstop = Math.max(0, this.hitstop - dtReal);
+    if (this.hitstop > FEEL.hitstopMax + 1e-6) {
+      this.debugLog(`hitstop watchdog clamp ${this.hitstop.toFixed(3)}`);
+      this.hitstop = FEEL.hitstopMax;
+    }
+    // [HS:CTRL] transition log — hitstop enter/exit with real durations
+    if (this.debug) {
+      if (this.hitstop > 0 && this.prevHitstop <= 0) this.debugLog(`hitstop ENTER ${this.hitstop.toFixed(3)}s`);
+      if (this.hitstop <= 0 && this.prevHitstop > 0) this.debugLog(`hitstop EXIT`);
+      this.prevHitstop = this.hitstop;
+    }
     this.samplePerf(dtReal);
     const phase = this.store.getState().phase;
+    if (this.debug && phase !== this.prevPhase) {
+      this.debugLog(`phase ${this.prevPhase || '∅'} → ${phase}`);
+      this.prevPhase = phase;
+    }
 
     if (phase === 'title') {
       // living attract: the sim idles forward so shards keep orbiting the
@@ -587,7 +698,7 @@ export class Engine {
       this.sim.update(dtReal, dtReal, 0, 0, 0, 0, false, false);
       this.scene.setEnergy(0.16 + 0.09 * Math.sin(performance.now() * 0.00045));
       this.scene.update(dtReal);
-      this.rig.update(dtReal, this.scene.camera, 0, 0, 0, 0, false, false);
+      this.rig.update(dtReal, this.scene.camera, 0, 0, 0, 0, false, this.reduceFx);
       this.view.sync(this.sim, 0, 0, false, dtReal);
       this.rings.update(dtReal);
       this.fx.update(dtReal);
@@ -596,6 +707,22 @@ export class Engine {
     }
 
     if (phase === 'paused' || phase === 'dead' || phase === 'reward') {
+      // the overlays advertise their keys — ESC — RESUME / ENTER — REKINDLE —
+      // so those keys MUST work here. Everything else is discarded per frame:
+      // a stale edge must never fire on re-entry into play.
+      if (phase === 'paused') {
+        if (this.input.consumePause()) this.resume();
+        this.input.consumeBegin();
+      } else if (phase === 'dead') {
+        if (this.input.consumeBegin()) this.restart();
+        this.input.consumePause();
+      } else {
+        this.input.consumePause();
+        this.input.consumeBegin();
+      }
+      this.input.consumeThrow();
+      this.input.consumeDash();
+      this.dashBufT = 0;
       this.scene.render();
       return;
     }
@@ -616,7 +743,7 @@ export class Engine {
       this.dmgNums.update(this.scene.camera, dtReal);
       this.scene.update(dtReal * 0.45);
       this.rig.setVelocity(0, 0);
-      this.rig.update(dtReal, this.scene.camera, this.sim.px, this.sim.pz, 0, 0, false, false);
+      this.rig.update(dtReal, this.scene.camera, this.sim.px, this.sim.pz, 0, 0, false, this.reduceFx);
       this.view.sync(this.sim, this.aim.x, this.aim.z, false, dtReal);
       this.scene.render();
       if (this.deathT <= 0) {
@@ -629,17 +756,32 @@ export class Engine {
     this.updateAim();
 
     const wantThrow = this.input.consumeThrow();
-    const wantDash = this.input.consumeDash();
+    const wantDashRaw = this.input.consumeDash();
     const mx = this.input.moveX;
     const my = this.input.moveY;
+    this.lastMx = mx;
+    this.lastMy = my;
+
+    // 0.12s dash buffer: an edge pressed just before ready fires the frame
+    // it readies — the input is never silently eaten (pure law, control.ts)
+    const buf = dashBufferStep(this.dashBufT, this.sim.dashCd, wantDashRaw, dtReal);
+    this.dashBufT = buf.bufT;
+    const wantDash = buf.wantDash;
+
+    // CC failsafe: no bind ever outlives max × failsafeFactor (the law)
+    const ccFired = ccFailsafe(this.sim);
+    if (ccFired.length > 0) {
+      for (const k of ccFired) this.debugLog(`CC failsafe fired: ${k} clamped`);
+      this.store.getState().pushToast('HEX BIND SUPPRESSED', 'red');
+    }
+    this.sampleSuppress(mx, my);
 
     this.acc += dtReal;
     let steps = 0;
     while (this.acc >= STEP && steps < 5) {
       let dt = STEP;
       if (this.hitstop > 0) {
-        this.hitstop -= STEP;
-        dt = 0;
+        dt = 0; // drained on wall clock above — stutter cannot extend it
       }
       let enemyDt = dt * (this.sim.odActive ? OVERDRIVE.enemyTimeScale : 1);
       if (this.slowT > 0) {
@@ -647,11 +789,13 @@ export class Engine {
         dt *= 0.35;
         enemyDt *= 0.35;
       }
-      this.sim.update(dt, enemyDt, mx, my, this.aim.x, this.aim.z, wantThrow, wantDash);
+      // edges reach the FIRST step only — a stutter frame cannot double-fire
+      this.sim.update(dt, enemyDt, mx, my, this.aim.x, this.aim.z, steps === 0 && wantThrow, steps === 0 && wantDash);
       this.acc -= STEP;
       steps++;
     }
     if (steps === 5) this.acc = 0;
+    this.lastSteps = steps;
 
     // visuals follow the sim
     const st = this.store.getState();
@@ -661,13 +805,21 @@ export class Engine {
     this.scene.bloom.strength = 0.5 + (this.sim.odActive ? 0.16 : 0) + energy * 0.07;
     this.scene.update(dtReal);
     this.rig.setVelocity(this.sim.pvx, this.sim.pvz);
-    this.rig.update(dtReal, this.scene.camera, this.sim.px, this.sim.pz, this.sim.pvx, this.sim.pvz, this.sim.odActive, false);
-    this.view.sync(this.sim, this.aim.x, this.aim.z, !st.touch, dtReal);
+    this.rig.update(dtReal, this.scene.camera, this.sim.px, this.sim.pz, this.sim.pvx, this.sim.pvz, this.sim.odActive, this.reduceFx);
+    this.view.sync(this.sim, this.aim.x, this.aim.z, !st.touch, dtReal, mx !== 0 || my !== 0);
     this.rings.update(dtReal);
     this.fx.update(dtReal);
     this.dmgNums.update(this.scene.camera, dtReal);
     this.pips.update(this.scene.camera, this.sim, isBossRoom(this.runRoom));
     this.audio.setOverdrive(this.sim.odActive);
+
+    // root-break snap (state-diffed — fires on the apply→clear edge only)
+    if (this.rootAudioPrev && this.sim.pRootT <= 0) this.audio.rootBreak();
+    this.rootAudioPrev = this.sim.pRootT > 0;
+    // sustained struggle: a tiny shake while rooted + fighting the bind
+    if (this.sim.pRootT > 0 && (mx !== 0 || my !== 0) && !this.reduceFx) {
+      this.rig.addShake(CC.struggleShake);
+    }
 
     // danger ambience + heartbeat at one ember
     let nearest = 99;
@@ -708,6 +860,8 @@ export class Engine {
         roomLabel: `${biomeName(this.runBiome)} · ${isBossRoom(this.runRoom) ? 'BOSS' : 'ROOM ' + this.runRoom}`,
         bossBar: boss ? { name: bossName(this.runBiome), frac: Math.max(0, boss.hp / boss.maxHp) } : null,
         boonsTaken: boonLabels,
+        rooted: this.sim.pRootT > 0,
+        rootT: this.sim.pRootT,
       });
     }
 
@@ -734,6 +888,72 @@ export class Engine {
       perfFpsEma += ((1000 / ms) - perfFpsEma) * 0.05;
       perfMsEma += (ms - perfMsEma) * 0.05;
     }
+  }
+
+  /** [HS:CTRL] debug-gated transition log — silent unless ?debug=1 */
+  private debugLog(note: string): void {
+    if (!this.debug) return;
+    console.debug(`[HS:CTRL] ${note}`);
+  }
+
+  /** ~10Hz ring sample of every input-suppressing state (?debug=1 only) —
+   *  the black box a stuck-control report is postmortemed from */
+  private sampleSuppress(mx: number, my: number): void {
+    if (!this.debug) return;
+    const now = performance.now() / 1000;
+    if (now - this.prevSuppressT < 0.1) return;
+    this.prevSuppressT = now;
+    const s = suppressRing[suppressAt];
+    suppressAt = (suppressAt + 1) % SUPPRESS_RING;
+    if (suppressLen < SUPPRESS_RING) suppressLen++;
+    s.t = now;
+    s.phase = this.store.getState().phase;
+    s.hitstop = this.hitstop;
+    s.slowT = this.slowT;
+    s.dashBufT = this.dashBufT;
+    s.mx = mx;
+    s.my = my;
+    const e = this.input.debugEdges();
+    s.edges = `${e.throw ? 'T' : ''}${e.dash ? 'D' : ''}${e.pause ? 'P' : ''}${e.begin ? 'B' : ''}` || '-';
+    s.downCount = e.downCount;
+  }
+
+  /** ?debug=1 forensics snapshot — live control truth for agent-browser to
+   *  screenshot: rt / acc / steps / input vector / edges / suppress tail */
+  private forensics(): Record<string, unknown> {
+    const perf = this.perfSnapshot();
+    const tail: SuppressSample[] = [];
+    for (let i = 0; i < suppressLen; i++) {
+      tail.push(suppressRing[(suppressAt - suppressLen + i + SUPPRESS_RING) % SUPPRESS_RING]);
+    }
+    return {
+      rt: this.lastRt,
+      acc: this.acc,
+      steps: this.lastSteps,
+      fps: perf.fps,
+      frameMs: perf.frameMs,
+      phase: this.store.getState().phase,
+      hitstop: this.hitstop,
+      hitstopCd: this.hitstopCd,
+      slowT: this.slowT,
+      dashBufT: this.dashBufT,
+      input: {
+        mx: this.lastMx,
+        my: this.lastMy,
+        touch: { x: this.input.touchMoveX, y: this.input.touchMoveY },
+        edges: this.input.debugEdges(),
+      },
+      sim: {
+        dashCd: this.sim.dashCd,
+        dashT: this.sim.dashT,
+        invuln: this.sim.invuln,
+        throwCd: this.sim.throwCd,
+        over: this.sim.over,
+        pRootT: this.sim.pRootT,
+      },
+      reduceFx: this.reduceFx,
+      suppressTail: tail,
+    };
   }
 
   /** live snapshot for the debug hook — query-time only (may sort/allocate) */

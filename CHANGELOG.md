@@ -2,6 +2,56 @@
 
 Rule R2 (docs/QUALITY_AUDIT.md): each entry lists objective improvements over the previous build in graphics, mechanics, or architecture — with screenshot paths and gate receipts. No entry, no ship.
 
+# CHANGELOG — every build states what improved, with evidence
+
+Rule R2 (docs/QUALITY_AUDIT.md): each entry lists objective improvements over the previous build in graphics, mechanics, or architecture — with screenshot paths and gate receipts. No entry, no ship.
+
+---
+
+## SPRINT 16 · BUILD 1 — "IRONHOLD" (controls can no longer dead-lock; CC is ON SCREEN with counterplay; enemy fire is legible)
+
+**Previous state:** Sprint 15 shipped the cinder hound + arrival beats + edge pips, but the owner directive ruled three things blocking: (P0-1) controls could dead-lock with zero diagnostics — the pause overlay literally printed "ESC — RESUME" with **no handler wired anywhere** (the dead panel's "ENTER — REKINDLE" was backed by a `consumeBegin()` with zero call sites repo-wide); (P0-2) crowd control did not exist on screen at all; (P0-3) player life loss was still projectile-attributed — additive bullets washed out near bright biome palettes, heavy lances arrived unannounced, and the sprint-15 threat pips rendered **with no CSS rule at all** (unstyled invisible squares). Mechanically the weaver was just another bullet hose.
+
+### Fixed — control integrity (P0-1: diagnose first, then harden)
+- **`?debug=1` forensics black box** (owner-directive order: instrumentation BEFORE behavior changes): `window.__hollowsun.forensics()` returns live `rt / acc / steps / fps / frameMs / phase / hitstop / hitstopCd / slowT / dashBufT / input{mx,my,touch,edges} / sim{dashCd,dashT,invuln,throwCd,pRootT} / reduceFx` plus a preallocated **120-sample suppress-state ring**; `[HS:CTRL]` transition-only console logging (phase changes, hitstop enter/exit with real durations, hex/root events) — zero cost without the flag. Evidence: `.qa/sprint16/16-title-debug.png`, forensics snapshot with 120 samples captured live.
+- **Escape now RESUMES** (the advertised key was dead): the paused/dead/reward render-return branch in `engine.ts` gained a gated consume — **Escape pauses AND unpauses** (verified live: phase paused → playing), **Enter rekindles at death** (verified live: forced dead → Enter → playing), and every overlay frame discards stale throw/dash edges so a phantom dash/pause can never fire on re-entry (proven phantom chains: Escape-during-shrine → instant re-pause at room start; Space-at-title → spawn dash).
+- **Stuck-key hardening** (`input.ts`): `visibilitychange` now clears keys + edges (OS overlays can swallow a keyup without a blur → permanent strafe); blur clears edges too, not just held keys; edges are force-cleared at `startRun/resume/advanceRoom`.
+- **Hitstop drains on WALL CLOCK** + a per-frame watchdog clamps it at `FEEL.hitstopMax` (a stutter frame can no longer extend a freeze; a runaway can never exceed the ceiling — logged if it ever trips). Edge hygiene: input edges reach only the FIRST accumulator step (a stutter frame cannot double-fire).
+- **0.12s dash buffer** (`src/game/control.ts`, pure + headless-tested): a dash pressed just before ready fires the frame it readies instead of being silently eaten. **Touch stick safety net**: pointer capture moves to the stick CONTAINER + window-level pointerup/cancel resets the stick — a finger lifting outside the stick can no longer leave the ember drifting on a frozen value.
+- **CC failsafe law** (the directive's hard timeout): `ccFailsafe()` clamps any CC timer above `max × 2` with a toast + log — the player is never locked longer than 1.6s, ever, regardless of upstream defects. Gated by the new `scripts/simdrive-controls.ts` (wired into `make qa`).
+
+### Improved — crowd control is now ON SCREEN (P0-2) + the mechanical pivot (P2)
+- **HEX LOOM — the weaver rework** (the game's first real CC, with counterplay): a weaver within 22u periodically **names a patch of floor at your feet** — a pink hexagonal zone telegraphs for 0.9s (slowed by Overdrive), then detonates: caught inside 2.6u = **ROOTED 0.8s** (movement zeroed, dash blocked, **throwing stays free**). Counterplay ladder: leave the zone during the telegraph (walking covers ~4.5u), kill the weaver (hp 3, the cheapest 3-pt foe), or keep fighting while rooted. Zero rng consumed — harness-proven seed-deterministic.
+- **Integration defect caught by harness block G1 before it ever reached a player**: the spec'd `castRange` 20 sat below the weaver hold band's outer edge (pd ≈ 21.1) — the hex could **never fire**. `HEX.castRange` = 22 with the law documented in `constants.ts`.
+- **The full feedback kit — "if it's not on screen, it didn't happen"**: merged 6-spoke **entangle geometry** swirls at the dart's feet (+0 persistent draws), the hull **desaturates to warm ash** (uniform-only rim/emis lerp, restored the frame the bind breaks), a **movement-attempt rattle** + tiny rig shake while fighting the bind (both gated by the newly wired `prefers-reduced-motion` — which also finally reaches all three `rig.update` shake sites that were hard-coded `false`), one-shot audio cues (`hexAnchor` dread tick, `hexDetonate` thump/hiss, `rootBind` thunk+crackle, `rootBreak` snap), and a **ROOTED chip** in the HUD sun column (pink pip + live countdown, hs-panel language, boss-bar collision impossible by the escort law). Dormant stun/slow kit ships ready (+0 draws). Evidence: `.qa/sprint16/16-hex-zone.png` (hex telegraph live on the floor + ROOTED chip), `.qa/sprint16/16-rooted.png` (entangle + ash hull + chip at 0.7s), engine log receipts (`hex detonate hit=true → player root dur=0.80`).
+- **Harness block G** (simdrive-forge): anchoring laws (cast range, global cap ≤2, ≤1 zone per weaver), escape law (walk out → `hit=false`, no root), catch law (detonate under the ember → root exactly 0.8s), root semantics (dash blocked with zero events while rooted; **throwing fires** — counterplay law), and same-seed digest determinism.
+
+### Improved — projectile readability (P0-3)
+- **Light bullets rebuilt**: normal-blended **hot-core diamond with a near-opaque obsidian edge** (`makeDiamondTextureDark`) — the additive ember-on-warm washout against bright biome grids + bloom is gone by construction; the silhouette survives every biome. Evidence: `.qa/sprint16/16-biome2-bullets.png` (16 staged bullets in GLASS HOLLOW: every white-hot diamond and acid-green lance reads crisply against the pink palette).
+- **Per-foe hit-flash**: the shared-per-kind shell materials are now **per-pool-entry**, built through the `stylizedMaterial()` factory (a raw `.clone()` would have bypassed the uTime registry and frozen the hound/warden pulse — caught in proposal 16-b). Every landed hit flashes the struck foe's shell (emissive + rim wash, 0.09s). +0 draw calls (calls are per mesh, not per material).
+- **Heavy-volley direction lines**: a caster lance now names its line — one free telegraph-pool line from muzzle to locked target (`onHeavyShot` gained optional `tx/tz`), readable at 21 u/s, capped to pool contention (aiming foes win).
+- **Red heavy-bullet pips + the invisible-pip defect repair**: `.hs-threat-pip` finally has its authored CSS (amber diamond, dark fill, glow) — sprint 15 shipped the className with **no rule anywhere** — plus a `--red` variant: up to 3 off-screen heavy lances clamp to the screen edge (foes own the pool first). Computed-style verified live: 10px, red border, dark fill.
+
+### Improved — 3-stack asset pipeline (P1)
+- **`hex_weaver.glb`** (16th library asset): Blender 4.2 headless forge (`scripts/blender/forge_weaver.py`) — hexagonal lattice loom (outer hex ring, 6 radiating spokes, crowned hub, hanging needle), **572 tris ≤ 600 budget** (first build was 644 — trimmed before it could land), seeded + deterministic. Gates: `optimize` quant applied=16 skipped=0, `verify-assets` **pass=16 fail=0** (15→16), Cycles preview `.qa/sprint16/hex_weaver.png`, runtime swap-in slot live in `view.ts` (footprint-normalized 1.5u, re-seats pooled weavers).
+
+### Perf + gates
+- Persistent draw calls **+0** (per-entry materials share one program; zones/entangle are transient pools; pips/chip are DOM). Fresh-run `perf()` **81 calls** (ceiling 100); staged worst-corner (root + zone + full wave in one frame) peaked 108 transiently — documented lever: `HEX.maxZones 2→1` if a real device ever trips it. 0 console errors, 0 page errors.
+- Gates: `bunx tsc --noEmit` PASS, `bun run lint` PASS, `make qa` PASS (**now 4 harnesses**: simdrive won dawn 636 · afterglow 9/9 · forge incl. HEX blocks G1–G5 · controls harness new).
+- Live-verified in a real tab (`?debug=1`): Escape pause/resume cycle, Enter rekindle, hex telegraph → detonation → root → expiry (engine `[HS:CTRL]` log receipts), ROOTED chip, threat-pip CSS, mobile 390px HUD hold, forensics ring (120 samples).
+- **Determinism note**: the hex path consumes zero rng — same-seed digests stay byte-identical (block G5); gameplay receipts re-recorded (dawn 636 vs 647) because weaver behavior intentionally changed trajectories. No golden values were broken.
+
+### Known issues / debts
+- The headless tab runs at ~10fps (SwiftShader) — per the QA-validity law, freeze/lag reports from it are inadmissible; all timing laws were proven headless-seeded (`simdrive-*`) + the forensics ring now gives the owner's real device a voice (`?debug=1`).
+- `FEEL.hitstopWarden 0.22 > hitstopMax 0.16` — the warden stop is silently clamped (pre-existing; left untouched this sprint — no feel changes without an owner playtest).
+- Stun/slow CC states ship as dormant kit placeholders (+0 draws) awaiting a mechanic that applies them (Sprint 17 candidate: a stun-applying variant or mutator).
+- `onHeavyShot`'s volley line and the light-bullet rebuild should get a real-device playtest pass for bloom feel; the bullet core can brighten to `0xfff0d8` in one constant if washed.
+
+### Next-iteration plan (Sprint 17 candidates)
+- Payout count-up (deferred twice — lowest info gain, still queued), longer music forms, dedicated zap sfx (spark still borrows shield-crackle), first-60s scripted onboarding.
+- A second CC carrier (stun) to activate the dormant kit + a cleanse/dodge boon ("HEXWARD: hexes detonate early under you").
+- Real-device perf receipt from the owner (GPU browser) against the ≤100 law.
+
 ---
 
 ## SPRINT 15 · BUILD 1 — "WILDFANG" (a new predator; biomes become places; off-screen is no longer blind)

@@ -37,6 +37,8 @@ export default function Hud() {
   const mutatorLabel = useGameStore((s) => s.mutatorLabel);
   const bossBar = useGameStore((s) => s.bossBar);
   const boonsTaken = useGameStore((s) => s.boonsTaken);
+  const rooted = useGameStore((s) => s.rooted);
+  const rootT = useGameStore((s) => s.rootT);
 
   if (phase === 'loading' || phase === 'error' || phase === 'title') return null;
 
@@ -123,6 +125,19 @@ export default function Hud() {
           <span aria-hidden="true" className="hs-ticks pointer-events-none absolute inset-0" />
         </div>
         <span className="hs-tracking text-[9px] tabular-nums text-[#ffc766]/80">{Math.round(sun * 100)}%</span>
+        {/* CC status — if it's not on screen, it didn't happen (boss rooms
+            never contain weavers, so this cannot collide with the boss bar) */}
+        {playing && rooted && (
+          <div className="hs-panel flex max-w-[112px] items-center gap-1.5 px-2 py-1">
+            <span
+              aria-hidden="true"
+              className="hs-pip"
+              style={{ borderColor: 'rgba(255,45,110,0.75)', background: 'rgba(255,45,110,0.22)' }}
+            />
+            <span className="hs-tracking text-[9px] text-[#ff8ab0] sm:text-[10px]">ROOTED</span>
+            <span className="hs-tracking text-[9px] tabular-nums text-[#f2e6cf]/70">{rootT.toFixed(1)}</span>
+          </div>
+        )}
       </div>
 
       {/* bottom row — embers | shards as one flex row: overlap is impossible

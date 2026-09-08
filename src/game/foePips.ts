@@ -16,11 +16,13 @@ const POOL = 8;
 const MAX_DIST = 44; // pips fade to min opacity at this range from the ember
 const EDGE = 20; // px margin kept from the viewport edge
 const BASE = 10; // pip size in px (8 on ≤420px screens)
+const MAX_BULLET_PIPS = 3; // heavy lances only — foes own the pool first
 
 interface Cand {
   x: number;
   z: number;
   d: number; // distance to the ember (threat ordering)
+  bullet: boolean; // heavy-bullet pip (red, smaller, fixed bright opacity)
 }
 
 export class FoePips {
@@ -63,13 +65,21 @@ export class FoePips {
     camera.getWorldDirection(this.dir);
 
     // gather + distance-sort (mirrors the engine's danger pass — no allocs
-    // beyond the reused scratch list)
+    // beyond the reused scratch list). Foes first; heavy bullets fill the
+    // remaining slots (they're the fast unseen killers).
     this.cand.length = 0;
     for (const f of sim.foes) {
       if (f.spawnT > 0) continue;
-      this.cand.push({ x: f.x, z: f.z, d: Math.hypot(f.x - sim.px, f.z - sim.pz) });
+      this.cand.push({ x: f.x, z: f.z, d: Math.hypot(f.x - sim.px, f.z - sim.pz), bullet: false });
     }
     this.cand.sort((a, b) => a.d - b.d);
+    let bulletCount = 0;
+    for (const b of sim.bullets) {
+      if (!b.heavy || bulletCount >= MAX_BULLET_PIPS) continue;
+      bulletCount++;
+      this.cand.push({ x: b.x, z: b.z, d: Math.hypot(b.x - sim.px, b.z - sim.pz), bullet: true });
+    }
+    this.cand.sort((a, b) => (a.bullet === b.bullet ? a.d - b.d : a.bullet ? 1 : -1));
 
     let used = 0;
     for (const c of this.cand) {
@@ -95,8 +105,10 @@ export class FoePips {
       const sy = Math.min(h - EDGE, Math.max(EDGE, syRaw));
       // point outward from the screen center; diamond base is the CSS square
       const ang = Math.PI / 4 + Math.atan2(syRaw - h / 2, sxRaw - w / 2);
-      const op = THREE.MathUtils.clamp(1.1 - c.d / MAX_DIST, 0.3, 0.95);
+      const op = c.bullet ? 0.8 : THREE.MathUtils.clamp(1.1 - c.d / MAX_DIST, 0.3, 0.95);
       const el = this.pool[used++];
+      const wantCls = c.bullet ? 'hs-threat-pip hs-threat-pip--red' : 'hs-threat-pip';
+      if (el.className !== wantCls) el.className = wantCls;
       el.style.transform = `translate(${sx.toFixed(1)}px, ${sy.toFixed(1)}px) translate(-50%,-50%) rotate(${ang.toFixed(3)}rad) scale(${k})`;
       el.style.opacity = op.toFixed(2);
     }
@@ -127,4 +139,5 @@ interface SimLike {
   px: number;
   pz: number;
   foes: { x: number; z: number; spawnT: number }[];
+  bullets: { x: number; z: number; heavy: boolean }[];
 }
