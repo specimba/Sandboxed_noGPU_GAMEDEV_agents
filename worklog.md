@@ -969,3 +969,24 @@ Stage Summary:
 - The three standing complaints are answered with mechanisms, not patches: the drone cannot escalate or persist (watchdog law), the CC kit exists end-to-end with hard caps + readbacks (foe and player), bullets/CC/veil are readable per-biome, and the build you play is stamped on screen.
 - Trust chain restored: inherited tree = commit 52f67c0; this sprint = its own commit; CHANGELOG carries the 5-part report; docs/SPRINT17_FORENSICS.md carries the lost-work ledger.
 - Debt declared: transient draw-call peak 105 (worst biome-2 frame) vs 100 ceiling; Enter-to-rekindle dead key; <420px HUD crowding; simdrive full-run harness still time-seeded per invocation; Blender toolchain absent in sandbox.
+
+---
+Task ID: 17-merge
+Agent: main orchestrator (Z.ai Code)
+Task: Merge the orphaned local sprint-17 line onto the ironhold lineage (origin/main e7e5822) — the final forensic correction
+
+Work Log:
+- git push was rejected non-fast-forward: fetch revealed origin/main at e7e5822 — sprints 14-16 (RESONANCE adaptive music, WILDFANG cinder hound, IRONHOLD control integrity) EXISTED on the remote. The rebuilt sandbox had lost them locally. This is the complete root cause of the owner's "fixed bug came back / nothing changed" report: the deployed artifact (this sandbox's dev server) never ran the remote's fixes.
+- Merged origin/main into the sprint-17 line (38 conflict hunks across 10 files, hand-resolved):
+  - audio.ts: REMOTE RESONANCE wins (lookahead-scheduled adaptive music, danger DUCKS behind a capped tension bed, state-diffed setters, tab-throttle resync); sprint-17's local rewrite discarded; grafted the 5 CC/veil cues (ccStun/ccFoeSlow/ccRootCue/veilVolley/ccVeilHit/ccCleanse) onto it.
+  - sim.ts: remote base (hound + hex loom + pRootT + volley lines) + sprint-17 grafts (herald kind + FSM + veil bullets, stun/chill/rootT/hitCount fields + deterministic triggers, dash-strike root, dash cleanse, veilT player state, onHurt source, CC notifies, herald wave bands).
+  - view.ts: remote base (per-entry materials, hex zones, hound, dark-edge bullets) + grafts (herald bell geo/mat/heart + windup wobble, veil Points layer on the dark-edge sprite law, CC marker pools + cursors + hides, veiled ice wisps, three-way bullet split, dispose).
+  - engine.ts: remote base (control.ts, pips, music level/pause, hex/hound events, CC watchdog) + grafts (herald BURST, setDanger(0) phase resets, onHurt 4-arg + wedge, CC notify handlers, veil toast, onboarding hints + graduation, playerSlow HUD push).
+  - constants.ts: unified the two CC objects into one (remote rootMax/failsafe law + sprint-17 stun/chill/veil kit); scene.ts kept the glass family; Hud/Overlays merged ironhold hierarchy with sprint-17 veil meter/hints/wedge/count-up/stamps (fixed a doubled stamp from auto-merge); globals.css union (repaired a dropped closing brace that 500'd the page); worklog keeps both histories.
+  - scripts/simdrive.ts: kept the sprint-17 bulwark flank fix + added a permanent STALL-DIAG dump on frame-cap.
+- Validation: tsc PASS, lint PASS, make qa = simdrive 9/9 rooms 3/3 bosses + afterglow 9/9 + forge PASS (hound law) + simdrive-controls PASS (constants law, failsafe clamps, dash buffer, root lifecycle); verify-assets 19/19 (remote's hex_weaver + cinder_hound joined). Browser-verified merged golden path: stamp (e7e5822+17) on title/death/HUD, herald + veil + frost + HUD meter + dash cleanse, hound live, GLASS HOLLOW set, perf 85 calls / 104 peak / 25 programs. Receipts .qa/sprint17/15-18.
+- Pushed e7e5822..4f6c54a to origin/main; ls-remote resolves 4f6c54a.
+
+Stage Summary:
+- One lineage again: the remote's three lost sprints and the local sprint-17 work are merged, gated, browser-verified, and pushed. The preview artifact now serves EVERY fix from both lines.
+- Process law learned and recorded: after any sandbox rebuild, `git fetch` + lineage check comes BEFORE any new work — a stale local tree turns every "shipped" report into fiction.
