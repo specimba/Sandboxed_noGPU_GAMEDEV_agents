@@ -176,6 +176,88 @@ function taperedBoxGeo(w: number, h: number, d: number, taper: number): THREE.Bu
   return geo;
 }
 
+/* ------------------------------------------------------------------ */
+/* PROP SCATTER LAW (sprint 18) — data-driven instanced dressing       */
+/* Godot-Resource shape: every biome dressing family is one record in   */
+/* this table; buildScatterFamily() turns each record into ONE          */
+/* InstancedMesh (1 draw call per family, regardless of count).         */
+/* Placement is pure index-hash — (i/count)*2π + a0, baseR + ((i*step)  */
+/* % mod)*unit — zero rng, so scatter is deterministic per build.       */
+/* ------------------------------------------------------------------ */
+
+export interface PropScatterRow {
+  glb: string; // public/assets/meshes/<glb>.glb (loadAssetGeometry cache)
+  biomeIdx: number; // dressing belongs to exactly one biome (setBiome toggle)
+  count: number; // instances in the family
+  baseR: number; // first ring radius (u)
+  rim: number; // identity rim tint (stylizedMaterial color-coding channel)
+  instanced: true; // InstancedMesh law — never one mesh per prop
+  h: number; // authored target height (u) — k = h / bbox.y normalize law
+  a0: number; // angular offset (rad) — the deterministic seed
+  rStep: number; // radius hash: r = baseR + ((i * rStep) % rMod) * rUnit
+  rMod: number;
+  rUnit: number;
+  rotK: number; // yaw hash: rotation.y = a * rotK
+  mat: { base: number; lit: number; rimK: number; rimPow: number; emis: number; emisK: number };
+}
+
+/** the whole biome dressing sweep — spires + glass family (biome 2), heart
+ *  roots (biome 3), PALE CHOIR bone cathedral (biome 4, warm bone/candle
+ *  tints only — zero blue/indigo per the 18-a MUST-2 palette law) */
+export const PROP_SCATTER: PropScatterRow[] = [
+  // GLASS HOLLOW spires (forge v3) — broken crystal growths
+  {
+    glb: 'glass_spire', biomeIdx: 1, count: 6, baseR: 26, rim: 0xff5c8a, instanced: true,
+    h: 4.6, a0: 2.1, rStep: 1, rMod: 3, rUnit: 3.5, rotK: 1.7,
+    mat: { base: 0x1a0f1c, lit: 0x33182f, rimK: 0.85, rimPow: 2.2, emis: 0xff5c8a, emisK: 0.07 },
+  },
+  // GLASS HOLLOW monolith set (sprint 17 assetgen) — needles, ruin gates, prisms
+  {
+    glb: 'glass_monolith', biomeIdx: 1, count: 4, baseR: 28, rim: 0xd9a8ff, instanced: true,
+    h: 6.4, a0: 0.4, rStep: 7, rMod: 4, rUnit: 1, rotK: 2.9,
+    mat: { base: 0x160d1a, lit: 0x2c1830, rimK: 0.95, rimPow: 2.0, emis: 0xd9a8ff, emisK: 0.06 },
+  },
+  {
+    glb: 'vesica_arch', biomeIdx: 1, count: 2, baseR: 24.5, rim: 0xff5c8a, instanced: true,
+    h: 5.2, a0: 1.35, rStep: 7, rMod: 4, rUnit: 1, rotK: 2.9,
+    mat: { base: 0x160d1a, lit: 0x2c1830, rimK: 0.95, rimPow: 2.0, emis: 0xff5c8a, emisK: 0.06 },
+  },
+  {
+    glb: 'prism_cluster', biomeIdx: 1, count: 2, baseR: 30, rim: 0xc9784a, instanced: true,
+    h: 3.4, a0: 3.6, rStep: 7, rMod: 4, rUnit: 1, rotK: 2.9,
+    mat: { base: 0x160d1a, lit: 0x2c1830, rimK: 0.95, rimPow: 2.0, emis: 0xc9784a, emisK: 0.06 },
+  },
+  // THE HEART roots (forge v3) — knurled obsidian roots
+  {
+    glb: 'heart_root', biomeIdx: 2, count: 5, baseR: 24, rim: 0xffd9a0, instanced: true,
+    h: 5.2, a0: 0.9, rStep: 1, rMod: 2, rUnit: 5, rotK: 2.3,
+    mat: { base: 0x140d08, lit: 0x2a1d12, rimK: 0.7, rimPow: 2.4, emis: 0xffb454, emisK: 0.05 },
+  },
+  // THE PALE CHOIR (forge_choir, sprint 18) — bone spires rise around the nave
+  {
+    glb: 'bone_spire', biomeIdx: 3, count: 7, baseR: 25, rim: 0xd9c8a4, instanced: true,
+    h: 4.6, a0: 0.15, rStep: 1, rMod: 4, rUnit: 2, rotK: 2.2,
+    mat: { base: 0x1a140c, lit: 0x2e2418, rimK: 0.9, rimPow: 2.2, emis: 0xd9c8a4, emisK: 0.05 },
+  },
+  // rib arches straddle the scatter ring — walk-through gap faces the lanes
+  {
+    glb: 'rib_arch', biomeIdx: 3, count: 4, baseR: 23, rim: 0xcbb896, instanced: true,
+    h: 5.0, a0: 0.8, rStep: 1, rMod: 2, rUnit: 4, rotK: 1.7,
+    mat: { base: 0x16100a, lit: 0x2a2216, rimK: 0.85, rimPow: 2.4, emis: 0xcbb896, emisK: 0.04 },
+  },
+  // pipe organ chest + reliquary lanterns — warm candle voice deep in the ring
+  {
+    glb: 'pipe_organ_cluster', biomeIdx: 3, count: 2, baseR: 29, rim: 0xe0c9a0, instanced: true,
+    h: 3.8, a0: 2.3, rStep: 1, rMod: 2, rUnit: 3, rotK: 2.6,
+    mat: { base: 0x17110b, lit: 0x2c2214, rimK: 0.9, rimPow: 2.2, emis: 0xffc98a, emisK: 0.07 },
+  },
+  {
+    glb: 'reliquary_lantern', biomeIdx: 3, count: 2, baseR: 21, rim: 0xffd9a0, instanced: true,
+    h: 2.2, a0: 3.9, rStep: 1, rMod: 2, rUnit: 3, rotK: 2.0,
+    mat: { base: 0x120d08, lit: 0x261c10, rimK: 1.0, rimPow: 2.0, emis: 0xffc766, emisK: 0.1 },
+  },
+];
+
 export interface SunRig {
   group: THREE.Group;
   setEnergy(e: number): void;
@@ -206,7 +288,8 @@ export class Scene {
   /** rim monolith field — stored for future animation */
   private monolithMats: THREE.ShaderMaterial[] = [];
   private monolithMeshes: THREE.Mesh[] = [];
-  /** biome-dressed props (glass spires, heart roots) — toggled by setBiome */
+  /** biome-dressed props — one InstancedMesh per PROP_SCATTER family,
+   *  toggled by setBiome via userData.biomeIdx */
   private biomeProps: THREE.Mesh[] = [];
   private starLight: THREE.PointLight;
   private sunEnergy = 0;
@@ -368,81 +451,55 @@ export class Scene {
       }
     });
 
-    // GLASS HOLLOW spires (forge v3) — broken crystal growths, biome 2 only
-    void loadAssetGeometry('glass_spire', true).then((geo) => {
+    // PROP SCATTER — every biome dressing family is one data row, one
+    // InstancedMesh (1 draw call per family; deterministic index-hash spots)
+    for (const row of PROP_SCATTER) this.buildScatterFamily(row);
+  }
+
+  /** one PROP_SCATTER row → ONE InstancedMesh pushed into the biomeProps
+   *  toggle. Same k-scale law (k = target_h / bbox.y) and loadAssetGeometry
+   *  (name, true) cache as the pre-instancing blocks; one shared
+   *  stylizedMaterial per family (the factory auto-registers it into the
+   *  uTime tick). Placement is pure index-hash — zero rng. */
+  private buildScatterFamily(row: PropScatterRow): void {
+    void loadAssetGeometry(row.glb, true).then((geo) => {
       if (!geo) return;
       geo.computeBoundingBox();
       const bb = geo.boundingBox;
       if (!bb) return;
       const size = bb.getSize(new THREE.Vector3());
-      const k = 4.6 / size.y;
+      const k = row.h / size.y;
       geo.scale(k, k, k);
-      for (let i = 0; i < 6; i++) {
-        const a = (i / 6) * Math.PI * 2 + 2.1;
-        const r = 26 + (i % 3) * 3.5;
-        const mat = stylizedMaterial({ base: 0x1a0f1c, lit: 0x33182f, rim: 0xff5c8a, rimK: 0.85, rimPow: 2.2, emis: 0xff5c8a, emisK: 0.07, fog: true });
-        const m = new THREE.Mesh(geo, mat);
-        m.position.set(Math.cos(a) * r, 0, Math.sin(a) * r);
-        m.rotation.y = a * 1.7;
-        m.userData.biomeIdx = 1;
-        m.visible = false;
-        this.scene.add(m);
-        this.biomeProps.push(m);
-      }
-    });
-
-    // GLASS HOLLOW monolith set (sprint 17 assetgen family) — needles, ruin
-    // gates and prism clusters deepen the second biome's skyline
-    const glassFamily: { name: string; count: number; baseR: number; h: number; rim: number; a0: number }[] = [
-      { name: 'glass_monolith', count: 4, baseR: 28, h: 6.4, rim: 0xd9a8ff, a0: 0.4 },
-      { name: 'vesica_arch', count: 2, baseR: 24.5, h: 5.2, rim: 0xff5c8a, a0: 1.35 },
-      { name: 'prism_cluster', count: 2, baseR: 30, h: 3.4, rim: 0xc9784a, a0: 3.6 },
-    ];
-    for (const fam of glassFamily) {
-      void loadAssetGeometry(fam.name, true).then((geo) => {
-        if (!geo) return;
-        geo.computeBoundingBox();
-        const bb = geo.boundingBox;
-        if (!bb) return;
-        const size = bb.getSize(new THREE.Vector3());
-        const k = fam.h / size.y;
-        geo.scale(k, k, k);
-        for (let i = 0; i < fam.count; i++) {
-          const a = fam.a0 + (i / fam.count) * Math.PI * 2;
-          const r = fam.baseR + ((i * 7) % 4);
-          const mat = stylizedMaterial({ base: 0x160d1a, lit: 0x2c1830, rim: fam.rim, rimK: 0.95, rimPow: 2.0, emis: fam.rim, emisK: 0.06, fog: true });
-          const m = new THREE.Mesh(geo, mat);
-          m.position.set(Math.cos(a) * r, 0, Math.sin(a) * r);
-          m.rotation.y = a * 2.9;
-          m.userData.biomeIdx = 1;
-          m.visible = false;
-          this.scene.add(m);
-          this.biomeProps.push(m);
-        }
+      const mat = stylizedMaterial({
+        base: row.mat.base,
+        lit: row.mat.lit,
+        rim: row.rim,
+        rimK: row.mat.rimK,
+        rimPow: row.mat.rimPow,
+        emis: row.mat.emis,
+        emisK: row.mat.emisK,
+        fog: true,
       });
-    }
-
-    // THE HEART roots (forge v3) — knurled obsidian roots, biome 3 only
-    void loadAssetGeometry('heart_root', true).then((geo) => {
-      if (!geo) return;
-      geo.computeBoundingBox();
-      const bb = geo.boundingBox;
-      if (!bb) return;
-      const size = bb.getSize(new THREE.Vector3());
-      const k = 5.2 / size.y;
-      geo.scale(k, k, k);
-      for (let i = 0; i < 5; i++) {
-        const a = (i / 5) * Math.PI * 2 + 0.9;
-        const r = 24 + (i % 2) * 5;
-        const mat = stylizedMaterial({ base: 0x140d08, lit: 0x2a1d12, rim: 0xffd9a0, rimK: 0.7, rimPow: 2.4, emis: 0xffb454, emisK: 0.05, fog: true });
-        const m = new THREE.Mesh(geo, mat);
-        m.position.set(Math.cos(a) * r, 0, Math.sin(a) * r);
-        m.rotation.y = a * 2.3;
-        m.userData.biomeIdx = 2;
-        m.visible = false;
-        this.scene.add(m);
-        this.biomeProps.push(m);
+      const inst = new THREE.InstancedMesh(geo, mat, row.count);
+      const m = new THREE.Matrix4();
+      const p = new THREE.Vector3();
+      const q = new THREE.Quaternion();
+      const e = new THREE.Euler();
+      const s = new THREE.Vector3(1, 1, 1);
+      for (let i = 0; i < row.count; i++) {
+        const a = row.a0 + (i / row.count) * Math.PI * 2; // deterministic angle hash
+        const r = row.baseR + ((i * row.rStep) % row.rMod) * row.rUnit; // deterministic radius hash
+        p.set(Math.cos(a) * r, 0, Math.sin(a) * r);
+        e.set(0, a * row.rotK, 0);
+        q.setFromEuler(e);
+        m.compose(p, q, s);
+        inst.setMatrixAt(i, m);
       }
+      inst.instanceMatrix.needsUpdate = true;
+      inst.visible = false; // the setBiome toggle owns visibility via userData.biomeIdx
+      inst.userData.biomeIdx = row.biomeIdx;
+      this.scene.add(inst);
+      this.biomeProps.push(inst);
     });
   }
 
@@ -768,8 +825,9 @@ export class Scene {
     this.tgtHot.set(b.hot);
     this.tgtFog.set(b.fog);
     this.tgtSun.set(b.sun);
-    // biome dressing — each forge prop set belongs to exactly one biome
-    const active = Math.min(2, Math.max(0, i));
+    // biome dressing — each forge prop family belongs to exactly one biome
+    // (clamp to the LAST biome so new rows always show — no hardcoded cap)
+    const active = Math.min(BIOMES.length - 1, Math.max(0, i));
     for (const m of this.biomeProps) m.visible = m.userData.biomeIdx === active;
   }
 

@@ -7,7 +7,7 @@
 BLENDER ?= $(wildcard /home/z/tools/blender-4.2.0-linux-x64/blender)
 XVFB_DISPLAY ?= 77
 
-.PHONY: assets assets-blender assets-library previews inspect optimize forge-library check qa qa-afterglow dev verify pipeline help
+.PHONY: assets assets-blender assets-library previews inspect optimize forge-library forge-choir check qa qa-afterglow dev verify pipeline help
 
 help:
 	@echo "make assets          - regenerate procedural .glb meshes (tier 1, pure TS)"
@@ -17,6 +17,7 @@ help:
 	@echo "make inspect         - VLM visual verdicts for the previews (ADVISORY gate; never blocks) -> .qa/asset-inspect.json"
 	@echo "make optimize        - gltf-transform gate: weld+dedup+prune+KHR_mesh_quantization on every .glb (decoder-free in three.js)"
 	@echo "make forge-library   - sprint-13 Blender v3 forge: husk_drifter + glass_spire + heart_root content assets"
+	@echo "make forge-choir     - sprint-18 Blender forge: PALE CHOIR biome-4 props (rib_arch, bone_spire, pipe_organ_cluster, reliquary_lantern, choir_pulpit)"
 	@echo "make textures        - regenerate AI textures via SDK CLI (tier 3)"
 	@echo "make check           - tsc + eslint"
 	@echo "make qa              - headless full-run simulation (EMBER RITE simdrive + AFTERGLOW drive)"
@@ -59,6 +60,13 @@ forge-library:
 	@test -x "$(BLENDER)" || { echo "forge-library: blender not found at $(BLENDER) — SKIP"; exit 0; }
 	$(BLENDER) -b -P scripts/blender/forge_library.py -- out public/assets/meshes
 
+# sprint 18 forge: Blender PALE CHOIR prop family (rib_arch, bone_spire,
+# pipe_organ_cluster, reliquary_lantern, choir_pulpit) — biome-4 content
+# through the same full-pipeline conventions as forge-library
+forge-choir:
+	@test -x "$(BLENDER)" || { echo "forge-choir: blender not found at $(BLENDER) — SKIP"; exit 0; }
+	$(BLENDER) -b -P scripts/blender/forge_choir.py -- out public/assets/meshes
+
 check:
 	bunx tsc --noEmit
 	bun run lint
@@ -79,7 +87,7 @@ verify:
 # aggregate v2 pipeline — prerequisites run left-to-right without -j; assets
 # first (tier-1 regen), then the Blender library, then optimize, then verify
 # the optimized bytes, then qa.
-pipeline: assets assets-library optimize verify qa
+pipeline: assets assets-library forge-choir optimize verify qa
 
 dev:
 	bun run dev

@@ -24,6 +24,13 @@
 - Elite halos: SWIFT = small white ring; SHIELDED = steady gold ring; SPLITTER
   = two mini-rings orbiting. Boss: large floor sigil ring + name banner.
 
+### Crown affix rows (sprint 18 — extends the halo law above)
+
+| Affix | Halo | Behavior | Counterplay |
+| --- | --- | --- | --- |
+| RIMEBOUND | rime halo `0x9adfff` (the sanctioned cold voice — herald/veil family), ring scaled to the 5.5 u aura so **the ring IS the zone** | chill aura re-applies the veil on the entry edge | distance + dash cleanse |
+| CINDERBOUND | cinder halo `0xff7a3d` (burn-line ember family) | drops burning wake patches while it moves (move-gated) | dash-through-able via i-frames |
+
 ## Audio expansion (procedural only)
 - Biome drone root: A1 (ash) → C#2 (glass, glassier detune) → E2 (heart, near-
   consonant). Overdrive pad follows biome root.

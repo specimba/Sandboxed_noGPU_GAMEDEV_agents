@@ -241,8 +241,12 @@ export function roomBudget(b: number, r: number): number {
   return Math.round(WAVES.budgetBase + WAVES.budgetPerWave * depth * 1.5);
 }
 
+/** per-biome elite chance — sprint 18: biome 4 (THE PALE CHOIR) raises the
+ *  stakes to 0.45; the crown branch consumes the same draws downstream */
+const ELITE_CHANCE = [0, 0.25, 0.35, 0.45] as const;
+
 export function eliteChance(b: number): number {
-  return b <= 0 ? 0 : b === 1 ? 0.25 : 0.35;
+  return ELITE_CHANCE[Math.min(ELITE_CHANCE.length - 1, Math.max(0, b))];
 }
 
 export const TIER_COLOR: Record<Tier, string> = {

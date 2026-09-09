@@ -1,10 +1,11 @@
 /**
- * HOLLOW SUN forge harness (QA pipeline step) — EMBER ROT burn + CHAINSPARK.
- * Asserts the stack law, the beat ladder, spark arc targeting, and
- * seed-determinism of the whole burn/spark path. Usage:
+ * HOLLOW SUN forge harness (QA pipeline step) — EMBER ROT burn + CHAINSPARK
+ * + CINDER HOUND + HEX LOOM + sprint-18 ELITE CROWNS (rime/cinder).
+ * Asserts the stack law, the beat ladder, spark arc targeting, hound charge
+ * law, hex root law, seed-determinism, and the crown laws (H1-H5). Usage:
  *   bun run scripts/simdrive-forge.ts
  */
-import { BURN, HEX, HOUND, SPARK } from '../src/game/constants';
+import { BURN, CC, CINDER, HEX, HOUND, OVERDRIVE, RIME, SCORE, SPARK } from '../src/game/constants';
 import { Sim, type SimEvents } from '../src/game/sim';
 import { RUN } from '../src/game/constants';
 
@@ -20,13 +21,17 @@ interface Rec {
   hexAnchors: { x: number; z: number; t: number }[];
   hexDetonates: { x: number; z: number; hit: boolean }[];
   roots: { x: number; z: number; dur: number }[];
+  hurts: { x: number; z: number; sx: number; sz: number }[];
+  cinderDrops: { x: number; z: number }[];
+  veils: { x: number; z: number }[];
+  cleanses: { x: number; z: number }[];
   dashes: number;
   throws: number;
   score: number;
 }
 
 function makeRecorder(): { rec: Rec; ev: SimEvents } {
-  const rec: Rec = { burnTicks: [], sparks: [], kills: [], hexAnchors: [], hexDetonates: [], roots: [], dashes: 0, throws: 0, score: 0 };
+  const rec: Rec = { burnTicks: [], sparks: [], kills: [], hexAnchors: [], hexDetonates: [], roots: [], hurts: [], cinderDrops: [], veils: [], cleanses: [], dashes: 0, throws: 0, score: 0 };
   const base: SimEvents = {
     onThrow: () => {
       rec.throws++;
@@ -35,7 +40,7 @@ function makeRecorder(): { rec: Rec; ev: SimEvents } {
     onCatch: () => {},
     onKill: (kind, x, z) => rec.kills.push({ kind, x, z }),
     onGraze: () => {},
-    onHurt: () => {},
+    onHurt: (x, z, sx, sz) => rec.hurts.push({ x, z, sx, sz }),
     onDash: () => {
       rec.dashes++;
     },
@@ -58,6 +63,9 @@ function makeRecorder(): { rec: Rec; ev: SimEvents } {
     onHexAnchor: (x, z, t) => rec.hexAnchors.push({ x, z, t }),
     onHexDetonate: (x, z, hit) => rec.hexDetonates.push({ x, z, hit }),
     onPlayerRoot: (x, z, dur) => rec.roots.push({ x, z, dur }),
+    onCinderDrop: (x, z) => rec.cinderDrops.push({ x, z }),
+    onVeil: (x, z) => rec.veils.push({ x, z }),
+    onCleanse: (x, z) => rec.cleanses.push({ x, z }),
   };
   return { rec, ev: base };
 }
@@ -648,11 +656,367 @@ function scriptedRun(): Rec {
   assert(h1 === h2, `G5: hex determinism broken (${h1} != ${h2})`);
 }
 
-console.log('=== HOLLOW SUN forge harness (EMBER ROT + CHAINSPARK + CINDER HOUND + HEX LOOM) ===');
-console.log(`burn beats exercised, spark arcs exercised, hound law exercised, hex root law exercised, determinism digests compared`);
+/* ------------------------------------------------------------------ */
+/* H — ELITE CROWNS (sprint 18): determinism + gating + lifecycle +     */
+/*     rime law + payout. ZERO new rng: the crown branch reinterprets   */
+/*     the existing rollElite draws, so same-seed digests stay stable.  */
+/* ------------------------------------------------------------------ */
+
+const CROWN_HOSTS = ['drifter', 'striker', 'hound', 'caster', 'bulwark'];
+const CROWN_BASE_HP: Record<string, number> = {
+  drifter: 2,
+  striker: 2,
+  hound: HOUND.hp,
+  caster: 2,
+  bulwark: 6,
+};
+
+interface CrownSighting {
+  wave: number;
+  kind: 'rime' | 'cinder';
+  host: string;
+  hp: number;
+  id: number;
+}
+
+/** scripted 8-room walk (waves 1-8 = biome 0 rooms 1-3, biome 1 rooms 1-3,
+ *  biome 2 rooms 1-2): deterministic inputs, per-room stall cap with a
+ *  deterministic force-advance, god-mode ember. Records every crown at
+ *  first sight and every cinder wake drop — the H1 determinism payload. */
+function crownWalk(seed: number) {
+  const { rec, ev } = makeRecorder();
+  const drops: { wave: number; x: number; z: number }[] = [];
+  const crowns: CrownSighting[] = [];
+  const crownsPerWave = new Map<number, number>();
+  let pending = false;
+  const baseClear = ev.onWaveClear;
+  ev.onWaveClear = (n) => {
+    pending = true;
+    baseClear(n);
+  };
+  const baseDrop = ev.onCinderDrop;
+  ev.onCinderDrop = (x, z) => {
+    drops.push({ wave: sim.wave, x, z });
+    baseDrop?.(x, z);
+  };
+  const sim = new Sim(ev, { dmg: 6, maxEmbers: 9, revive: true });
+  sim.reset();
+  sim.setSeed(seed);
+  const rooms: [number, number][] = [[0, 1], [0, 2], [0, 3], [1, 1], [1, 2], [1, 3], [2, 1], [2, 2]];
+  let ri = 0;
+  sim.startRoom(rooms[0][0], rooms[0][1]);
+  const seen = new Set<string>();
+  let frames = 0;
+  let roomFrames = 0;
+  const ROOM_CAP = 60 * 40;
+  while (ri < rooms.length && frames < 60 * 60 * 10) {
+    frames++;
+    roomFrames++;
+    sim.update(1 / 60, 1 / 60, frames % 120 < 40 ? 1 : 0, frames % 240 < 60 ? 1 : 0, sim.px + 3, sim.pz - 3, frames % 90 === 0, frames % 210 === 0);
+    sim.invuln = Math.max(sim.invuln, 0.2); // harness law: the ember cannot die here
+    for (const f of sim.foes) {
+      if (f.elite !== 'rime' && f.elite !== 'cinder') continue;
+      const key = `${sim.wave}:${f.id}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      crowns.push({ wave: sim.wave, kind: f.elite, host: f.kind, hp: f.hp, id: f.id });
+      crownsPerWave.set(sim.wave, (crownsPerWave.get(sim.wave) ?? 0) + 1);
+    }
+    if (pending || roomFrames > ROOM_CAP) {
+      pending = false;
+      roomFrames = 0;
+      ri++;
+      if (ri < rooms.length) sim.startRoom(rooms[ri][0], rooms[ri][1]);
+    }
+  }
+  return { crowns, crownsPerWave, drops, score: sim.score, kills: rec.kills.length };
+}
+
+function crownDigest(w: ReturnType<typeof crownWalk>): string {
+  return (
+    w.crowns.map((c) => `${c.wave}:${c.kind}:${c.host}:${c.hp}:${c.id}`).join('|') +
+    '#' +
+    w.drops.map((d) => `${d.wave}:${r(d.x)},${r(d.z)}`).join('|') +
+    '#' +
+    w.score +
+    '#' +
+    w.kills
+  );
+}
+
+{
+  // H1 — same-seed determinism (block D pattern): identical seeds produce an
+  //      identical crown sequence AND identical patch positions
+  const a = crownWalk(265);
+  const b = crownWalk(265);
+  const da = crownDigest(a);
+  const db = crownDigest(b);
+  assert(da === db, `H1: same-seed crown digests diverge (${da} != ${db})`);
+  assert(a.crowns.length >= 2, `H1: walk saw too few crowns to prove determinism (${a.crowns.length})`);
+  assert(a.drops.length >= 2, `H1: walk saw too few wake drops to prove determinism (${a.drops.length})`);
+
+  // H2 — gating law: biome 0 clean, boss rooms clean, ≤1 crown per wave,
+  //      whitelisted hosts only, wave-parity type pick, crown hp ×1.4
+  for (const c of a.crowns) {
+    // waves 1-3 ARE biome 0 (roomsPerBiome 3) — the ≥5 bound covers both the
+    // biome-0 ban and the first-4-rooms anti-frustration law in one line
+    assert(c.wave >= 5, `H2: crown at wave ${c.wave} — biome 0 / first-4-rooms law broken`);
+    assert(c.wave % RUN.roomsPerBiome !== 0, `H2: crown in a boss room (wave ${c.wave})`);
+    assert(CROWN_HOSTS.includes(c.host), `H2: crown on non-whitelisted host ${c.host}`);
+    const wantKind = c.wave % 2 === 0 ? 'rime' : 'cinder';
+    assert(c.kind === wantKind, `H2: wave ${c.wave} parity must pick ${wantKind}, got ${c.kind}`);
+    const wantHp = Math.ceil(CROWN_BASE_HP[c.host] * (c.kind === 'rime' ? RIME.hpMult : CINDER.hpMult));
+    assert(c.hp === wantHp, `H2: ${c.kind} ${c.host} hp ${c.hp} != ceil(base ×1.4) = ${wantHp}`);
+  }
+  for (const [w, n] of a.crownsPerWave) {
+    assert(n <= 1, `H2: wave ${w} carried ${n} crowns (law: ≤1 per wave)`);
+  }
+}
+
+{
+  // H3 — cinder lifecycle: drops land at the foe's feet on the 0.8s
+  //      move-gated beat, life 2.6s, the wound beat is 0.55s AT the patch,
+  //      maxPatches caps the pipe, root halts the wake, startRoom clears it
+  const { rec, ev } = makeRecorder();
+  const sim = new Sim(ev, {});
+  sim.reset();
+  sim.setSeed(4242);
+  sim.startRoom(0, 1); // biome 0 is structurally crown-free — the staged foe
+  // is the only crowned foe, so every drop is unambiguous
+  assert(runUntil(sim, () => sim.foes.some((f) => f.spawnT <= 0)), 'H3: no live foe to stage');
+  const foe = sim.foes.find((f) => f.spawnT <= 0)!;
+  foe.elite = 'cinder'; // surgical crown — the wake mechanics are biome-agnostic
+  sim.px = 0;
+  sim.pz = 0;
+  foe.x = 6;
+  foe.z = 0;
+  foe.vx = 0;
+  foe.vz = 0;
+
+  const dropFrames: number[] = [];
+  let maxLife = 0;
+  let firstPatch: (typeof sim.cinders)[number] | null = null;
+  let firstPatchFrame = -1;
+  for (let i = 0; i < 110; i++) {
+    const fx = foe.x;
+    const fz = foe.z;
+    const before = sim.cinders.length;
+    sim.update(1 / 60, 1 / 60, 0, 0, 0, 0, false, false);
+    sim.invuln = Math.max(sim.invuln, 0.2);
+    for (let k = before; k < sim.cinders.length; k++) {
+      const c = sim.cinders[k];
+      // the patch is the foe's position the frame it dropped (zero rng)
+      assert(Math.abs(c.x - fx) < 1e-6 && Math.abs(c.z - fz) < 1e-6, 'H3: patch did not land at the foe\'s feet');
+      // spawned at full life — one enemy tick already consumed by the time
+      // the hand observes it (updateCinders runs after updateFoes)
+      assert(c.life <= CINDER.life + 1e-9 && CINDER.life - c.life <= 2 / 60 + 1e-9, `H3: patch did not spawn at full life (${c.life})`);
+      if (dropFrames.length > 0) {
+        const gap = i - dropFrames[dropFrames.length - 1];
+        assert(gap >= 47 && gap <= 50, `H3: drop cadence gap ${gap} frames (0.8s beat = 48)`);
+      }
+      dropFrames.push(i);
+      if (!firstPatch) {
+        firstPatch = c;
+        firstPatchFrame = i;
+      }
+    }
+    assert(sim.cinders.length <= CINDER.maxPatches, `H3: live patches ${sim.cinders.length} > maxPatches`);
+    for (const c of sim.cinders) maxLife = Math.max(maxLife, c.life);
+  }
+  assert(dropFrames.length >= 2, 'H3: no wake drops within 110 frames of a moving crowned foe');
+  assert(maxLife <= CINDER.life + 1e-9, `H3: patch life exceeded CINDER.life (${maxLife})`);
+  assert(!!firstPatch && sim.cinders.includes(firstPatch), 'H3: first patch died before the beat read');
+
+  // surgical wound beat: the oldest patch ticks under the ember's feet
+  const bp = firstPatch!;
+  for (let i = 0; i < sim.foes.length; i++) {
+    const f = sim.foes[i];
+    f.x = 30;
+    f.z = -30 + i * 4;
+    f.vx = 0;
+    f.vz = 0;
+    f.rootT = 999; // banished + rooted: no contact wound may pollute the read
+  }
+  sim.px = bp.x;
+  sim.pz = bp.z;
+  bp.tick = 1 / 30; // the beat lands within 2 frames
+  const embersBefore = sim.embers;
+  sim.invuln = 0;
+  sim.dashT = 0;
+  for (let i = 0; i < 3; i++) sim.update(1 / 60, 1 / 60, 0, 0, 0, 0, false, false);
+  assert(sim.embers === embersBefore - 1, `H3: standing on the patch cost ${embersBefore - sim.embers} embers, expected 1`);
+  assert(rec.hurts.length === 1, `H3: expected exactly 1 wound from the patch, got ${rec.hurts.length}`);
+  assert(rec.hurts[0] !== undefined && Math.abs(rec.hurts[0].sx - bp.x) < 1e-6 && Math.abs(rec.hurts[0].sz - bp.z) < 1e-6, 'H3: onHurt source is not the patch position');
+  // the beat reset to the metronome — read one enemy tick later, so accept
+  // the reset minus at most one observed decay frame
+  assert(bp.tick <= CINDER.tick + 1e-9 && bp.tick > CINDER.tick - 2 / 60 - 1e-9, `H3: wound beat did not reset to CINDER.tick (${bp.tick})`);
+
+  // expiry law: the patch burns out within CINDER.life + ε of its drop
+  sim.invuln = 1;
+  const lifeFrames = (110 - firstPatchFrame) + 3;
+  let waited = 0;
+  while (waited < 300 && sim.cinders.includes(bp)) {
+    waited++;
+    sim.update(1 / 60, 1 / 60, 0, 0, 0, 0, false, false);
+    sim.invuln = Math.max(sim.invuln, 0.2);
+  }
+  assert(!sim.cinders.includes(bp), 'H3: the staged patch never expired');
+  assert(lifeFrames + waited <= CINDER.life * 60 + 4, `H3: patch lingered ${lifeFrames + waited} frames from drop (life 2.6s = 156)`);
+  // drain the rest of the pipe (the crowned foe is rooted — nothing new
+  // drops) so the root-halt read below starts from a clean floor
+  let drained = 0;
+  while (drained < 300 && sim.cinders.length > 0) {
+    drained++;
+    sim.update(1 / 60, 1 / 60, 0, 0, 0, 0, false, false);
+    sim.invuln = Math.max(sim.invuln, 0.2);
+  }
+  assert(sim.cinders.length === 0, 'H3: the wake pipe never drained');
+
+  // root law: a ROOTED crowned foe accumulates nothing — the wake halts
+  const cinderFoe = sim.foes.find((f) => f.elite === 'cinder')!;
+  const eliteTAtRoot = cinderFoe.eliteT;
+  for (let i = 0; i < 120; i++) {
+    cinderFoe.rootT = 0.5; // held rooted (topped after each update below)
+    sim.update(1 / 60, 1 / 60, 0, 0, 0, 0, false, false);
+    sim.invuln = Math.max(sim.invuln, 0.2);
+    cinderFoe.rootT = 0.5;
+    assert(cinderFoe.eliteT === eliteTAtRoot, `H3: rooted foe accumulated eliteT (${cinderFoe.eliteT})`);
+    assert(sim.cinders.length === 0, 'H3: rooted foe dropped a patch');
+  }
+  // release: the wake resumes within ~root-drain + one interval
+  let woke = false;
+  for (let i = 0; i < 120 && !woke; i++) {
+    sim.update(1 / 60, 1 / 60, 0, 0, 0, 0, false, false);
+    sim.invuln = Math.max(sim.invuln, 0.2);
+    if (sim.cinders.length > 0) woke = true;
+  }
+  assert(woke, 'H3: released crowned foe never resumed the wake');
+
+  // startRoom clears the wake — patches never outlive their room
+  assert(sim.cinders.length > 0, 'H3: pre-clear state missing (need ≥1 live patch)');
+  sim.startRoom(1, 2);
+  assert(sim.cinders.length === 0, 'H3: startRoom left live patches behind');
+}
+
+{
+  // H4 — rime law: the aura veils on the ENTRY EDGE, the state never
+  //      exceeds CC.veilCap, and the dash cleanse answers it from inside
+  const { rec, ev } = makeRecorder();
+  const sim = new Sim(ev, {});
+  sim.reset();
+  sim.setSeed(4242);
+  sim.startRoom(0, 1);
+  assert(runUntil(sim, () => sim.foes.some((f) => f.spawnT <= 0)), 'H4: no live foe to stage');
+  const foe = sim.foes.find((f) => f.spawnT <= 0)!;
+  foe.elite = 'rime'; // surgical crown — biome-agnostic mechanics
+  sim.px = 0;
+  sim.pz = 0;
+  foe.x = 5.2; // inside the 5.5u aura, just barely
+  foe.z = 0;
+  foe.vx = 0;
+  foe.vz = 0;
+
+  let veiled = false;
+  for (let i = 0; i < 60 && !veiled; i++) {
+    foe.rootT = 0.5; // hold the geometry still
+    sim.update(1 / 60, 1 / 60, 0, 0, 0, 0, false, false);
+    sim.invuln = Math.max(sim.invuln, 0.2);
+    foe.rootT = 0.5;
+    veiled = sim.veilT > 0;
+  }
+  assert(veiled, 'H4: rime aura never veiled the ember at 5.2u');
+  assert(rec.veils.length === 1, `H4: expected 1 onVeil at the entry edge, got ${rec.veils.length}`);
+  assert(Math.abs(sim.veilT - Math.min(CC.veilCap, CC.veilTime)) < 1e-9, `H4: first apply is not min(cap, veilTime) (${sim.veilT})`);
+
+  // hold the aura for 250 frames: the veil may re-arm on each fresh entry
+  // edge, but the state never exceeds the hard cap
+  for (let i = 0; i < 250; i++) {
+    foe.rootT = 0.5;
+    sim.update(1 / 60, 1 / 60, 0, 0, 0, 0, false, false);
+    sim.invuln = Math.max(sim.invuln, 0.2);
+    foe.rootT = 0.5;
+    assert(sim.veilT <= CC.veilCap + 1e-9, `H4: veilT exceeded CC.veilCap (${sim.veilT})`);
+    assert(sim.veilT >= 0, 'H4: veilT went negative');
+  }
+  assert(rec.veils.length >= 2, 'H4: aura never re-armed on a fresh entry edge');
+
+  // dash cleanse: one dash OUT of the aura ends the veil for good
+  let armed = false;
+  for (let i = 0; i < 200 && !armed; i++) {
+    foe.rootT = 0.5;
+    sim.update(1 / 60, 1 / 60, 0, 0, 0, 0, false, false);
+    sim.invuln = Math.max(sim.invuln, 0.2);
+    foe.rootT = 0.5;
+    armed = sim.veilT > 1.2; // a fresh entry-edge apply
+  }
+  assert(armed, 'H4: no fresh veil to cleanse');
+  sim.dashCd = 0;
+  const veilsAtDash = rec.veils.length;
+  sim.update(1 / 60, 1 / 60, -1, 0, 0, 0, false, true); // dash outward
+  sim.invuln = Math.max(sim.invuln, 0.2);
+  assert(rec.cleanses.length === 1, `H4: dash did not cleanse the veil (${rec.cleanses.length})`);
+  assert(sim.veilT === 0, `H4: veilT after cleanse + exit is ${sim.veilT}`);
+  for (let i = 0; i < 100; i++) {
+    sim.update(1 / 60, 1 / 60, 0, 0, 0, 0, false, false);
+    sim.invuln = Math.max(sim.invuln, 0.2);
+  }
+  assert(rec.veils.length === veilsAtDash, 'H4: the veil re-applied outside the aura');
+  assert(sim.veilT === 0, 'H4: veil state lingered after the cleanse');
+}
+
+{
+  // H5 — payout: a crowned kill pays base ×2 (REPLACING the ×1.5 elite
+  //      multiplier); the +3 Overdrive bonus is unchanged; mult/mutator
+  //      cancel because both kills share the same room state
+  const { ev } = makeRecorder();
+  const sim = new Sim(ev, {});
+  sim.reset();
+  sim.setSeed(11);
+  sim.startRoom(0, 1);
+  assert(runUntil(sim, () => sim.foes.filter((f) => f.spawnT <= 0).length >= 3, 900), 'H5: room never produced three live foes');
+  const live = sim.foes.filter((x) => x.spawnT <= 0);
+  const [f1, f2, f3] = live;
+  sim.px = 0;
+  sim.pz = 0;
+  for (let i = 0; i < live.length; i++) {
+    const f = live[i];
+    f.x = 2 + i * 2;
+    f.z = 0;
+    f.vx = 0;
+    f.vz = 0;
+    f.rootT = 999; // staged + rooted: kill order = strike order
+  }
+  f2.elite = 'cinder';
+  f3.elite = 'rime';
+  const expected = (f: (typeof live)[number], crownMult: number) =>
+    Math.round((SCORE[f.kind as keyof typeof SCORE] * crownMult * sim.mult * sim.mutator.mods.score) / 5) * 5;
+  const killCharge = OVERDRIVE.killCharge;
+
+  const s0 = sim.score;
+  const od0 = sim.odCharge;
+  assert(sim.debugStrikeNearest(999), 'H5: first strike did not kill');
+  const d1 = sim.score - s0;
+  assert(d1 === expected(f1, 1), `H5: normal kill paid ${d1}, expected ${expected(f1, 1)}`);
+  assert(sim.odCharge === od0 + killCharge, `H5: normal kill OD charge ${sim.odCharge}, expected ${od0 + killCharge}`);
+
+  const s1 = sim.score;
+  assert(sim.debugStrikeNearest(999), 'H5: second strike did not kill');
+  const d2 = sim.score - s1;
+  assert(d2 === expected(f2, 2), `H5: cinder kill paid ${d2}, expected ×2 = ${expected(f2, 2)} (the ×1.5 elite path would pay ${expected(f2, 1.5)})`);
+  assert(sim.odCharge === od0 + killCharge * 2 + 3, `H5: cinder kill OD +3 bonus missing (${sim.odCharge})`);
+
+  const s2 = sim.score;
+  assert(sim.debugStrikeNearest(999), 'H5: third strike did not kill');
+  const d3 = sim.score - s2;
+  assert(d3 === expected(f3, 2), `H5: rime kill paid ${d3}, expected ×2 = ${expected(f3, 2)}`);
+  assert(sim.odCharge === od0 + killCharge * 3 + 6, `H5: rime kill OD +3 bonus missing (${sim.odCharge})`);
+}
+
+console.log('=== HOLLOW SUN forge harness (EMBER ROT + CHAINSPARK + CINDER HOUND + HEX LOOM + ELITE CROWNS) ===');
+console.log('burn beats exercised, spark arcs exercised, hound law exercised, hex root law exercised, crown laws H1-H5 exercised, determinism digests compared');
 if (failures.length > 0) {
   console.log('\nFAIL:');
   for (const f of failures) console.log(` ✗ ${f}`);
   process.exit(1);
 }
-console.log('\nPASS: stack law, beat ladder, arc targeting, hound charge law, determinism, full-run compatibility.');
+console.log('\nPASS: stack law, beat ladder, arc targeting, hound charge law, crown determinism/gating/lifecycle/rime/payout, determinism, full-run compatibility.');

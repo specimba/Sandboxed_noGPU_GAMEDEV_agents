@@ -118,7 +118,7 @@ export const CC = {
   foeSlowEvery: 5, // every Nth direct shard hit chills the survivor
   foeSlowTime: 1.2, // s — foes move/act at ×0.45 while chilled
   foeSlowK: 0.45,
-  veilTime: 1.4, // herald veil slow applied to the player
+  veilTime: 1.4, // herald veil slow applied to the player (rime aura reuses it)
   veilCap: 1.6, // HARD CAP on the player-slow state (failsafe law)
   veilSpeedK: 0.55, // player speed multiplier while veiled
 };
@@ -183,13 +183,13 @@ export const WAVES = {
   wardenHpBase: 34,
   wardenHpPerKill: 13,
   wardenScore: 500,
-  /** per-biome boss hp (room 3 of each biome) */
-  bossHp: [34, 47, 60],
+  /** per-biome boss hp (room 3 of each biome) — +13 per biome law → 73 */
+  bossHp: [34, 47, 60, 73],
 };
 
 export const RUN = {
-  biomes: ['ASHFALL VESTIBULE', 'GLASS HOLLOW', 'THE HEART'] as const,
-  bossNames: ['WARDEN OF ASH', 'WARDEN OF GLASS', 'THE HOLLOW CHOIR'] as const,
+  biomes: ['ASHFALL VESTIBULE', 'GLASS HOLLOW', 'THE HEART', 'THE PALE CHOIR'] as const,
+  bossNames: ['WARDEN OF ASH', 'WARDEN OF GLASS', 'THE HOLLOW CHOIR', 'THE FIRST VOICE'] as const,
   roomsPerBiome: 3, // rooms 1-2 combat, room 3 = boss
   dawnPerRoom: 8,
   dawnPerBoss: 30,
@@ -202,9 +202,62 @@ export const BIOMES = [
   { grid: 0x241a12, hot: 0xffab52, fog: 0x0a0708, sun: 0xffb454 }, // ashfall
   { grid: 0x2a1612, hot: 0xff5c8a, fog: 0x0d0508, sun: 0xff8a6a }, // glass hollow
   { grid: 0x3a3436, hot: 0xfff0d0, fog: 0x0d0b0e, sun: 0xfff0c8 }, // the heart
+  { grid: 0x37302a, hot: 0xe8d8b0, fog: 0x120e0b, sun: 0xf2e6cf }, // the pale choir (18-a MUST-2 — bone/ash-glass cathedral, zero blue/indigo)
 ] as const;
 
-export type Elite = '' | 'swift' | 'shield' | 'split';
+export type Elite = '' | 'swift' | 'shield' | 'split' | 'rime' | 'cinder';
+
+/* ------------------------------------------------------------------ */
+/* ELITE CROWNS (sprint 18) — Godot-Resource style affix records.      */
+/* RoR2 law: a number-only affix is REJECTED — every crown must force  */
+/* repositioning. Crowns extend the existing elite system: the branch  */
+/* reinterprets the EXISTING rollElite draws (zero new rng), the TYPE  */
+/* pick is wave parity (even → rime, odd → cinder), hosts are          */
+/* whitelisted (drifter/striker/hound/caster/bulwark), ≤1 per wave,    */
+/* never in biome 1 (waves < 5) and never in boss rooms.               */
+/* ------------------------------------------------------------------ */
+
+/** RIMEBOUND — icy crown: a chill aura re-applies the player veil on the
+ *  entry edge (reuses sim.veilT + the onVeil pipeline — zero new player CC
+ *  state). Counterplay: keep your distance; dash still cleanses. */
+export const RIME = {
+  radius: 5.5, // aura radius (u)
+  hpMult: 1.4, // hp ×1.4 (Math.ceil) beside the existing elite hp mods
+  rim: 0x9adfff, // halo rim color — SPRINT18-3: view.ts halo color row
+} as const;
+
+/** CINDERBOUND — ember crown: while the crowned foe MOVES it drops burning
+ *  wake patches on a beat (move-gated; stun/root halts the wake by
+ *  construction). Patches wound on their own beat — dash i-frames make the
+ *  wake dash-through-able. Inverse-hex floor denial. */
+export const CINDER = {
+  maxPatches: 3, // live-patch cap (perf guard) — oldest expires first
+  life: 2.6, // patch lifetime (enemy seconds)
+  radius: 1.5, // patch wound radius (u)
+  tick: 0.55, // patch wound beat (enemy seconds)
+  interval: 0.8, // moving enemy-time between drops
+  moveGate: 0.5, // speed (u/s) above which the wake accumulates
+  hpMult: 1.4, // hp ×1.4 (Math.ceil) beside the existing elite hp mods
+  rim: 0xff7a3d, // halo rim color — SPRINT18-3: view.ts halo color row
+} as const;
+
+/** crown density per biome index — the share of the EXISTING elite type
+ *  roll claimed by the crown branch (biome 0 / boss rooms: structurally 0) */
+export const CROWN_DENSITY = [0, 0.22, 0.4, 0.55] as const;
+
+/** THE FIRST VOICE — biome-4 boss (sprint 18). NO new FoeKind: a biome-3
+ *  warden script composed ONLY from shipped telegraph primitives — the
+ *  warden ring, the weaver hex, the herald chime fan, the hound dash named
+ *  through the heavy direction-line pool. Single-voice law: never two
+ *  telegraphs at once (phases are exclusive; the dash holds the ring). */
+export const FIRST_VOICE = {
+  dashCd: 12, // one locked dash per 12 s in phase 3
+  telegraph: 0.7, // line telegraph (hound wind-up law — facing locks NOW)
+  dashSpeed: 30, // hound-commit straight dash (HOUND.dashSpeed)
+  dashTime: 0.45, // ≈13.5u covered per dash (HOUND.dashTime)
+  exposedTime: 1.2, // exposed drift after the dash — the punish window
+  dashRange: 20, // telegraph line length (u) — hound's named line
+} as const;
 
 export const SCORE = {
   drifter: 50,

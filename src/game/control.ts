@@ -21,17 +21,22 @@ export interface CcTimers {
   /** structural: consumers may carry only the timers they use */
   pRootT?: number;
   pSlowT?: number;
+  /** sprint 18 REPAIR: the player slow field is sim.veilT (NOT pSlowT) —
+   *  the watchdog silently skipped it until now. The rime crown aura also
+   *  writes veilT, so the seatbelt now watches it under its real name. */
+  veilT?: number;
 }
 
 const CC_BOUNDS = {
   pRootT: CC.rootMax,
   pSlowT: CC.slowMax,
+  veilT: CC.veilCap,
 } as const;
 
 /** Clamp runaway CC timers to max × failsafeFactor; returns the fired keys. */
 export function ccFailsafe(timers: CcTimers): (keyof CcTimers)[] {
   const fired: (keyof CcTimers)[] = [];
-  for (const key of ['pRootT', 'pSlowT'] as const) {
+  for (const key of ['pRootT', 'pSlowT', 'veilT'] as const) {
     const t = timers[key];
     if (t === undefined) continue;
     const bound = CC_BOUNDS[key] * CC.failsafeFactor;

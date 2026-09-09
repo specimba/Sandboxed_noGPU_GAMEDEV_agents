@@ -26,13 +26,17 @@ const FILTER_BASE = 800; // music lowpass when calm
 const FILTER_OPEN = 2400; // music lowpass in overdrive
 const TENSION_CAP = 0.026; // hard ceiling for the danger bed — texture, not tone
 const SUB_ROOT = 55;
-const BIOME_RATIOS = [1, 1.26, 1.5];
+/** biome drone roots: A1 → C#2 → E2 → G2 — biome 4 (THE PALE CHOIR) resolves
+ *  the climb to a mixolydian b7 shade: 55 × 1.78 ≈ 97.9 Hz, the flat-seventh
+ *  that lets the choir drone lean outside the minor pad without breaking it */
+const BIOME_RATIOS = [1, 1.26, 1.5, 1.78];
 
 /** pad chords per biome — all A-minor family so one-shots stay consonant */
 const PAD_CHORDS: number[][] = [
   [110, 130.81, 164.81, 196], // Am7
   [110, 138.59, 164.81, 196], // Am(maj7) — the C# bittersweet tint
   [110, 130.81, 164.81, 220], // Am7 + A3 sparkle
+  [110, 130.81, 164.81, 246.94], // Am add9 — B natural against the G2 drone (A-minor family law holds)
 ];
 
 /** arp pool — the same pentatonic family as ricochet/moteTick/shardGain */
@@ -372,6 +376,18 @@ export class AudioEngine {
   rootBreak(): void {
     this.noise(0.08, 0.16, 'highpass', 2800);
     this.tone(720, 0.08, 'sine', 0.1, 1180);
+  }
+
+  /* ---- SPRINT 18 crown cue — CINDERBOUND ember wake drop ---------------- */
+
+  /** an ember patch lands — short dull thud + a falling sizzle tail.
+   *  One-shot family law: tone/noise only, auto-stop, modest gain. x/z shade
+   *  the pitch deterministically (zero rng) so a moving wake doesn't machine-gun. */
+  emberDrop(x: number, z: number): void {
+    const wob = 1 + (Math.abs(Math.sin(x * 12.9898 + z * 78.233)) * 2 - 1) * 0.04;
+    this.thump(0.7, 84 * wob); // the drop itself
+    this.noise(0.42, 0.09, 'bandpass', 3600, 1100); // sizzle tail — falling band
+    this.tone(1180 * wob, 0.08, 'sine', 0.05, 560, 0.02); // hot fleck sparkle
   }
 
   bossPhase(): void {

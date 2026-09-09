@@ -1,10 +1,11 @@
 /**
  * HOLLOW SUN headless sim drive (QA pipeline step).
- * Runs a bot through a full 3-biome run, asserting run structure, elites,
- * boss phases, boons and the dawn economy. Usage: bun run scripts/simdrive.ts
+ * Runs a bot through a full 4-biome run (sprint 18: 12 encounters), asserting
+ * run structure, elites + crown gating, boss phases, boons and the dawn
+ * economy. Usage: bun run scripts/simdrive.ts
  */
 import { Sim, type SimEvents } from '../src/game/sim';
-import { dawnEarned, rollBoons, type BoonDef } from '../src/game/run';
+import { dawnEarned, isBossRoom, rollBoons, type BoonDef } from '../src/game/run';
 import { RUN } from '../src/game/constants';
 
 const ARENA_SAFE = 28;
@@ -14,6 +15,9 @@ interface DriveResult {
   bossesKilled: number;
   phasesSeen: Set<number>;
   elitesSeen: Set<string>;
+  /** sprint 18 crown counters — gating laws are asserted below */
+  crownsSeen: Set<string>;
+  crownsPerWave: Map<number, number>;
   boonsTaken: Record<string, number>;
   score: number;
   won: boolean;
@@ -26,6 +30,8 @@ function drive(seedMods: { dmg: number; maxEmbers: number; revive: boolean }): D
     bossesKilled: 0,
     phasesSeen: new Set(),
     elitesSeen: new Set(),
+    crownsSeen: new Set(),
+    crownsPerWave: new Map(),
     boonsTaken: {},
     score: 0,
     won: false,
@@ -97,6 +103,15 @@ function drive(seedMods: { dmg: number; maxEmbers: number; revive: boolean }): D
         aimZ = f.z;
       }
       if (f.elite) res.elitesSeen.add(f.elite);
+      // CROWN COUNTERS (sprint 18) — a crown is counted the frame it is live;
+      // gating violations are recorded for the assertion block below
+      if ((f.elite === 'rime' || f.elite === 'cinder') && !res.crownsSeen.has(`${sim.wave}:${f.id}`)) {
+        res.crownsSeen.add(`${sim.wave}:${f.id}`);
+        res.crownsPerWave.set(sim.wave, (res.crownsPerWave.get(sim.wave) ?? 0) + 1);
+        if (biome === 0) res.errors.push(`crown ${f.elite} in biome 0 (wave ${sim.wave})`);
+        if (isBossRoom(room)) res.errors.push(`crown ${f.elite} in boss room (wave ${sim.wave})`);
+        if (sim.wave < 5) res.errors.push(`crown ${f.elite} before wave 5 (wave ${sim.wave})`);
+      }
     }
     let mx = 0;
     let my = 0;
@@ -136,7 +151,7 @@ function drive(seedMods: { dmg: number; maxEmbers: number; revive: boolean }): D
         sim.applyBoon(choices[0]);
         res.boonsTaken[choices[0].id] = (res.boonsTaken[choices[0].id] ?? 0) + 1;
       }
-      if (biome === 2 && room === RUN.roomsPerBiome) {
+      if (biome === 3 && room === RUN.roomsPerBiome) {
         res.won = true;
         break;
       }
@@ -163,25 +178,31 @@ const result = drive({ dmg: 6, maxEmbers: 9, revive: true });
 const dawn = dawnEarned(result.score, result.roomsCleared, result.bossesKilled, result.won);
 
 console.log('=== HOLLOW SUN headless run drive ===');
-console.log(`rooms cleared: ${result.roomsCleared}/9`);
-console.log(`bosses killed: ${result.bossesKilled}/3`);
+console.log(`rooms cleared: ${result.roomsCleared}/12`);
+console.log(`bosses killed: ${result.bossesKilled}/4`);
 console.log(`boss phases seen: [${[...result.phasesSeen].sort().join(', ')}]`);
 console.log(`elite affixes encountered: [${[...result.elitesSeen].sort().join(', ')}]`);
+console.log(`crowns seen: ${result.crownsPerWave.size} crown wave(s) [${[...result.crownsPerWave.entries()].map(([w, n]) => `wave ${w} ×${n}`).join(', ')}]`);
 console.log(`boons taken: ${JSON.stringify(result.boonsTaken)}`);
 console.log(`final score: ${result.score}  won: ${result.won}  dawn earned: ${dawn}`);
 
 const fail: string[] = [];
-if (result.roomsCleared !== 9) fail.push('did not clear all 9 rooms');
-if (result.bossesKilled !== 3) fail.push('did not kill all 3 bosses');
+if (result.roomsCleared !== 12) fail.push('did not clear all 12 rooms');
+if (result.bossesKilled !== 4) fail.push('did not kill all 4 bosses');
 if (!result.phasesSeen.has(2) || !result.phasesSeen.has(3)) fail.push('boss phases 2/3 never triggered');
 if (result.elitesSeen.size === 0) fail.push('no elite variants encountered');
+// crown law (sprint 18): ≤1 crown per wave — the biome-0 / boss-room /
+// wave-5 gating violations are recorded inline during the drive
+for (const [w, n] of result.crownsPerWave) {
+  if (n > 1) fail.push(`wave ${w} carried ${n} crowns (law: ≤1 per wave)`);
+}
+if (result.errors.length > 0) fail.push(...result.errors);
 if (Object.keys(result.boonsTaken).length === 0) fail.push('no boons applied');
 if (dawn <= 0) fail.push('dawn economy produced nothing');
-if (result.errors.length > 0) fail.push(...result.errors);
 
 if (fail.length > 0) {
   console.log('\nFAIL:');
   for (const f of fail) console.log(` ✗ ${f}`);
   process.exit(1);
 }
-console.log('\nPASS: run structure, elites, boss phases, boons, economy — all verified headless.');
+console.log('\nPASS: run structure (12 rooms / 4 bosses), elites + crown gating, boss phases, boons, economy — all verified headless.');

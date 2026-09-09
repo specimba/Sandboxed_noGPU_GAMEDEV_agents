@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { loadAssetGeometry } from './assetLib';
-import { ARENA, CC, COLORS, FOE, HEX, HOUND } from './constants';
+import { ARENA, CC, CINDER, COLORS, FOE, HEX, HOUND, RIME } from './constants';
 import type { FoeKind, Sim } from './sim';
 import { makeGlowTexture, ParticlePool } from './fx';
 import {
@@ -192,6 +192,37 @@ function buildEntangleGeometry(): THREE.BufferGeometry {
   return g;
 }
 
+/** merge flat (already ground-rotated) sub-geometries into ONE vertex-colored
+ *  draw — a cinder patch is rim + fill in a single mesh (1 DC per patch, so
+ *  the declared worst transient is one draw per live patch, not two) */
+function mergeFlatVertexColored(geos: THREE.BufferGeometry[], colors: number[]): THREE.BufferGeometry {
+  const pos: number[] = [];
+  const col: number[] = [];
+  const idx: number[] = [];
+  let off = 0;
+  const c = new THREE.Color();
+  geos.forEach((g, gi) => {
+    const p = g.getAttribute('position') as THREE.BufferAttribute;
+    c.set(colors[gi]);
+    for (let i = 0; i < p.count; i++) {
+      pos.push(p.getX(i), p.getY(i), p.getZ(i));
+      col.push(c.r, c.g, c.b);
+    }
+    const ix = g.getIndex();
+    if (ix) {
+      for (let i = 0; i < ix.count; i++) idx.push(off + ix.getX(i));
+    } else {
+      for (let i = 0; i < p.count; i++) idx.push(off + i);
+    }
+    off += p.count;
+  });
+  const out = new THREE.BufferGeometry();
+  out.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  out.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+  out.setIndex(idx);
+  return out;
+}
+
 interface MarkView {
   group: THREE.Group;
   mat: THREE.MeshBasicMaterial; // bright rim
@@ -199,6 +230,11 @@ interface MarkView {
 }
 
 interface HaloView {
+  mesh: THREE.Mesh;
+  mat: THREE.MeshBasicMaterial;
+}
+
+interface CinderView {
   mesh: THREE.Mesh;
   mat: THREE.MeshBasicMaterial;
 }
@@ -213,9 +249,19 @@ const MAX_BULLETS = 340;
 const MAX_HEAVY = 60;
 const MAX_VEIL = 80; // herald chimes — the slow cold layer
 const CC_POOL = 12; // per-CC-type marker seats (0 draw calls when idle)
+const CINDER_POOL = 5; // wake patch seats (sim caps live patches at CINDER.maxPatches)
 const SHADOW_POOL = 41; // 1 ember dart + 40 foes
 const SPARK_SEGS = 8;
 const FLASH_TIME = 0.09; // per-foe hit-flash window
+const HALO_R0 = 0.94; // haloGeo outer edge — scale = desired radius / HALO_R0
+
+/** sprint 18 crown halos — ring = affix, extending the elite halo law.
+ *  Rime speaks the sanctioned cold voice (herald/veil family, view.ts FOE_COL
+ *  precedent); cinder speaks the burn-line ember. Zero blue/indigo drift. */
+const CROWN_HALO: Partial<Record<'rime' | 'cinder', { rim: number; radius?: number }>> = {
+  rime: { rim: RIME.rim, radius: RIME.radius }, // radius: the ring IS the aura zone
+  cinder: { rim: CINDER.rim },
+};
 
 const PLAYER_RIM = new THREE.Color(0xffb454); // the dart's identity rim
 const ROOT_RIM = new THREE.Color(CC.rootRim); // ash desat while ROOTED
@@ -274,6 +320,12 @@ export class View {
   private haloPool: HaloView[] = [];
   private haloUsed = 0;
   private haloGeo = new THREE.RingGeometry(0.8, 0.94, 36).rotateX(-Math.PI / 2);
+
+  /** CINDERBOUND wake patches — rim + fill merged into ONE draw per patch;
+   *  5 seats, cursor-synced like the hex pool, idle entries visible=false
+   *  = 0 persistent draw calls */
+  private cinderPool: CinderView[] = [];
+  private cinderGeo: THREE.BufferGeometry;
 
   /** grounded contact shadows — kills the "everything floats" defect */
   private shadowTex: THREE.CanvasTexture;
@@ -579,6 +631,21 @@ export class View {
       mesh.renderOrder = 6;
       scene.add(mesh);
       this.haloPool.push({ mesh, mat });
+    }
+
+    // ---- CINDERBOUND wake patches: dim fill + ember rim, ONE draw each ----
+    const cinderFill = new THREE.CircleGeometry(CINDER.radius * 0.88, 20).rotateX(-Math.PI / 2);
+    const cinderRim = new THREE.RingGeometry(CINDER.radius * 0.86, CINDER.radius, 20).rotateX(-Math.PI / 2);
+    this.cinderGeo = mergeFlatVertexColored([cinderFill, cinderRim], [0x38140a, CINDER.rim]);
+    cinderFill.dispose();
+    cinderRim.dispose();
+    for (let i = 0; i < CINDER_POOL; i++) {
+      const mat = new THREE.MeshBasicMaterial({ vertexColors: true, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide });
+      const mesh = new THREE.Mesh(this.cinderGeo, mat);
+      mesh.visible = false;
+      mesh.renderOrder = 5;
+      scene.add(mesh);
+      this.cinderPool.push({ mesh, mat });
     }
 
     // ---- striker / caster telegraph lines ----
@@ -929,14 +996,18 @@ export class View {
         }
       }
 
-      // elite halo — the affix is the ring (VISUAL_AUDIO.md color law)
+      // elite halo — the affix is the ring (VISUAL_AUDIO.md color law).
+      // Sprint 18 crowns extend the law: rime speaks the sanctioned cold
+      // voice AND scales its ring to the 5.5u aura (the ring IS the zone);
+      // cinder speaks the burn-line ember. Pool stays idle-zero-cost.
       if (f.elite && f.spawnT <= 0 && this.haloUsed < this.haloPool.length) {
         const h = this.haloPool[this.haloUsed++];
         h.mesh.visible = true;
         h.mesh.position.set(f.x, 0.16, f.z);
-        const haloR = (f.r + 0.55) * (f.elite === 'swift' ? 0.85 : 1);
+        const haloR = f.elite === 'rime' ? RIME.radius / HALO_R0 : (f.r + 0.55) * (f.elite === 'swift' ? 0.85 : 1);
         h.mesh.scale.setScalar(haloR);
-        h.mat.color.set(f.elite === 'swift' ? 0xffffff : f.elite === 'shield' ? 0xffe9a0 : 0xff8aa0);
+        const crown = f.elite === 'rime' || f.elite === 'cinder' ? CROWN_HALO[f.elite] : undefined;
+        h.mat.color.set(f.elite === 'swift' ? 0xffffff : f.elite === 'shield' ? 0xffe9a0 : crown ? crown.rim : 0xff8aa0);
         h.mat.opacity = 0.55 + 0.25 * Math.sin(this.time * 6 + f.id);
       }
 
@@ -1049,6 +1120,19 @@ export class View {
       hv.fillMat.opacity = 0.08 + 0.2 * (1 - hk);
     }
     for (let i = hi; i < this.hexPool.length; i++) this.hexPool[i].group.visible = false;
+
+    // CINDERBOUND wake — burning patches gutter in the ember family
+    let ci = 0;
+    for (const c of sim.cinders) {
+      if (ci >= this.cinderPool.length) break;
+      const pv = this.cinderPool[ci++];
+      pv.mesh.visible = true;
+      pv.mesh.position.set(c.x, 0.1, c.z);
+      const lk = Math.max(0, Math.min(1, c.life / CINDER.life)); // 1 fresh → 0 burnt out
+      pv.mesh.scale.setScalar(0.7 + 0.3 * lk); // the patch shrinks as it dies
+      pv.mat.opacity = (0.16 + 0.5 * lk) * (0.85 + 0.15 * Math.sin(this.time * 13 + ci));
+    }
+    for (let i = ci; i < this.cinderPool.length; i++) this.cinderPool[i].mesh.visible = false;
     for (let i = this.haloUsed; i < this.haloPool.length; i++) this.haloPool[i].mesh.visible = false;
     for (let i = this.stunCursor; i < this.stunRings.length; i++) this.stunRings[i].mesh.visible = false;
     for (let i = this.rootCursor; i < this.rootRings.length; i++) this.rootRings[i].mesh.visible = false;
@@ -1099,6 +1183,11 @@ export class View {
       hv.rimMat.dispose();
       hv.fillMat.dispose();
     }
+    for (const pv of this.cinderPool) {
+      this.scene.remove(pv.mesh);
+      pv.mat.dispose();
+    }
+    this.cinderGeo.dispose();
     this.scene.remove(this.entangle);
     this.entangleMat.dispose();
     this.entangle.geometry.dispose();

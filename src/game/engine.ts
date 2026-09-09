@@ -39,6 +39,15 @@ import { View } from './view';
 
 const STEP = 1 / 60;
 
+/** biome arrival kickers — biomes 0-2 keep the sprint-1 string; biome 4
+ *  (THE PALE CHOIR) gets its own breath (sprint 18 contract). */
+const ARRIVAL_KICKERS = [
+  'DEEPER INTO THE DEAD STAR',
+  'DEEPER INTO THE DEAD STAR',
+  'DEEPER INTO THE DEAD STAR',
+  'THE CHOIR TAKES BREATH',
+] as const;
+
 /* ------------------------------------------------------------------ */
 /* perf instrumentation — feeds the __hollowsun debug hook            */
 /* module-level + preallocated so the frame loop allocates nothing     */
@@ -173,6 +182,11 @@ export class Engine {
    *  arrival banner already named the place) and is skipped exactly once */
   private arrivalHold = false;
 
+  // CROWN TEACHING TOASTS (sprint 18) — first crown of each kind per run;
+  // deterministic engine flags, reset on every new run (zero rng)
+  private crownTaughtRime = false;
+  private crownTaughtCinder = false;
+
   constructor(canvas: HTMLCanvasElement) {
     // eslint-disable-next-line @typescript-eslint/no-this-alias
     active = this;
@@ -267,6 +281,8 @@ export class Engine {
     this.slowT = 0;
     this.runT = 0;
     this.hitFromT = 0;
+    this.crownTaughtRime = false; // teaching toasts are once PER RUN
+    this.crownTaughtCinder = false;
     this.input.clearEdges(); // no phantom dash/pause survives a run start
     this.scene.setBiome(0);
     this.audio.setBiome(0);
@@ -361,14 +377,20 @@ export class Engine {
     if (this.runRoom > RUN.roomsPerBiome) {
       this.runBiome += 1;
       this.runRoom = 1;
+      // SPRINT18-3: scene.ts dressing clamp `Math.min(2, …)` → BIOMES.length-1
       this.scene.setBiome(this.runBiome);
+      // SPRINT18-3: audio.ts PAD_CHORDS row 4 (Am add9) + BIOME_RATIOS 1.78
       this.audio.setBiome(this.runBiome);
       // BIOME ARRIVAL BEAT — one beat per biome, fired here and at startRun
       // (the only two setBiome sites): banner + fog swell + floor pulse
       this.arrivalHold = true;
       this.scene.fogSwell();
       this.scene.floorPulse(this.sim.px, this.sim.pz);
-      this.store.getState().showBanner(biomeName(this.runBiome), 'DEEPER INTO THE DEAD STAR', 'biome');
+      this.store.getState().showBanner(
+        biomeName(this.runBiome),
+        ARRIVAL_KICKERS[Math.min(ARRIVAL_KICKERS.length - 1, Math.max(0, this.runBiome))],
+        'biome',
+      );
     }
     this.sim.startRoom(this.runBiome, this.runRoom);
     this.input.clearEdges(); // Escape pressed during the shrine must not pause the next room
@@ -589,8 +611,8 @@ export class Engine {
         this.roomsCleared += 1;
         const st = this.store.getState();
         st.set({ sun: starEnergy(this.sim.score) });
-        if (this.runBiome === 2 && isBossRoom(this.runRoom)) {
-          // THE HEART rekindles — run won
+        if (this.runBiome === 3 && isBossRoom(this.runRoom)) {
+          // THE PALE CHOIR rekindles — the FIRST VOICE is answered; run won
           this.finishRun(true);
           return;
         }
@@ -655,6 +677,10 @@ export class Engine {
       onCleanse: (x, z) => {
         this.audio.ccCleanse();
         this.fx.burst(x, z, 20, 9, { color: EMBER_C, life: 0.35, size: 0.45, up: 0.3 });
+      },
+      onCinderDrop: (x, z) => {
+        this.rings.fire(x, z, 1.8, 0.3, CINDER_C);
+        this.audio.emberDrop(x, z);
       },
       onPlayerRoot: (x, z, dur) => {
         this.audio.rootBind();
@@ -909,6 +935,19 @@ export class Engine {
     this.hudT += dtReal;
     if (this.hudT > 0.085) {
       this.hudT = 0;
+      // CROWN TEACHING TOASTS — first sight of each crown kind this run
+      // (deterministic flags, zero rng; the view halo makes the affix visible
+      //  from spawn, this names its counterplay exactly once)
+      for (const f of this.sim.foes) {
+        if (f.spawnT > 0) continue;
+        if (f.elite === 'rime' && !this.crownTaughtRime) {
+          this.crownTaughtRime = true;
+          st.pushToast('RIMEBOUND — KEEP YOUR DISTANCE', 'info');
+        } else if (f.elite === 'cinder' && !this.crownTaughtCinder) {
+          this.crownTaughtCinder = true;
+          st.pushToast('CINDERBOUND — MIND THE WAKE', 'red');
+        }
+      }
       const boss = this.sim.foes.find((f) => f.boss);
       const boonLabels = Object.entries(this.boonsTaken).map(([id, n]) => {
         const def = BOONS.find((b) => b.id === id);
@@ -1108,3 +1147,4 @@ const WHITE_C = new THREE.Color(0xffffff);
 const GOLD_C = new THREE.Color(0xffe9a0);
 const BURN_C = new THREE.Color(0xff7a3d);
 const SPARK_C = new THREE.Color(0xffe9a0);
+const CINDER_C = new THREE.Color(0xff7a3d); // cinder wake ring — CINDER.rim

@@ -4,7 +4,89 @@ Rule R2 (docs/QUALITY_AUDIT.md): each entry lists objective improvements over th
 
 # CHANGELOG — every build states what improved, with evidence
 
-Rule R2 (docs/QUALITY_AUDIT.md): each entry lists objective improvements over the previous build in graphics, mechanics, or architecture — with screenshot paths and gate receipts. No entry, no ship.
+## SPRINT 18 · BUILD 1 — "PALE CHOIR" (the run is 12 rooms deep; elite crowns force you to move; the Blender pipeline sings again)
+
+**Previous state:** Sprint 17 answered the three standing complaints (audio escalation killed by construction, real CC kit, readable fire), but the owner then **finished the entire 9-encounter run** — "not bad, not great" — and the content ceiling was reached. The Blender toolchain had been wiped by a sandbox rebuild (the Makefile's forge targets were silently skipping), the draw-call debt sat at 105 peak vs the 100 ceiling, and the CC failsafe watchdog had a silent blind spot. Owner directive: *be experimental and creative — use Blender asset advantages and Godot Engine advantages.*
+
+### Fixed — defects that would have eaten this sprint's content
+- **CC failsafe blind spot repaired**: `ccFailsafe()` read `pRootT/pSlowT` but the player slow field is `veilT` — the watchdog **silently skipped the veil** via optional chaining (ironhold law "no bind outlives max × 2" was not enforced for the herald/rime slow). `veilT` is now a clamped CC timer with a harness test (`simdrive-controls`), mandatory BEFORE the rime aura could ship (the aura feeds `veilT` by design).
+- **Biome 4 would have been invisible**: the active-biome dressing clamp in `scene.ts` hardcoded `Math.min(2, …)` — room 10-12 would have rendered with biome-3 dressing. Now `BIOMES.length - 1`.
+- **Biome 4 would have broken audio**: `setBiome` clamps to `BIOME_RATIOS` length (drone would silently stay biome-3) and `PAD_CHORDS[3]` was an out-of-bounds read → **pad scheduling throw** on room 10. Both rows landed with the biome (`1.78` mixolydian b7 drone root; `Am add9` pad, A-minor family law held).
+- **Stale title copy**: "Three biomes. Nine rooms." → "Four biomes. Twelve rooms."
+
+### Improved — content: THE PALE CHOIR (biome 4, rooms 10-12) + THE FIRST VOICE
+- **The run is now 4 biomes × 3 rooms = 12 encounters.** Biome 4 palette row (bone-ash umber grid `0x37302a`, candle-bone ignite `0xe8d8b0`, the palest fog in the ramp `0x120e0b`, the sun itself turns bone `0xf2e6cf` — zero blue/indigo, ember/obsidian family law held). Arrival kicker: **'THE CHOIR TAKES BREATH'**. Win screen now says **'THE CHOIR WAITS BELOW — 12 ROOMS NOW STAND BETWEEN YOU AND DAWN.'**
+- **PALE CHOIR asset family — Blender 4.2 restored and singing** (MUST-0: re-downloaded to `/home/z/tools/blender-4.2.0-linux-x64`, `--version` verified; the forge targets had been soft-skipping since the sandbox rebuild): `forge_choir.py` forges **5 seeded props ≤600 tris** — rib_arch (380), bone_spire (448), pipe_organ_cluster (384), reliquary_lantern (216), choir_pulpit (148). Determinism proven by construction: two seeded runs **byte-identical (md5 ×5)**, `--seed 7` diverges. Gates: `optimize` applied=24 skipped=0, `verify-assets` **pass=24 fail=0** (19→24), Cycles previews + VLM inspect PASS ×5 (`.qa/assets/`). Geometry-nodes lesson applied: modifiers applied/baked BEFORE export.
+- **THE FIRST VOICE** (boss 4, 73 hp — the +13/biome law): no new FoeKind — a biome-3 warden script composed ONLY from shipped telegraph primitives, **single-voice law (never two telegraphs at once)**: P1 radial rings with every 3rd volley anchoring a hex at your feet; P2 alternates rings with herald veil chime fans (the choir sings you slow while hexes name the floor); P3 adds one locked 0.7s-telegraph dash per 12s + striker/drifter escorts. Every primitive was taught solo in rooms 4-9 — the fight reads fair by composition, and headless drives cleared it 4/4.
+
+### Improved — mechanics: ELITE CROWNS (RoR2 law: a number-only affix is rejected)
+- **RIMEBOUND** (icy crown `0x9adfff`): ×1.4 hp + a 5.5u chill aura that re-applies the player veil on the entry edge — **the halo ring IS the zone** (scaled to the aura radius). Counterplay = the taught grammar: keep distance, dash cleanses. **CINDERBOUND** (ember crown `0xff7a3d`): ×1.4 hp + a burning wake — while it moves it drops floor patches on a 0.8s beat (max 3 live; stun/root halts the wake by construction); patches wound on their own 0.55s beat and are **dash-through-able** via i-frames (inverse-hex floor denial; the damage wedge points at the patch).
+- **Gating is deterministic and fair by construction**: crowns join at biome 2 wave 5+ (`CROWN_DENSITY [0, .22, .40, .55]`), never in boss rooms, ≤1 per wave, wave-parity pick (even → rime, odd → cinder), hosts whitelisted (drifter/striker/hound/caster/bulwark — never weaver/herald), and the branch **reinterprets the existing elite draws — zero new rng, stream position bit-identical**. Payout ×2 replaces the elite ×1.5; first crown of each kind teaches itself ("RIMEBOUND — KEEP YOUR DISTANCE" / "CINDERBOUND — MIND THE WAKE" toasts).
+
+### Improved — architecture: the Godot-pattern layer (MultiMesh scatter + Resource-style data)
+- **`PROP_SCATTER`**: the hardcoded per-biome dressing blocks are now one typed, data-driven table (glb / biomeIdx / count / baseR / rim / instanced) — placement stays deterministic index-hash (zero rng).
+- **InstancedMesh scatter law** (Godot MultiMesh equivalent, first in repo): one draw call per family regardless of instance count. Biome 4 dresses with 4 instanced families (15 instances, **+4 draws**); the debt attack re-instances existing dressing (spires 6→1, glass family 8→3, heart roots 5→1, **−14 draws**). **Ledger: sprint-17 was 85 persistent / 105 peak — this build measures 77 persistent / 85 peak** (ceiling 100, headroom restored).
+- **`emberDrop` one-shot** joins the audio cue suite (thump + sizzle tail, one-shot gain law, zero new loops).
+
+### Perf + gates
+- Gates: `bunx tsc --noEmit` PASS · `bun run lint` PASS · `make qa` PASS ×4 harnesses — **simdrive extended to 12/12 rooms · 4/4 bosses in the SAME commit as the run extension** (crown gating verified headless: crown waves [7,8,10,11], ≤1/wave, biome-0 + boss rooms clean) · forge harness incl. NEW **block H1-H5** (crown same-seed determinism, gating, cinder lifecycle, rime law, payout) · afterglow 9/9 · controls harness (veil clamp + crown pins) · `verify-assets` 24/24.
+- Live-verified in a real tab (`?debug=1`): title stamp **BUILD SPRINT 18 — PALE CHOIR · BASE 4a3b2e0** visible on title AND death panel; begin → biome-1 run with re-instanced dressing (no visual regression); throw/move input path + forensics clean; death → REKINDLE cycle clean; **77 draw calls persistent / 85 peak / 25 programs**; 0 console errors, 0 page errors. Evidence: `.qa/sprint18/01-title.png` · `02-run-biome1.png` · `04-combat-live.png` · `03-combat.png` (death panel + stamp).
+- Honest evidence boundary: biome-4 *visuals* (dressing, palette, THE FIRST VOICE telegraphs) could not be manually played to room 12 in the rAF-throttled headless tab (~10fps, the known QA-validity limit). The 12-room/4-boss/crown paths are **harness-proven on the deterministic sim**; the dressing pipeline is preview-verified per-asset; the owner's playtest is the final gate for biome-4 feel.
+
+### Known issues / debts (declared, R3)
+- Transient corner: cinder patches + busy choir frame — documented lever `CINDER.maxPatches 3→2` if a real device ever trips 100.
+- Per-biome fog density still global (0.016 law); the choir's palest-fog ramp is color-only for now.
+- **DEEP CYCLE** (post-win rekindled loop: escalating crown density + payout multiplier, spec preserved in worklog 18-b) and the **GILDED** crown deferred to Sprint 19 — no half-landed tracks.
+- simdrive full-run harness remains time-seeded per invocation (same-seed within a run only).
+
+### Next-iteration plan (Sprint 19 candidates)
+- DEEP CYCLE endless loop + GILDED crown (greed bait) on the specced deep-cycle hooks.
+- Longer music forms for the choir (per-biome motifs beyond the ratio glide) + real-device perf receipt.
+- Boss-room dressing for THE FIRST VOICE (reliquary arena set, COULD tier from 18-a).
+## SPRINT 17 · BUILD 1 — "PROOF OF LIFE" (base `e7e5822+17`, stamped 2026-09-09T07:40Z)
+
+**Owner verdict that drove this sprint:** *"I played and nothing big changes done actually, music or whatever that hell it is sound persistent on increasing over time came back and also near everything is same… you are doing nothing at all and taking fixed bug back like a dumb?"* — every section below answers that, in the plan's own Phase 0–3 order.
+
+**MERGE CORRECTION (the final forensic twist):** mid-sprint, `git fetch` revealed the remote HAD the sprints 14–16 work (`75baf82` RESONANCE, `24ea32d` WILDFANG, `e7e5822` IRONHOLD) — the rebuilt sandbox had lost them locally, which is the complete answer to "the fixed bug came back": the deployed artifact (this sandbox) never ran the remote's fixes. The remote's fix for the rising drone (RESONANCE adaptive music) was MORE advanced than this sprint's rewrite, so this sprint's audio rewrite was **discarded in favor of RESONANCE** and re-merged as one lineage. What survived from the orphaned local line and ships in this merge: herald+veil, the foe CC kit (stun/chill/dash-root/cleanse), CC+veil audio cues, damage-direction wedge, payout count-up, first-60s onboarding, build stamps, GLASS HOLLOW monolith set, harness bulwark-stall fix + stall forensics hook. What the ironhold line contributes that this build now actually DEPLOYS for the first time: the adaptive music system, cinder hound, hex loom weaver, control integrity (dead keys, dash buffer, failsafes), dark-edge bullets, off-screen pips, ROOTED feedback kit. The user-visible consequence: **the preview panel now serves the merged lineage — every fix from both lines is live in one artifact.**
+
+### (0) DECLARED AT THE TOP — the lost-work ledger (R3 honesty law)
+The sprint 14–16 reports cited commit `e7e5822` — **that commit does not exist** (`git cat-file` fatal). Everything since Sprint 13 lived uncommitted in the working tree; the "fixed" audio bug's fix was never committed, so later sessions could (and did) overwrite it back. The "stun/slow dormant kit" the Sprint 16 report claimed to ship **does not exist in the code at all** (`src/game/sim.ts` had zero CC state). Weaver burst aim consumed `Math.random()` inside the sim (determinism violation at sim.ts:995). Full receipts with file:line: **`docs/SPRINT17_FORENSICS.md`**. The inherited tree is now baseline commit `52f67c0`, so every future claim is diffable against a hash that resolves.
+
+### (a) Bug fixes — root causes, not patches
+- **The audio escalation is dead by construction** (`src/game/audio.ts` + `engine.ts`): root cause was `setDanger()` — danger tracks nearest-foe distance (engine.ts:645), waves thicken → drone gain doubled, and the value was *never reset* on death/pause/title, so the drone kept its escalated level forever. Three independent kills: (1) engine writes `setDanger(0)` on every phase entry — startRun/pause/abandon/onDeath; (2) `AudioEngine.tick(dt)` runs **every frame in every phase** and force-decays any layer not refreshed within 0.6 s (watchdog failsafe — no ambience state can outlive its driver); (3) danger no longer scales raw gain at all — it opens a filter and adds arp density under a hard `DRONE_MAX` ceiling. Verified live: drone gain read back at 0.05 base, danger 0, after multiple deaths mid-session.
+- **`setOverdrive` no longer clobbers biome identity** — it restored hardcoded drone frequencies (the old audio.ts:182), erasing the biome root until the next `setBiome`. Now both read the same `BIOME_TONE` table.
+- **Sim determinism restored**: weaver burst spread now consumes the seeded `this.rng()` instead of `Math.random()` (sim.ts:995 was a latent violation of the determinism law).
+- **`hitstopWarden 0.22` dead config fixed to 0.16** — it was silently clamped by `hitstopMax 0.16`, so warden kills never felt heavier than normal kills.
+- **Harness stall fixed** (scripts/simdrive.ts): the QA bot could park forever in front of a bulwark's armor plate (shards block, room never clears, frame-cap FAIL at ~1-in-10 odds). The bot now commits to a flank on plate clangs. 15/15 clean full-runs after.
+
+### (b) Pipeline: new asset family + visual leap (things you SEE in 30 seconds)
+- **GLASS HOLLOW monolith set** — three new named, seeded, reproducible GLB generators in `scripts/assetgen.ts`: `glass_monolith` (faceted hex needle with molten collar, 162 verts), `vesica_arch` (crossing ruin gate), `prism_cluster` (tilted triple prism). Full gate: optimize quant applied=17 skipped=0, verify **17/17 PASS**. Wired into biome 2 (`scene.ts`): 4 monoliths + 2 arches + 2 clusters join the spires — GLASS HOLLOW now has a real skyline (evidence: `.qa/sprint17/13-glass-hollow-set.png`). Note: Blender is absent in this rebuilt sandbox (`/home/z/tools/` gone — Makefile target skips gracefully), so the set was forged through the tier-1 pure-TS generator through the same quantization+GLTFLoader gates; Blender returns to the pipeline the moment the toolchain is restored.
+- **CC/veil readability kit** (`view.ts`): stun = spinning gold hex-ring above the body · root = clamping ground ring · chill = icy ground ring · herald veil chimes = big cold cyan diamonds on their own Points layer. Idle pools cost zero draw calls.
+- **Bullets got a visibility budget**: normal shots 0.9→1.2 with a hotter core color, heavy lances 2.0→2.5, veil chimes 1.7 cold-cyan — checked against all three biome fogs (evidence: `.qa/sprint17/09-veil-chimes-flight.png`, `12-herald-volley.png`).
+- **Damage-direction indicator**: every hit now reports its source — a directional wedge flashes at screen edge toward the attacker (`onHurt(x,z,sx,sz)` → HUD wedge, `.qa/sprint17/` death-path shots), plus a frost vignette while veiled (`.qa/sprint17/10-veil-frost.png`).
+
+### (c) Mechanics vs. pivot — the CC kit is real and the moment-to-moment changed
+- **The dormant kit exists now** (it previously did not exist at all — see section 0). Deterministic triggers only, zero rng: **every 3rd direct shard hit STUNS** (0.7 s, FSM skipped entirely; bosses ×0.4), **every 5th CHILLS** (×0.45 speed), **dash-strike ROOTS** (1.2 s, movement canceled, attacks still run). Every CC state is hard-capped at assignment — the failsafe law from the standing directive.
+- **NEW FOE — the HERALD OF CHIMES** (`sim.ts`, `view.ts`, `audio.ts`): a cold bell that drifts in GLASS HOLLOW+ rooms, RINGS a 0.75 s trembling telegraph (chime audio + cyan ring), then fans 5 slow veil chimes. The veil **never wounds — it saps your speed to ×0.55** for a hard-capped 1.4 s. Counterplay law: **dash cleanses the veil** and dash-immunity shrugs chimes off. The whole threat is readable: cold color voice, sound telegraph, HUD status meter with remaining time, screen-edge frost (evidence: `.qa/sprint17/11-herald-live.png`, `10-veil-frost.png`).
+- **Per-CC audio + per-biome musical identity** (`audio.ts`): stun/root/chill each have their own cue (crystal crack / ash clamp / cold drag), the herald's ring is a glassy double-chime, the veil hit is an icy thud, cleanse is a recovery blip. Each biome now owns a drone ROOT + pad chord + filter color (A dusty / F# cold / C open) instead of one drone for everything, and danger plays a fixed 8-step pentatonic arp that brightens with pressure — pressure is music now, not a swelling hum.
+- **Payout count-up** (`Overlays.tsx`): the death screen's score and dawn TICK up with an eased count instead of teleporting (evidence: `.qa/sprint17/06-death-countup.png`).
+- **First-60s onboarding**: timed hint chips (MOVE → THROW → DASH+CLEANSE → GRAZE → CC rules), once ever, graduating at the first room clear (evidence: `.qa/sprint17/02-run-hint-move.png`).
+- **Deployment trust chain** (`version.ts` + HUD/Overlays/Title): the build tag + base hash is printed in-game on the title screen, the death panel, and the HUD footer — you can always tell which build you are playing (evidence: death panel shows `SPRINT 17 — PROOF OF LIFE · BASE 52f67c0`).
+
+### (d) Known issues (declared)
+- Headless-tab FPS reads ~10 — per our own QA law this is NOT evidence (rAF throttle); perf verdict comes from `__hollowsun.perf()` draw calls: **85 live / 105 transient peak** against the 100 ceiling (peak is the all-biome-props-visible case; declared, not hidden). 25 shader programs.
+- Blender toolchain absent in the rebuilt sandbox — the forge-library Makefile target now skips gracefully; tier-1 covered the sprint (see (b)).
+- `Enter` on the death screen does nothing (stale hint line) — rekindle is click/button-only this build.
+- <420px HUD bottom-strip crowding persists (Sprint-13 debt, untouched).
+- Transient draw-call peak 105 exceeds the ≤100 ceiling by 5 in the worst biome-2 frame; the persistent mid-combat number is 85.
+
+### (e) Next
+- Real-device playtest receipt (the trust chain stamp tells you it's this build), then the maxZones-style perf lever if YOUR device receipt shows strain.
+- Herald joins boss escort tables + a stun/slow-reactive boon tier; dedicated zap sfx (spark still borrows the shield crackle); <420px HUD fix; 3D simdrive seed pinning (the full-run harness is still `Math.random`-seeded per invocation — the forge/afterglow harnesses pin seeds).
+
+### Gate receipts
+- `bunx tsc --noEmit` PASS · `bun run lint` PASS · `make qa`: simdrive **9/9 rooms, 3/3 bosses** (with heralds+CC live) + afterglow **9/9 assertions** + forge **PASS** · `verify-assets` **17/17**
+- Browser-verified golden path (agent-browser, live build): begin → onboarding chips → hint ladder → stun ring → veil volley → frost + HUD meter + toast → **dash cleanse** (veilT 0.92→0) → herald ring+volley → death payout count-up → build stamp on title/death/HUD → rekindle button restarts. Receipts: `.qa/sprint17/01…14-*.png`
 
 ---
 
@@ -80,90 +162,39 @@ Rule R2 (docs/QUALITY_AUDIT.md): each entry lists objective improvements over th
 
 ---
 
-## SPRINT 13 · BUILD 1 — "SUNFORGE" (the 3-stack ships new content)
+## SPRINT 14 · BUILD 1 — "RESONANCE" (the drone dies; music begins)
 
-**Previous state:** Sprint 12 restored the 3D line but replayed the existing 11-GLB library; the title screen covered the live renderer with an AI-generated texture image; no new combat content since the roguelite expansion; the pipeline Makefile could not even run (`make` failed: space-indented recipes).
+**Previous state:** the game's only sustained "music" was a 55 Hz triple-sawtooth drone whose gain was swollen per-frame by `setDanger` (pinned loud for minutes at late waves) and whose pitch was tugged between `setBiome` (τ0.6) and a per-frame `setOverdrive` reset (τ0.15) — the owner's verdict: "music is like a single frequency persistently increasing and getting irritating I finally muted it." Death panel hierarchy was inverted (giant score shouting down the title, REKINDLE buried under a stat wall — owner's screenshot), top score floated bare over the brightest band, bottom HUD physically overlapped at ≤420px (measured 71px at 390px).
 
-### Improved — Blender pipeline produces NEW game content (3-stack: Blender → glTF → Three.js)
-- **`scripts/blender/forge_library.py`** (new, bpy): headless Blender 4.2 forges three brand-new assets that did not exist in any library — `husk_drifter.glb` (666 verts; the most common foe's body), `glass_spire.glb` (1110 verts; biome-2 crystal cluster), `heart_root.glb` (1536 verts; biome-3 root pillar). Gate: `optimize` quant applied=14 skipped=0, `verify-assets` **pass=14 fail=0**, previews+VLM inspect run. Evidence: `.qa/asset-inspect.json`, screenshots below.
-- **`husk_drifter` is live in combat** (`src/game/view.ts`): every drifter spawns as the forged ash-husk shell (footprint-matched 2.2u) — the most-seen silhouette in the game upgraded from a plain octahedron. Evidence: `.qa/sprint13-run-shadows-burn.png`, `.qa/sprint13-spark-moment.png` (spike-shouldered husks around the Lantern).
-- **Biome dressing ships**: `glass_spire` ×6 stands in GLASS HOLLOW, `heart_root` ×5 in THE HEART, visibility toggled per biome in `Scene.setBiome()` (`src/game/scene.ts`). Evidence: `.qa/sprint13-biome2-spires.png` (magenta-rimmed spire cluster live, palette shifted).
-- **Fixed a latent pipeline defect**: the Makefile's recipes were space-indented since creation — `make` itself failed with "missing separator". All recipes fixed to tabs; `make qa`, `make forge-library`, `make check` now actually run. `textures` target + orphaned `obsidian_ember.png` removed (unreferenced).
+### Improved — audio: real adaptive music replaces the buzzing drone (owner's #1 complaint)
+- **`src/game/audio.ts` rewritten (music half):** lookahead scheduler (100ms tick, 400ms horizon, AudioContext-clock) composes three wave-gated layers — sub pulse (A1 root + fifth, beats 1&3) → 4-voice triangle pad chords every 2 bars → pentatonic arp plucks (same PENTATONIC pool as the ricochet ladder, so one-shots always harmonize). `setMusicLevel` builds the arrangement with wave depth (waves 1-2 sub / 3-4 +pad / 5+ +arp, wired in `engine.onWaveStart`).
+- **Danger no longer swells a tone** — it DUCKS the music bus (floor 0.65×) and raises a hard-capped low tension bed (≤0.026, bandpassed noise). `setDanger` keeps its per-frame call site but quantizes+state-diffs internally (no-op unless the ¼-step changes).
+- **The biome/overdrive frequency tug-of-war is dead:** `setOverdrive(active)` no longer touches any oscillator frequency — it opens the music lowpass (800→2400 Hz) and lifts the arp an octave; only `setBiome` writes frequency (event-driven, one glide per change).
+- **Hygiene:** the silent zombie overdrive pad (4 saws at gain 0) deleted; every scheduled note auto-stops (zero accumulation); scheduler resyncs after tab-hidden throttling (no pileup/burst); music pauses on death/pause/abandon/tab-hide (`setMusicPaused`), cleared before `ctx.close()` in `dispose()`.
+- **Dead `waveStart` stinger wired in** — the ember route never called it; now each wave opens with a two-note triad that fits the arrangement.
+- **Verification receipts:** real-click begin → `ctx.state=running`, scheduler step advancing (8→14 in ~1.5s = 8ths @120BPM); live danger duck observed (`musicGain 0.800→0.734`, tension bed 0→0.0059 under a q=0.25 threat); forced `setOverdrive(true)` correctly reverts next frame (engine owns state, diffed setters hold).
 
-### Improved — graphics (the title is the engine now, and the world is grounded)
-- **Title screen AI texture killed** (owner directive): `.hs-title-tex` (pasted `obsidian_ember.png` over the renderer) deleted from `TitleScreen.tsx` + `globals.css`; replaced by a pure-CSS 4-layer scrim that darkens only the kicker/CTA bands and leaves the live Hollow Lantern orbit fully visible between them. Also purged the dead class from the afterglow title. Evidence: `.qa/sprint13-title-live3d.png` (lantern ring, hex floor, boundary arc, fog monoliths — all real-time), `.qa/13b/13b-title-desktop.png`, `.qa/13b/13b-title-mobile.png`.
-- **Living attract mode** (`src/game/engine.ts`): the title now idles the sim forward (shards orbit the ember, `Scene.setEnergy` breathes 0.16–0.25) under the orbiting rig — the backdrop is a running world, not a still.
-- **Contact shadows** (designer-bar item from the Sprint-12 audit): pooled soft blob shadows under the dart + all 40 foe seats, spawn-fade aware, dash-dimmed (`src/game/view.ts`) — kills the "everything floats" defect.
+### Improved — graphics/UI: the death screen and HUD read like a shipped game
+- **Death panel recomposed** (`Overlays.tsx`) to the hierarchy law title > score > CTA > stats: THE EMBER FADES leads, FINAL SCORE captioned beneath, REKINDLE promoted above a tightened stat grid — was: 5xl score dwarfing the title with the CTA last. Evidence: `.qa/sprint14/14-death-panel.png` vs owner's screenshot.
+- **Duplicate score killed:** the top-center HUD score now hides on dead/reward (it used to peek from behind the death panel — visible in the owner's screenshot).
+- **Score lives in an engraved `.hs-panel` chip** (was bare text over the scene's brightest band — the Sprint-13 declared debt).
+- **Bottom HUD cannot overlap anymore:** EMBERS and SHARDS+DASH are one flex row (`inset-x-3 justify-between` — overlap impossible by construction, was 71px collision at 390px); overdrive meter lifts above the row on narrow screens (`bottom-16 sm:bottom-4`); room strip drops below the score chip on mobile (`top-14 sm:top-3`); pips shrink ≤420px. Evidence: `.qa/sprint14/14-mobile-run-v2.png` (390×844, zero collisions).
+- **Overlay scrim:** death/pause/shrine share `.hs-overlay-scrim` (warm obsidian radial wash + blur) so the world recedes instead of competing — replaces flat `bg-black/70` + weak blur.
+- **Damage numbers get obsidian backing plates** (`.hs-dmg-plate`) — digits no longer camouflage into sparks/projectiles (designer P2 item).
 
-### Improved — mechanics (two new rare boons, fully headless-verified)
-- **EMBER ROT** (rare, 3 stacks): direct hits ignite foes — each 0.75s beat deals the stack count as damage and consumes one stack (3 stacks → 6 dmg over 2.25s). Burns live on enemy time (Overdrive slows the fire), never consume rng.
-- **CHAINSPARK** (rare, 2 stacks): slain foes arc 2 dmg of death-light to the nearest kindred (9u first arc, 7u chained); nearest-first targeting is pure geometry — sparks never re-spark.
-- New digest-safe events `onBurnTick` / `onSpark`; view reads burning foes (heart-glow flicker) and draws jagged additive arc lines; burn beats shed ember particles (no hitstop, no sfx spam — the feel law holds).
-
-### Improved — architecture / QA
-- **`scripts/simdrive-forge.ts`** (new): headless harness asserting the burn stack law, the 3→2→1 beat ladder, spark nearest-first targeting + no-respark, seed determinism of the whole burn/spark story, and full-run compatibility (burn+spark build clears 9/9 rooms, 3/3 bosses). Wired into `make qa`.
-- QA seam `Sim.debugStrikeNearest()` (pattern of `debugClearRoom`).
+### Improved — palette law (no blue/indigo residue)
+- `gridCold` 0x123236 ("cold teal") → 0x241a12 obsidian umber; GLASS HOLLOW grid 0x2a1236 (indigo-leaning) → 0x2a1612 warm; fog retinted to match. The whole grade now sits in the ember/obsidian family. Evidence: warm floor hexes across all `.qa/sprint14/` shots.
 
 ### Gate receipts
-- `bunx tsc --noEmit` — PASS · `bun run lint` — PASS · `make qa` — **simdrive PASS (run won, dawn 592) + afterglow 9/9 + forge PASS**
-- `bun scripts/verify-assets.ts` — pass=14 fail=0 · `__hollowsun.perf()` mid-combat: **77 draw calls / 86 peak** (ceiling 100), 0 page errors
-- Browser-verified golden path: begin → combat → burn ignition → spark kill → biome advance (GLASS HOLLOW) — `.qa/sprint13-title-live3d.png`, `.qa/sprint13-run-shadows-burn.png`, `.qa/sprint13-spark-moment.png` (score 50 payout + kill ring), `.qa/sprint13-biome2-spires.png` (CHAINSPARK in HUD boon strip), `.qa/sprint13-mobile-run.png` (390×844)
+- `bunx tsc --noEmit` — PASS · `bun run lint` — PASS · `make qa` — simdrive PASS + afterglow 9/9 + forge PASS (audio changes are browser-only; headless harnesses untouched by design)
+- `__hollowsun.perf()` mid-run @390px: **70 draw calls / 72 peak** (ceiling 100) · 0 console errors, 0 page errors across title/run/death/mobile passes
+- Browser-verified: begin (real click → audio running) → combat HUD → forced layer/duck probes → death panel → mobile 390×844 — `.qa/sprint14/14-title.png`, `14-run-hud.png`, `14-combat-plates.png`, `14-death-panel.png`, `14-mobile-run.png`, `14-mobile-run-v2.png`
 
 ### Known debt (declared, R3)
-- Spark arc reuses the shield-break crackle sfx (dedicated zap pending in `audio.ts`)
-- Mobile <420px: bottom HUD strip crowds (EMBERS/SHARDS overlap at 390px) — P2 polish
-- First-60s scripted onboarding + determinism digests for the 3D simdrive remain from the Sprint-12 debt list
-- Godot 4.3 stays a hedge, not the product engine — the shipping 3-stack is Three.js (runtime) + Blender 4.2 headless (assets) + the grade/fog/bloom chain (rendering); re-evaluated and confirmed this sprint
-
----
-
-## SPRINT 17 · BUILD 1 — "PROOF OF LIFE" (base `e7e5822+17`, stamped 2026-09-09T07:40Z)
-
-**Owner verdict that drove this sprint:** *"I played and nothing big changes done actually, music or whatever that hell it is sound persistent on increasing over time came back and also near everything is same… you are doing nothing at all and taking fixed bug back like a dumb?"* — every section below answers that, in the plan's own Phase 0–3 order.
-
-**MERGE CORRECTION (the final forensic twist):** mid-sprint, `git fetch` revealed the remote HAD the sprints 14–16 work (`75baf82` RESONANCE, `24ea32d` WILDFANG, `e7e5822` IRONHOLD) — the rebuilt sandbox had lost them locally, which is the complete answer to "the fixed bug came back": the deployed artifact (this sandbox) never ran the remote's fixes. The remote's fix for the rising drone (RESONANCE adaptive music) was MORE advanced than this sprint's rewrite, so this sprint's audio rewrite was **discarded in favor of RESONANCE** and re-merged as one lineage. What survived from the orphaned local line and ships in this merge: herald+veil, the foe CC kit (stun/chill/dash-root/cleanse), CC+veil audio cues, damage-direction wedge, payout count-up, first-60s onboarding, build stamps, GLASS HOLLOW monolith set, harness bulwark-stall fix + stall forensics hook. What the ironhold line contributes that this build now actually DEPLOYS for the first time: the adaptive music system, cinder hound, hex loom weaver, control integrity (dead keys, dash buffer, failsafes), dark-edge bullets, off-screen pips, ROOTED feedback kit. The user-visible consequence: **the preview panel now serves the merged lineage — every fix from both lines is live in one artifact.**
-
-### (0) DECLARED AT THE TOP — the lost-work ledger (R3 honesty law)
-The sprint 14–16 reports cited commit `e7e5822` — **that commit does not exist** (`git cat-file` fatal). Everything since Sprint 13 lived uncommitted in the working tree; the "fixed" audio bug's fix was never committed, so later sessions could (and did) overwrite it back. The "stun/slow dormant kit" the Sprint 16 report claimed to ship **does not exist in the code at all** (`src/game/sim.ts` had zero CC state). Weaver burst aim consumed `Math.random()` inside the sim (determinism violation at sim.ts:995). Full receipts with file:line: **`docs/SPRINT17_FORENSICS.md`**. The inherited tree is now baseline commit `52f67c0`, so every future claim is diffable against a hash that resolves.
-
-### (a) Bug fixes — root causes, not patches
-- **The audio escalation is dead by construction** (`src/game/audio.ts` + `engine.ts`): root cause was `setDanger()` — danger tracks nearest-foe distance (engine.ts:645), waves thicken → drone gain doubled, and the value was *never reset* on death/pause/title, so the drone kept its escalated level forever. Three independent kills: (1) engine writes `setDanger(0)` on every phase entry — startRun/pause/abandon/onDeath; (2) `AudioEngine.tick(dt)` runs **every frame in every phase** and force-decays any layer not refreshed within 0.6 s (watchdog failsafe — no ambience state can outlive its driver); (3) danger no longer scales raw gain at all — it opens a filter and adds arp density under a hard `DRONE_MAX` ceiling. Verified live: drone gain read back at 0.05 base, danger 0, after multiple deaths mid-session.
-- **`setOverdrive` no longer clobbers biome identity** — it restored hardcoded drone frequencies (the old audio.ts:182), erasing the biome root until the next `setBiome`. Now both read the same `BIOME_TONE` table.
-- **Sim determinism restored**: weaver burst spread now consumes the seeded `this.rng()` instead of `Math.random()` (sim.ts:995 was a latent violation of the determinism law).
-- **`hitstopWarden 0.22` dead config fixed to 0.16** — it was silently clamped by `hitstopMax 0.16`, so warden kills never felt heavier than normal kills.
-- **Harness stall fixed** (scripts/simdrive.ts): the QA bot could park forever in front of a bulwark's armor plate (shards block, room never clears, frame-cap FAIL at ~1-in-10 odds). The bot now commits to a flank on plate clangs. 15/15 clean full-runs after.
-
-### (b) Pipeline: new asset family + visual leap (things you SEE in 30 seconds)
-- **GLASS HOLLOW monolith set** — three new named, seeded, reproducible GLB generators in `scripts/assetgen.ts`: `glass_monolith` (faceted hex needle with molten collar, 162 verts), `vesica_arch` (crossing ruin gate), `prism_cluster` (tilted triple prism). Full gate: optimize quant applied=17 skipped=0, verify **17/17 PASS**. Wired into biome 2 (`scene.ts`): 4 monoliths + 2 arches + 2 clusters join the spires — GLASS HOLLOW now has a real skyline (evidence: `.qa/sprint17/13-glass-hollow-set.png`). Note: Blender is absent in this rebuilt sandbox (`/home/z/tools/` gone — Makefile target skips gracefully), so the set was forged through the tier-1 pure-TS generator through the same quantization+GLTFLoader gates; Blender returns to the pipeline the moment the toolchain is restored.
-- **CC/veil readability kit** (`view.ts`): stun = spinning gold hex-ring above the body · root = clamping ground ring · chill = icy ground ring · herald veil chimes = big cold cyan diamonds on their own Points layer. Idle pools cost zero draw calls.
-- **Bullets got a visibility budget**: normal shots 0.9→1.2 with a hotter core color, heavy lances 2.0→2.5, veil chimes 1.7 cold-cyan — checked against all three biome fogs (evidence: `.qa/sprint17/09-veil-chimes-flight.png`, `12-herald-volley.png`).
-- **Damage-direction indicator**: every hit now reports its source — a directional wedge flashes at screen edge toward the attacker (`onHurt(x,z,sx,sz)` → HUD wedge, `.qa/sprint17/` death-path shots), plus a frost vignette while veiled (`.qa/sprint17/10-veil-frost.png`).
-
-### (c) Mechanics vs. pivot — the CC kit is real and the moment-to-moment changed
-- **The dormant kit exists now** (it previously did not exist at all — see section 0). Deterministic triggers only, zero rng: **every 3rd direct shard hit STUNS** (0.7 s, FSM skipped entirely; bosses ×0.4), **every 5th CHILLS** (×0.45 speed), **dash-strike ROOTS** (1.2 s, movement canceled, attacks still run). Every CC state is hard-capped at assignment — the failsafe law from the standing directive.
-- **NEW FOE — the HERALD OF CHIMES** (`sim.ts`, `view.ts`, `audio.ts`): a cold bell that drifts in GLASS HOLLOW+ rooms, RINGS a 0.75 s trembling telegraph (chime audio + cyan ring), then fans 5 slow veil chimes. The veil **never wounds — it saps your speed to ×0.55** for a hard-capped 1.4 s. Counterplay law: **dash cleanses the veil** and dash-immunity shrugs chimes off. The whole threat is readable: cold color voice, sound telegraph, HUD status meter with remaining time, screen-edge frost (evidence: `.qa/sprint17/11-herald-live.png`, `10-veil-frost.png`).
-- **Per-CC audio + per-biome musical identity** (`audio.ts`): stun/root/chill each have their own cue (crystal crack / ash clamp / cold drag), the herald's ring is a glassy double-chime, the veil hit is an icy thud, cleanse is a recovery blip. Each biome now owns a drone ROOT + pad chord + filter color (A dusty / F# cold / C open) instead of one drone for everything, and danger plays a fixed 8-step pentatonic arp that brightens with pressure — pressure is music now, not a swelling hum.
-- **Payout count-up** (`Overlays.tsx`): the death screen's score and dawn TICK up with an eased count instead of teleporting (evidence: `.qa/sprint17/06-death-countup.png`).
-- **First-60s onboarding**: timed hint chips (MOVE → THROW → DASH+CLEANSE → GRAZE → CC rules), once ever, graduating at the first room clear (evidence: `.qa/sprint17/02-run-hint-move.png`).
-- **Deployment trust chain** (`version.ts` + HUD/Overlays/Title): the build tag + base hash is printed in-game on the title screen, the death panel, and the HUD footer — you can always tell which build you are playing (evidence: death panel shows `SPRINT 17 — PROOF OF LIFE · BASE 52f67c0`).
-
-### (d) Known issues (declared)
-- Headless-tab FPS reads ~10 — per our own QA law this is NOT evidence (rAF throttle); perf verdict comes from `__hollowsun.perf()` draw calls: **85 live / 105 transient peak** against the 100 ceiling (peak is the all-biome-props-visible case; declared, not hidden). 25 shader programs.
-- Blender toolchain absent in the rebuilt sandbox — the forge-library Makefile target now skips gracefully; tier-1 covered the sprint (see (b)).
-- `Enter` on the death screen does nothing (stale hint line) — rekindle is click/button-only this build.
-- <420px HUD bottom-strip crowding persists (Sprint-13 debt, untouched).
-- Transient draw-call peak 105 exceeds the ≤100 ceiling by 5 in the worst biome-2 frame; the persistent mid-combat number is 85.
-
-### (e) Next
-- Real-device playtest receipt (the trust chain stamp tells you it's this build), then the maxZones-style perf lever if YOUR device receipt shows strain.
-- Herald joins boss escort tables + a stun/slow-reactive boon tier; dedicated zap sfx (spark still borrows the shield crackle); <420px HUD fix; 3D simdrive seed pinning (the full-run harness is still `Math.random`-seeded per invocation — the forge/afterglow harnesses pin seeds).
-
-### Gate receipts
-- `bunx tsc --noEmit` PASS · `bun run lint` PASS · `make qa`: simdrive **9/9 rooms, 3/3 bosses** (with heralds+CC live) + afterglow **9/9 assertions** + forge **PASS** · `verify-assets` **17/17**
-- Browser-verified golden path (agent-browser, live build): begin → onboarding chips → hint ladder → stun ring → veil volley → frost + HUD meter + toast → **dash cleanse** (veilT 0.92→0) → herald ring+volley → death payout count-up → build stamp on title/death/HUD → rekindle button restarts. Receipts: `.qa/sprint17/01…14-*.png`
-
----
-
+- Off-screen foe pips + chain-payout count-up (designer P2 remainder) — Sprint 15
+- Biome arrival beat + per-biome music roots beyond the ratio glide (designer P3) — Sprint 15
+- Music arrangement is one fixed 2-bar loop per depth tier; longer forms (8-bar phrases, per-biome motifs) pending
+- First-60s scripted onboarding + 3D simdrive determinism digests remain from the Sprint-12 debt list
 ## SPRINT 13 · BUILD 1 — "SUNFORGE" (the 3-stack ships new content)
 
 **Previous state:** Sprint 12 restored the 3D line but replayed the existing 11-GLB library; the title screen covered the live renderer with an AI-generated texture image; no new combat content since the roguelite expansion; the pipeline Makefile could not even run (`make` failed: space-indented recipes).
@@ -237,36 +268,3 @@ The sprint 14–16 reports cited commit `e7e5822` — **that commit does not exi
 
 ---
 
-## SPRINT 14 · BUILD 1 — "RESONANCE" (the drone dies; music begins)
-
-**Previous state:** the game's only sustained "music" was a 55 Hz triple-sawtooth drone whose gain was swollen per-frame by `setDanger` (pinned loud for minutes at late waves) and whose pitch was tugged between `setBiome` (τ0.6) and a per-frame `setOverdrive` reset (τ0.15) — the owner's verdict: "music is like a single frequency persistently increasing and getting irritating I finally muted it." Death panel hierarchy was inverted (giant score shouting down the title, REKINDLE buried under a stat wall — owner's screenshot), top score floated bare over the brightest band, bottom HUD physically overlapped at ≤420px (measured 71px at 390px).
-
-### Improved — audio: real adaptive music replaces the buzzing drone (owner's #1 complaint)
-- **`src/game/audio.ts` rewritten (music half):** lookahead scheduler (100ms tick, 400ms horizon, AudioContext-clock) composes three wave-gated layers — sub pulse (A1 root + fifth, beats 1&3) → 4-voice triangle pad chords every 2 bars → pentatonic arp plucks (same PENTATONIC pool as the ricochet ladder, so one-shots always harmonize). `setMusicLevel` builds the arrangement with wave depth (waves 1-2 sub / 3-4 +pad / 5+ +arp, wired in `engine.onWaveStart`).
-- **Danger no longer swells a tone** — it DUCKS the music bus (floor 0.65×) and raises a hard-capped low tension bed (≤0.026, bandpassed noise). `setDanger` keeps its per-frame call site but quantizes+state-diffs internally (no-op unless the ¼-step changes).
-- **The biome/overdrive frequency tug-of-war is dead:** `setOverdrive(active)` no longer touches any oscillator frequency — it opens the music lowpass (800→2400 Hz) and lifts the arp an octave; only `setBiome` writes frequency (event-driven, one glide per change).
-- **Hygiene:** the silent zombie overdrive pad (4 saws at gain 0) deleted; every scheduled note auto-stops (zero accumulation); scheduler resyncs after tab-hidden throttling (no pileup/burst); music pauses on death/pause/abandon/tab-hide (`setMusicPaused`), cleared before `ctx.close()` in `dispose()`.
-- **Dead `waveStart` stinger wired in** — the ember route never called it; now each wave opens with a two-note triad that fits the arrangement.
-- **Verification receipts:** real-click begin → `ctx.state=running`, scheduler step advancing (8→14 in ~1.5s = 8ths @120BPM); live danger duck observed (`musicGain 0.800→0.734`, tension bed 0→0.0059 under a q=0.25 threat); forced `setOverdrive(true)` correctly reverts next frame (engine owns state, diffed setters hold).
-
-### Improved — graphics/UI: the death screen and HUD read like a shipped game
-- **Death panel recomposed** (`Overlays.tsx`) to the hierarchy law title > score > CTA > stats: THE EMBER FADES leads, FINAL SCORE captioned beneath, REKINDLE promoted above a tightened stat grid — was: 5xl score dwarfing the title with the CTA last. Evidence: `.qa/sprint14/14-death-panel.png` vs owner's screenshot.
-- **Duplicate score killed:** the top-center HUD score now hides on dead/reward (it used to peek from behind the death panel — visible in the owner's screenshot).
-- **Score lives in an engraved `.hs-panel` chip** (was bare text over the scene's brightest band — the Sprint-13 declared debt).
-- **Bottom HUD cannot overlap anymore:** EMBERS and SHARDS+DASH are one flex row (`inset-x-3 justify-between` — overlap impossible by construction, was 71px collision at 390px); overdrive meter lifts above the row on narrow screens (`bottom-16 sm:bottom-4`); room strip drops below the score chip on mobile (`top-14 sm:top-3`); pips shrink ≤420px. Evidence: `.qa/sprint14/14-mobile-run-v2.png` (390×844, zero collisions).
-- **Overlay scrim:** death/pause/shrine share `.hs-overlay-scrim` (warm obsidian radial wash + blur) so the world recedes instead of competing — replaces flat `bg-black/70` + weak blur.
-- **Damage numbers get obsidian backing plates** (`.hs-dmg-plate`) — digits no longer camouflage into sparks/projectiles (designer P2 item).
-
-### Improved — palette law (no blue/indigo residue)
-- `gridCold` 0x123236 ("cold teal") → 0x241a12 obsidian umber; GLASS HOLLOW grid 0x2a1236 (indigo-leaning) → 0x2a1612 warm; fog retinted to match. The whole grade now sits in the ember/obsidian family. Evidence: warm floor hexes across all `.qa/sprint14/` shots.
-
-### Gate receipts
-- `bunx tsc --noEmit` — PASS · `bun run lint` — PASS · `make qa` — simdrive PASS + afterglow 9/9 + forge PASS (audio changes are browser-only; headless harnesses untouched by design)
-- `__hollowsun.perf()` mid-run @390px: **70 draw calls / 72 peak** (ceiling 100) · 0 console errors, 0 page errors across title/run/death/mobile passes
-- Browser-verified: begin (real click → audio running) → combat HUD → forced layer/duck probes → death panel → mobile 390×844 — `.qa/sprint14/14-title.png`, `14-run-hud.png`, `14-combat-plates.png`, `14-death-panel.png`, `14-mobile-run.png`, `14-mobile-run-v2.png`
-
-### Known debt (declared, R3)
-- Off-screen foe pips + chain-payout count-up (designer P2 remainder) — Sprint 15
-- Biome arrival beat + per-biome music roots beyond the ratio glide (designer P3) — Sprint 15
-- Music arrangement is one fixed 2-bar loop per depth tier; longer forms (8-bar phrases, per-biome motifs) pending
-- First-60s scripted onboarding + 3D simdrive determinism digests remain from the Sprint-12 debt list

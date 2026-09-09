@@ -65,7 +65,7 @@ export default function TitleScreen() {
 
         {/* pitch */}
         <p className="max-w-md text-[11px] leading-5 text-[#f2e6cf]/70 sm:text-xs">
-          Three biomes. Nine rooms. Throw shards of light that ricochet between
+          Four biomes. Twelve rooms. Throw shards of light that ricochet between
           enemies and return — graze fire to charge Overdrive — every point
           rekindles the cracked star.
         </p>

@@ -207,6 +207,11 @@ export default function Overlays() {
             <span aria-hidden="true" className="hs-c" />
             {won ? 'REKINDLE AGAIN' : 'REKINDLE'}
           </button>
+          {won && (
+            <p className="hs-tracking mt-2 text-[9px] text-[#ffc766]/70">
+              THE CHOIR WAITS BELOW — 12 ROOMS NOW STAND BETWEEN YOU AND DAWN.
+            </p>
+          )}
           <div className="mt-5 grid w-full grid-cols-1 gap-y-2.5 text-left">
             <div className="flex items-baseline justify-between border-b border-[rgba(255,196,120,0.12)] pb-2">
               <span className="hs-tracking text-[9px] text-[#f2e6cf]/45">WAVE REACHED</span>

@@ -2,11 +2,15 @@ import {
   ARENA,
   BURN,
   CC,
+  CINDER,
+  CROWN_DENSITY,
+  FIRST_VOICE,
   FOE,
   HEX,
   HOUND,
   OVERDRIVE,
   PLAYER,
+  RIME,
   RUN,
   SCORE,
   SHARD,
@@ -77,6 +81,9 @@ export interface SimEvents {
   onVeil?(x: number, z: number): void;
   /** player dash cleansed the veil */
   onCleanse?(x: number, z: number): void;
+  /** optional pure-notify: a CINDERBOUND foe dropped a burning wake patch at
+ *  (x,z) — ring the pool, zero state writes (same law as onFoeHurt). */
+  onCinderDrop?(x: number, z: number): void;
   onBossPhase(x: number, z: number, phase: number): void;
   onRevive(x: number, z: number): void;
   onWardenSpawn(x: number, z: number): void;
@@ -135,6 +142,7 @@ interface Foe {
   rootT: number; // >0: movement canceled, attacks allowed
   chillT: number; // >0: speed/act ×0.45
   hitCount: number; // deterministic CC trigger counter (never rng)
+  eliteT: number; // CINDERBOUND wake accumulator (enemy time while moving)
 }
 
 interface Bullet {
@@ -163,6 +171,16 @@ export interface HexZone {
   z: number;
   t: number; // seconds to detonation (enemy time)
   weaverId: number;
+}
+
+/** CINDERBOUND wake patch — a burning footprint left by a moving crowned
+ *  foe. Parallel floor pipe (NEVER in marks: a patch is not a spawn and
+ *  must never count into enemiesLeft). Timers run on ENEMY time. */
+export interface CinderPatch {
+  x: number;
+  z: number;
+  life: number; // seconds until the patch burns out (enemy time)
+  tick: number; // seconds to the next wound beat (enemy time)
 }
 
 const TAU = Math.PI * 2;
@@ -208,6 +226,11 @@ export class Sim {
   bullets: Bullet[] = [];
   marks: SpawnMark[] = [];
   hexes: HexZone[] = [];
+  /** CINDERBOUND wake — public parallel pipe; the view renders it and the
+   *  harness asserts its lifecycle. Cleared in reset/startRoom/debugClearRoom. */
+  cinders: CinderPatch[] = [];
+  /** one crown per wave — claimed by rollElite, reset by startRoom */
+  crownUsed = false;
   /** player crowd control — ROOTED: movement zeroed, dash blocked, throwing
    *  free. Ticks on PLAYER time. Public: the engine watchdog enforces the
    *  failsafe law (never locked > CC.max × factor). */
@@ -276,6 +299,8 @@ export class Sim {
     this.bullets = [];
     this.marks = [];
     this.hexes = [];
+    this.cinders = [];
+    this.crownUsed = false;
     this.pRootT = 0;
     this.veilT = 0;
     this.wave = 1;
@@ -323,6 +348,8 @@ export class Sim {
     this.bullets.length = 0;
     this.marks.length = 0;
     this.hexes.length = 0;
+    this.cinders.length = 0; // the wake never outlives its room
+    this.crownUsed = false; // one crown per wave — a new wave may claim one
     this.pRootT = 0;
     this.spawnQueue.length = 0;
     this.invuln = Math.max(this.invuln, 0.8);
@@ -403,6 +430,7 @@ export class Sim {
     this.updateBullets(enemyDt);
     this.updateMarks(enemyDt);
     this.updateHexes(enemyDt);
+    this.updateCinders(enemyDt);
     this.updateWave(dt);
 
     // chain decay
@@ -629,6 +657,8 @@ export class Sim {
     this.spawnQueue.length = 0;
     this.marks.length = 0;
     this.hexes.length = 0;
+    this.cinders.length = 0;
+    this.crownUsed = false;
     this.pRootT = 0;
   }
 
@@ -891,10 +921,12 @@ export class Sim {
     // CHAINSPARK: the kill arcs death-light to the nearest kindred — sparks
     // never re-spark, so the light stops there
     if (cause !== 'spark' && this.mods.spark > 0) this.fireSparks(f);
-    // score: elites pay ×1.5, bosses scale by biome, mutators sweeten the pot
+    // score: elites pay ×1.5, CROWNS pay ×2 (rime/cinder replace the elite
+    // multiplier), bosses scale by biome, mutators sweeten the pot
     let base = f.kind === 'warden' ? WAVES.wardenScore : SCORE[f.kind];
     if (f.boss) base = bossScore(this.biome);
-    if (f.elite) base *= 1.5;
+    if (f.elite === 'rime' || f.elite === 'cinder') base *= 2;
+    else if (f.elite) base *= 1.5;
     this.score += Math.round((base * this.mult * this.mutator.mods.score) / 5) * 5;
     this.addOverdrive(OVERDRIVE.killCharge + this.mods.odOnKill + (f.elite ? 3 : 0));
     if (f.kind === 'warden') {
@@ -981,6 +1013,7 @@ export class Sim {
     if (rOverride !== undefined) r = rOverride;
     if (elite === 'shield') hp += 2;
     if (elite === 'swift') hp = Math.max(1, hp - 1);
+    if (elite === 'rime' || elite === 'cinder') hp = Math.ceil(hp * (elite === 'rime' ? RIME.hpMult : CINDER.hpMult));
     if (kind === 'bulwark' && elite === 'shield') elite = ''; // the plate IS the shield
     this.foes.push({
       id,
@@ -1020,13 +1053,30 @@ export class Sim {
       rootT: 0,
       chillT: 0,
       hitCount: 0,
+      eliteT: 0,
     });
     if (kind === 'warden' && boss) this.events.onWardenSpawn(x, z);
   }
 
-  private rollElite(): Elite {
+  private rollElite(kind: FoeKind): Elite {
     if (this.rng() >= eliteChance(this.biome)) return '';
+    // the type draw — ONE rng call, same position in the seeded stream as
+    // ever; the crown branch below only REINTERPRETS it
     const roll = this.rng();
+    // CROWN BRANCH (sprint 18): deep rooms only, never boss rooms, one crown
+    // per wave, whitelisted hosts (weaver/herald excluded by construction).
+    // Type = wave parity (even → rime, odd → cinder) — NOT rng.
+    if (
+      (kind === 'drifter' || kind === 'striker' || kind === 'hound' || kind === 'caster' || kind === 'bulwark') &&
+      this.biome >= 1 &&
+      this.wave >= 5 &&
+      !isBossRoom(this.room) &&
+      !this.crownUsed &&
+      roll < CROWN_DENSITY[Math.min(CROWN_DENSITY.length - 1, Math.max(0, this.biome))]
+    ) {
+      this.crownUsed = true;
+      return this.wave % 2 === 0 ? 'rime' : 'cinder';
+    }
     return roll < 0.34 ? 'swift' : roll < 0.67 ? 'shield' : 'split';
   }
 
@@ -1303,6 +1353,13 @@ export class Sim {
           break;
         }
         case 'warden': {
+          // THE FIRST VOICE — biome-4 boss script (sprint 18), composed ONLY
+          // from shipped telegraph primitives. Minibosses (boss=false) and
+          // biomes 0-2 keep the generic warden below, bit-identical.
+          if (f.boss && this.biome === 3) {
+            this.updateFirstVoice(f, dt);
+            break;
+          }
           // slow menacing drift toward the ember
           f.vx += ((pdx / pd) * 1.7 - f.vx) * Math.min(1, dt * 1.2);
           f.vz += ((pdz / pd) * 1.7 - f.vz) * Math.min(1, dt * 1.2);
@@ -1324,19 +1381,7 @@ export class Sim {
           if (f.timer <= 0) {
             f.timer = interval;
             f.patternAngle += 0.37;
-            for (let i = 0; i < ringN; i++) {
-              const a = (i / ringN) * TAU + f.patternAngle * (f.boss && f.state === 3 ? 1.9 : 1);
-              this.bullets.push({
-                x: f.x + Math.sin(a) * f.r,
-                z: f.z + Math.cos(a) * f.r,
-                vx: Math.sin(a) * 8.5,
-                vz: Math.cos(a) * 8.5,
-                life: FOE.bulletLife,
-                grazed: false,
-                heavy: false,
-                veil: false,
-              });
-            }
+            this.fireRing(f, ringN, f.boss && f.state === 3 ? 1.9 : 1);
             // The Hollow Choir: escorts in phase 3
             if (f.boss && this.biome === 2 && f.state === 3 && f.tx < 1) {
               f.tx = 1;
@@ -1353,6 +1398,30 @@ export class Sim {
       if (f.rootT > 0) {
         f.vx = 0;
         f.vz = 0;
+      }
+
+      // ELITE CROWNS (sprint 18) — per-foe pass, zero rng, after the
+      // root-cancel block so stun/root gate both effects by construction.
+      if (f.elite === 'rime') {
+        // RIMEBOUND aura — ENTRY-EDGE veil: the moment the ember steps within
+        // 5.5u of a live crowned foe while unveiled, the existing veil state
+        // applies (cap law + onVeil pipeline teach "DASH TO CLEANSE" for
+        // free). Zero new player CC state, zero caps changed.
+        if (this.veilT <= 0 && pd <= RIME.radius) {
+          this.veilT = Math.min(CC.veilCap, CC.veilTime);
+          this.events.onVeil?.(this.px, this.pz);
+        }
+      } else if (f.elite === 'cinder') {
+        // CINDERBOUND wake — accumulates on ENEMY time only while MOVING
+        // (speed above the gate; stun/root zero the velocity above, so the
+        // wake halts by construction). Every interval → a patch at its feet.
+        if (Math.hypot(f.vx, f.vz) > CINDER.moveGate) {
+          f.eliteT += dt;
+          if (f.eliteT >= CINDER.interval) {
+            f.eliteT -= CINDER.interval;
+            this.dropCinder(f.x, f.z);
+          }
+        }
       }
 
       f.x += f.vx * dt;
@@ -1395,6 +1464,195 @@ export class Sim {
         }
       }
     }
+  }
+
+  /** warden radial ring — extracted verbatim from the generic boss volley
+   *  so THE FIRST VOICE reuses the exact same bullet math (determinism). */
+  private fireRing(f: Foe, ringN: number, angleScale: number): void {
+    for (let i = 0; i < ringN; i++) {
+      const a = (i / ringN) * TAU + f.patternAngle * angleScale;
+      this.bullets.push({
+        x: f.x + Math.sin(a) * f.r,
+        z: f.z + Math.cos(a) * f.r,
+        vx: Math.sin(a) * 8.5,
+        vz: Math.cos(a) * 8.5,
+        life: FOE.bulletLife,
+        grazed: false,
+        heavy: false,
+        veil: false,
+      });
+    }
+  }
+
+  /** a burning wake patch lands at (x,z) — capped, oldest expires first.
+   *  Zero rng (patch positions are foe positions). */
+  private dropCinder(x: number, z: number): void {
+    if (this.cinders.length >= CINDER.maxPatches) this.cinders.shift();
+    this.cinders.push({ x, z, life: CINDER.life, tick: CINDER.tick });
+    this.events.onCinderDrop?.(x, z);
+  }
+
+  /** CINDERBOUND beats — enemy time (Overdrive slows the burn too, same law
+   *  as BURN/HEX). Parallel pipe: patches never count into enemiesLeft. */
+  private updateCinders(dt: number): void {
+    for (let i = this.cinders.length - 1; i >= 0; i--) {
+      const c = this.cinders[i];
+      c.life -= dt;
+      if (c.life <= 0) {
+        this.cinders.splice(i, 1);
+        continue;
+      }
+      c.tick -= dt;
+      if (c.tick <= 0) {
+        c.tick = CINDER.tick; // the beat is a metronome — re-entry waits for it
+        if (Math.hypot(this.px - c.x, this.pz - c.z) <= CINDER.radius) {
+          // hurt's own invuln/dash guards make the wake dash-through-able;
+          // onHurt carries the patch position so the wedge points at it
+          this.hurt(c.x, c.z);
+        }
+      }
+    }
+  }
+
+  /** THE FIRST VOICE — biome-4 warden script (sprint 18).
+   *
+   *  P1 (100-66%): radial ring + every 3rd volley anchors a HEX zone at the
+   *  ember's feet (weaver port: telegraph 0.9 / root 0.8 / maxZones 2).
+   *  P2 (66-33%): interval ×0.75, alternates ring / veil chime fan ×5
+   *  (herald port: speed 7.2, never wounds, saps speed).
+   *  P3 (33-0%): interval ×0.55 + one locked dash per 12s: 0.7s line
+   *  telegraph (heavy direction-line event) → hound-style straight dash
+   *  30u/s 0.45s at the ember → 1.2s exposed drift. Escorts answer P3.
+   *
+   *  Single-voice law: phases are exclusive AND the dash sub-machine holds
+   *  the ring cadence while it speaks — two telegraphs can never overlap.
+   *  ZERO new rng: the escort branch makes the SAME single this.rng() call
+   *  the Hollow Choir makes; every other position is timer+geometry.
+   *
+   *  Foe field dual-use (biome-3 boss warden only — tx/dx/face law):
+   *    tz        → ring-volley counter (every 3rd = hex in P1; parity picks
+   *                ring vs chimes in P2)
+   *    burstLeft → dash sub-state (0 idle / 1 line-telegraph / 2 dash / 3 exposed)
+   *    burstT    → dash sub-state countdown
+   *    hexCd     → locked-dash cooldown (armed at P3 entry)
+   *    dx/dz     → locked dash direction
+   *    tx        → escort-fired flag (<1 = not yet), same as the generic boss */
+  private updateFirstVoice(f: Foe, dt: number): void {
+    const pdx = this.px - f.x;
+    const pdz = this.pz - f.z;
+    const pd = Math.hypot(pdx, pdz) || 1;
+
+    // phase escalation — same thresholds + announce as the generic boss
+    const frac = f.hp / f.maxHp;
+    const wantPhase = frac > 0.66 ? 1 : frac > 0.33 ? 2 : 3;
+    if (wantPhase > f.state) {
+      f.state = wantPhase;
+      f.timer = Math.max(f.timer, 0.9); // breath before the new pattern
+      this.events.onBossPhase(f.x, f.z, wantPhase);
+      if (wantPhase === 3) f.hexCd = FIRST_VOICE.dashCd; // arm the locked-dash clock
+    }
+
+    // LOCKED DASH sub-machine — owns movement while active; the ring cadence
+    // holds its breath (single-voice law). Stun skips this whole method.
+    if (f.burstLeft !== 0) {
+      f.burstT -= dt;
+      if (f.burstLeft === 1) {
+        // line telegraph — dead in the air, trembling (hound wind-up port);
+        // the facing is already locked at arm time — sidestep the line
+        f.vx *= Math.max(0, 1 - dt * 10);
+        f.vz *= Math.max(0, 1 - dt * 10);
+        if (f.burstT <= 0) {
+          f.burstLeft = 2;
+          f.burstT = FIRST_VOICE.dashTime;
+        }
+      } else if (f.burstLeft === 2) {
+        // dash — dead straight, full commit
+        f.vx = f.dx * FIRST_VOICE.dashSpeed;
+        f.vz = f.dz * FIRST_VOICE.dashSpeed;
+        if (f.burstT <= 0) {
+          f.burstLeft = 3;
+          f.burstT = FIRST_VOICE.exposedTime;
+        }
+      } else {
+        // exposed drift — the punish window
+        f.vx *= Math.max(0, 1 - dt * 4);
+        f.vz *= Math.max(0, 1 - dt * 4);
+        if (f.burstT <= 0) {
+          f.burstLeft = 0;
+          f.hexCd = FIRST_VOICE.dashCd;
+        }
+      }
+      return;
+    }
+
+    // locked-dash arming (P3 only): lock the line NOW, then name it through
+    // the heavy direction-line pool — zero view code
+    if (f.state === 3) {
+      f.hexCd -= dt;
+      if (f.hexCd <= 0) {
+        f.dx = pdx / pd;
+        f.dz = pdz / pd;
+        f.burstLeft = 1;
+        f.burstT = FIRST_VOICE.telegraph;
+        this.events.onHeavyShot(f.x, f.z, f.x + f.dx * FIRST_VOICE.dashRange, f.z + f.dz * FIRST_VOICE.dashRange);
+        return;
+      }
+    }
+
+    // ring cadence — interval ×0.75 in P2, ×0.55 in P3 (same law as generic)
+    const interval = 2.6 * (f.state === 1 ? 1 : f.state === 2 ? 0.75 : 0.55);
+    f.timer -= dt;
+    if (f.timer <= 0) {
+      f.timer = interval;
+      f.patternAngle += 0.37;
+      f.tz += 1; // volley counter (dual-use — see header)
+      if (f.state === 2 && f.tz % 2 === 1) {
+        // VEIL CHIME FAN — herald port: 5 slow chimes aimed at the ember;
+        // they never wound, they SAP speed until you dash
+        const base = Math.atan2(pdx, pdz);
+        for (let i = 0; i < FOE.veilFan; i++) {
+          const a = base + ((i - (FOE.veilFan - 1) / 2) / Math.max(1, (FOE.veilFan - 1) / 2)) * (FOE.veilSpread / 2);
+          this.bullets.push({
+            x: f.x + Math.sin(a) * f.r,
+            z: f.z + Math.cos(a) * f.r,
+            vx: Math.sin(a) * FOE.veilSpeed,
+            vz: Math.cos(a) * FOE.veilSpeed,
+            life: FOE.veilLife,
+            grazed: false,
+            heavy: false,
+            veil: true,
+          });
+        }
+        this.events.onVeilVolley?.(f.x, f.z);
+      } else {
+        this.fireRing(f, 12 + f.state * 3, f.state === 3 ? 1.9 : 1);
+      }
+      // escorts — the choir branch extended: THE FIRST VOICE answers P3 with
+      // 2 strikers + 1 drifter (same single rng draw as the Hollow Choir)
+      if (f.state === 3 && f.tx < 1) {
+        f.tx = 1;
+        const a1 = this.rng() * TAU;
+        this.marks.push({ x: Math.sin(a1) * 20, z: Math.cos(a1) * 20, t: 0.9, kind: 'striker' });
+        this.marks.push({ x: -Math.sin(a1) * 20, z: -Math.cos(a1) * 20, t: 0.9, kind: 'striker' });
+        const a2 = a1 + TAU / 3; // deterministic offset — NO second draw
+        this.marks.push({ x: Math.sin(a2) * 20, z: Math.cos(a2) * 20, t: 0.9, kind: 'drifter' });
+      }
+      // P1: every 3rd ring volley anchors a HEX zone at the ember's feet
+      // (weaver port — telegraph 0.9 / root 0.8 / global maxZones 2)
+      if (
+        f.state === 1 &&
+        f.tz % 3 === 0 &&
+        this.hexes.length < HEX.maxZones &&
+        !this.hexes.some((h) => h.weaverId === f.id)
+      ) {
+        this.hexes.push({ x: this.px, z: this.pz, t: HEX.telegraph, weaverId: f.id });
+        this.events.onHexAnchor?.(this.px, this.pz, HEX.telegraph);
+      }
+    }
+
+    // slow menacing drift toward the ember (skipped while the dash speaks)
+    f.vx += ((pdx / pd) * 1.7 - f.vx) * Math.min(1, dt * 1.2);
+    f.vz += ((pdz / pd) * 1.7 - f.vz) * Math.min(1, dt * 1.2);
   }
 
   private fireAt(f: Foe, spread: number): void {
@@ -1456,7 +1714,7 @@ export class Sim {
       m.t -= dt;
       if (m.t <= 0) {
         this.marks.splice(i, 1);
-        this.spawnFoe(m.kind, m.x, m.z, m.kind === 'warden' ? '' : this.rollElite(), m.kind === 'warden');
+        this.spawnFoe(m.kind, m.x, m.z, m.kind === 'warden' ? '' : this.rollElite(m.kind), m.kind === 'warden');
       }
     }
   }
