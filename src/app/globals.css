@@ -248,6 +248,22 @@ html, body {
 }
 .hs-pip--sm { width: 9px; height: 9px; }
 
+/* — sprint 17: damage-direction wedge + veil frost — */
+.hs-hurt-wedge { animation: hsHurtWedge 0.9s ease-out forwards; }
+@keyframes hsHurtWedge {
+  0% { opacity: 0; }
+  12% { opacity: 1; }
+  100% { opacity: 0; }
+}
+.hs-veil-vignette {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  box-shadow: inset 0 0 16vmin rgba(120, 200, 255, 0.26);
+  background: radial-gradient(ellipse at center, transparent 52%, rgba(120, 200, 255, 0.13) 100%);
+  transition: opacity 0.25s ease;
+}
+
 /* — engraved buttons: hairline that lightens on hover, never blooms — */
 .hs-btn {
   min-height: 44px;

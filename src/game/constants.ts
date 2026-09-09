@@ -84,6 +84,21 @@ export const SPARK = {
   dmg: 2,
 };
 
+/** CC KIT (sprint 17 — the dormant kit made real). Deterministic triggers
+ *  only: hit COUNTERS, never rng. Every crowd-control state carries a hard
+ *  cap; nothing may lock a target (foe OR player) past its designed window. */
+export const CC = {
+  stunEvery: 3, // every Nth direct shard hit stuns the survivor
+  stunTime: 0.7, // s — bosses take ×0.4
+  rootTime: 1.2, // dash-strike roots the struck foe — bosses take ×0.4
+  foeSlowEvery: 5, // every Nth direct shard hit chills the survivor
+  foeSlowTime: 1.2, // s — foes move/act at ×0.45 while chilled
+  foeSlowK: 0.45,
+  veilTime: 1.4, // herald veil slow applied to the player
+  veilCap: 1.6, // HARD CAP on the player-slow state (failsafe law)
+  veilSpeedK: 0.55, // player speed multiplier while veiled
+};
+
 export const FOE = {
   bulletSpeed: 11.5,
   bulletRadius: 0.34,
@@ -95,6 +110,14 @@ export const FOE = {
   heavyLife: 5,
   /** bulwark frontal-armor cone (half-angle, rad) */
   bulwarkCone: 1.05,
+  /** herald veil volley — slow, big, READABLE chimes that chill instead of
+   *  wounding: the threat is your speed, dodge through the gaps */
+  veilSpeed: 7.2,
+  veilRadius: 0.6,
+  veilLife: 6.5,
+  veilFan: 5, // bullets per volley
+  veilSpread: 0.66, // total fan width (rad)
+  heraldWindup: 0.75, // ring telegraph before the volley
 };
 
 export const WAVES = {
@@ -138,6 +161,7 @@ export const SCORE = {
   weaver: 120,
   caster: 140,
   bulwark: 220,
+  herald: 160,
   graze: 5,
   multPerBounce: 0.5, // chain multiplier: 1 + bounces * 0.5
   multDecay: 3.2, // seconds without a ricochet resets the chain
@@ -145,7 +169,7 @@ export const SCORE = {
 
 export const FEEL = {
   hitstopKill: 0.055,
-  hitstopWarden: 0.22,
+  hitstopWarden: 0.16, // sprint-17: was 0.22 — dead config, clamped by max anyway
   hitstopMax: 0.16,
   traumaKill: 0.16,
   traumaHurt: 0.55,

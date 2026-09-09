@@ -1,9 +1,55 @@
 'use client';
 
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { getEngine } from '@/game/engine';
 import { useGameStore } from '@/game/store';
 import { TIER_COLOR } from '@/game/run';
+import { BUILD } from '@/game/version';
+
+/** payout count-up — rewards TICK up, they don't teleport (sprint 17) */
+function useCountUp(target: number, active: boolean, dur = 900): number {
+  const [val, setVal] = useState(0);
+  useEffect(() => {
+    if (!active) return;
+    let raf = 0;
+    const t0 = performance.now();
+    const tick = (now: number) => {
+      const k = Math.min(1, (now - t0) / dur);
+      // ease-out cubic — fast start, gentle settle
+      setVal(Math.round(target * (1 - Math.pow(1 - k, 3))));
+      if (k < 1) raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [target, active, dur]);
+  return active ? val : 0;
+}
+
+/** the run payout, counted up in stages: score → dawn */
+function DeathPayout() {
+  const score = useGameStore((s) => s.score);
+  const dawnEarned = useGameStore((s) => s.dawnEarned);
+  const shownScore = useCountUp(score, true, 850);
+  const shownDawn = useCountUp(dawnEarned, true, 650);
+  return (
+    <>
+      <div
+        className="text-4xl font-bold tabular-nums text-[#f2e6cf] sm:text-5xl"
+        style={{ textShadow: '0 0 8px rgba(255,190,90,0.3)' }}
+      >
+        {shownScore.toLocaleString()}
+      </div>
+      <div className="mt-1 h-4">
+        {shownScore >= score && shownDawn < dawnEarned && (
+          <span className="hs-tracking text-[10px] text-[#ffc766]">DAWN +{shownDawn}</span>
+        )}
+        {shownDawn >= dawnEarned && dawnEarned > 0 && (
+          <span className="hs-pulse hs-tracking text-[10px] text-[#ffc766]">DAWN +{dawnEarned}</span>
+        )}
+      </div>
+    </>
+  );
+}
 
 export default function Overlays() {
   const phase = useGameStore((s) => s.phase);
@@ -146,12 +192,7 @@ export default function Overlays() {
             {won ? 'THE SUN REKINDLES' : 'THE EMBER FADES'}
           </h2>
           <span aria-hidden="true" className="hs-hairline my-5 w-full" />
-          <div
-            className="text-4xl font-bold tabular-nums text-[#f2e6cf] sm:text-5xl"
-            style={{ textShadow: '0 0 8px rgba(255,190,90,0.3)' }}
-          >
-            {score.toLocaleString()}
-          </div>
+          <DeathPayout />
           <div className="mt-5 flex w-full flex-col text-left">
             <div className="flex items-baseline justify-between border-b border-[rgba(255,196,120,0.12)] py-2">
               <span className="hs-tracking text-[9px] text-[#f2e6cf]/45">WAVE REACHED</span>
@@ -189,6 +230,9 @@ export default function Overlays() {
           </button>
           <p className="hs-tracking mt-4 text-[9px] text-[#f2e6cf]/30">
             ENTER — REKINDLE · SPEND DAWN AT THE SHRINE
+          </p>
+          <p className="hs-tracking mt-2 text-[8px] text-[#f2e6cf]/25">
+            {BUILD.tag} · BASE {BUILD.base}
           </p>
         </div>
       </div>

@@ -244,6 +244,104 @@ function genLanternSlab(rng: () => number): RawMesh {
   return { tris };
 }
 
+/* ---------------------------------------------------------------- */
+/* sprint 17 — GLASS HOLLOW monolith set (biome-2 asset family)        */
+/* ---------------------------------------------------------------- */
+
+const HEX_N = 6;
+
+function hexRing(r: number, y: number, wobble: number, rng: () => number): number[][] {
+  const ring: number[][] = [];
+  for (let i = 0; i < HEX_N; i++) {
+    const a = (Math.PI * 2 * i) / HEX_N;
+    const rr = r * (1 - wobble * 0.5 + rng() * wobble);
+    ring.push([Math.cos(a) * rr, y, Math.sin(a) * rr]);
+  }
+  return ring;
+}
+
+function loftRings(tris: Tri[], lo: number[][], hi: number[][]): void {
+  const quad = (a: number[], b: number[], c: number[], e: number[]): Tri[] => [
+    [a, b, c], [a, c, e],
+  ];
+  for (let i = 0; i < HEX_N; i++) {
+    const j = (i + 1) % HEX_N;
+    tris.push(...quad(lo[i], lo[j], hi[j], hi[i]));
+  }
+}
+
+function capTop(tris: Tri[], ring: number[][]): void {
+  const c = [0, ring[0][1], 0];
+  for (let i = 0; i < HEX_N; i++) tris.push([c, ring[i], ring[(i + 1) % HEX_N]]);
+}
+
+/** glass monolith — a faceted hex needle with a molten collar; unit height */
+function genGlassMonolith(rng: () => number): RawMesh {
+  const lean = (rng() - 0.5) * 0.1;
+  const r0 = 0.16 + rng() * 0.05;
+  const bot = hexRing(r0, 0, 0.1, rng);
+  const low = bot.map(([x, , z]) => [x * 0.92 + lean * 0.2, 0.28, z * 0.92]);
+  const mid = bot.map(([x, , z]) => [x * 0.55 + lean * 0.6, 0.62, z * 0.55]);
+  // the collar — a flared band that catches the biome rim light
+  const collar = bot.map(([x, , z]) => [x * 0.95 + lean * 0.7, 0.72, z * 0.95]);
+  const top = bot.map(([x, , z]) => [x * 0.1 + lean, 1, z * 0.1]);
+  const tris: Tri[] = [];
+  loftRings(tris, bot, low);
+  loftRings(tris, low, mid);
+  loftRings(tris, mid, collar);
+  loftRings(tris, collar, top);
+  capTop(tris, top);
+  return { tris };
+}
+
+/** vesica arch — two leaning slabs crossing at the crown (ruin gate) */
+function genVesicaArch(rng: () => number): RawMesh {
+  const tris: Tri[] = [];
+  const slab = (lean: number): void => {
+    const w = 0.09 + rng() * 0.03;
+    const d = w * 0.7;
+    const bot = [[-w, 0, -d], [w, 0, -d], [w, 0, d], [-w, 0, d]];
+    const top = bot.map(([x, , z]) => [x * 0.22 + lean, 1, z * 0.22 + lean * 0.4]);
+    const quad = (a: number[], b: number[], c: number[], e: number[]): Tri[] => [
+      [a, b, c], [a, c, e],
+    ];
+    for (let i = 0; i < 4; i++) {
+      const j = (i + 1) % 4;
+      tris.push(...quad(bot[i], bot[j], top[j], top[i]));
+    }
+    tris.push([top[0], top[1], top[2]]);
+    tris.push([top[0], top[2], top[3]]);
+  };
+  slab(-0.34 - rng() * 0.1);
+  slab(0.34 + rng() * 0.1);
+  return { tris };
+}
+
+/** prism cluster — three tilted hex prisms of uneven height off one base */
+function genPrismCluster(rng: () => number): RawMesh {
+  const tris: Tri[] = [];
+  for (let p = 0; p < 3; p++) {
+    const a = (Math.PI * 2 * p) / 3 + rng() * 0.5;
+    const ox = Math.cos(a) * (0.1 + rng() * 0.12);
+    const oz = Math.sin(a) * (0.1 + rng() * 0.12);
+    const r = 0.09 + rng() * 0.07;
+    const h = 0.5 + rng() * 0.5;
+    const tilt = (rng() - 0.5) * 0.28;
+    const base: number[][] = [];
+    const cap: number[][] = [];
+    for (let i = 0; i < HEX_N; i++) {
+      const ai = (Math.PI * 2 * i) / HEX_N;
+      const bx = ox + Math.cos(ai) * r;
+      const bz = oz + Math.sin(ai) * r;
+      base.push([bx, 0, bz]);
+      cap.push([bx + tilt * h, h, bz + tilt * h * 0.3]);
+    }
+    loftRings(tris, base, cap);
+    capTop(tris, cap);
+  }
+  return { tris };
+}
+
 /* ------------------------------------------------------------------ */
 /* main                                                                */
 /* ------------------------------------------------------------------ */
@@ -267,6 +365,10 @@ const jobs: { name: string; make: (rng: () => number) => RawMesh }[] = [
   { name: 'monolith_c', make: genMonolith },
   { name: 'dart_hull', make: genDart },
   { name: 'lantern_slab', make: genLanternSlab },
+  // sprint 17 — GLASS HOLLOW monolith set (seeded forever, reproducible)
+  { name: 'glass_monolith', make: genGlassMonolith },
+  { name: 'vesica_arch', make: genVesicaArch },
+  { name: 'prism_cluster', make: genPrismCluster },
 ];
 
 for (const job of jobs) {

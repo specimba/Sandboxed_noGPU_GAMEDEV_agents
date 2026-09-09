@@ -1,6 +1,7 @@
 'use client';
 
 import { useGameStore } from '@/game/store';
+import { BUILD } from '@/game/version';
 
 const TOAST_CLS: Record<'gold' | 'red' | 'info', string> = {
   gold: 'border-[rgba(255,199,102,0.4)] bg-[rgba(46,32,12,0.72)] text-[#ffd98f]',
@@ -36,6 +37,9 @@ export default function Hud() {
   const mutatorLabel = useGameStore((s) => s.mutatorLabel);
   const bossBar = useGameStore((s) => s.bossBar);
   const boonsTaken = useGameStore((s) => s.boonsTaken);
+  const hint = useGameStore((s) => s.hint);
+  const hitFrom = useGameStore((s) => s.hitFrom);
+  const playerSlow = useGameStore((s) => s.playerSlow);
 
   if (phase === 'loading' || phase === 'error' || phase === 'title') return null;
 
@@ -43,6 +47,8 @@ export default function Hud() {
 
   return (
     <div className="pointer-events-none absolute inset-0 z-10 select-none">
+      {/* veil frost — the slow is a STATE you see on the screen edge */}
+      {playerSlow > 0 && <div aria-hidden="true" className="hs-veil-vignette" />}
       {/* top center — score, flanked by hairlines */}
       <div className="absolute left-1/2 top-3 flex -translate-x-1/2 flex-col items-center">
         <div className="flex items-center gap-3">
@@ -176,7 +182,49 @@ export default function Hud() {
             );
           })}
         </div>
+        {/* CC status — the veil is a STATE, shown with its remaining time */}
+        {playerSlow > 0 && (
+          <div className="mt-0.5 flex flex-col items-center gap-1">
+            <span className="hs-pulse hs-tracking text-[9px] text-[#9adfff] sm:text-[10px]">VEILED — SLOWED</span>
+            <div className="h-[3px] w-24 overflow-hidden bg-[rgba(154,223,255,0.15)]">
+              <div
+                className="h-full bg-[#9adfff] transition-all duration-150"
+                style={{ width: `${Math.round(playerSlow * 100)}%` }}
+              />
+            </div>
+          </div>
+        )}
       </div>
+
+      {/* first-60s onboarding chip — once ever, graduates at the first clear */}
+      {hint && playing && (
+        <div className="absolute left-1/2 top-[26%] -translate-x-1/2">
+          <span className="hs-tracking rounded-[2px] border border-[rgba(255,196,120,0.3)] bg-[rgba(12,9,7,0.82)] px-4 py-2 text-[10px] text-[#f2e6cf]/90 sm:text-xs">
+            {hint}
+          </span>
+        </div>
+      )}
+
+      {/* damage-direction wedge — the hit is located, not just felt */}
+      {hitFrom !== null && playing && (
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute left-1/2 top-1/2 h-[42vmin] w-[42vmin] -translate-x-1/2 -translate-y-1/2"
+          style={{ transform: `translate(-50%, -50%) rotate(${hitFrom}deg)` }}
+        >
+          <div
+            className="hs-hurt-wedge absolute left-1/2 top-0 -translate-x-1/2"
+            style={{
+              width: 0,
+              height: 0,
+              borderLeft: '26px solid transparent',
+              borderRight: '26px solid transparent',
+              borderBottom: '34px solid rgba(255,90,74,0.85)',
+              filter: 'drop-shadow(0 0 6px rgba(255,90,74,0.6))',
+            }}
+          />
+        </div>
+      )}
 
       {/* room / boss banner — engraved caps between hairlines */}
       {banner && (
@@ -204,6 +252,11 @@ export default function Hud() {
           </div>
         ))}
       </div>
+
+      {/* deployment trust chain — the build is on screen, not in a changelog */}
+      <span className="hs-tracking absolute bottom-1 left-1/2 -translate-x-1/2 text-[8px] text-[#f2e6cf]/22">
+        {BUILD.tag}
+      </span>
     </div>
   );
 }

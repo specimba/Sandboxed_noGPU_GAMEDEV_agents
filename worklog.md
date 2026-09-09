@@ -709,3 +709,27 @@ Stage Summary:
 - Two new rare boons (EMBER ROT burn DoT, CHAINSPARK arc) verified by a new dedicated headless harness + determinism digests; make qa now runs 3 harnesses.
 - Fixed a latent repo defect: the pipeline Makefile was never make-runnable until this sprint.
 - Debt declared (R3): dedicated zap sfx, <420px HUD crowding, 3D simdrive determinism digests, first-60s storyboard.
+
+---
+Task ID: 17 (single-author sprint; no subagent tracks — the standing directive's no-half-landed-tracks law)
+Agent: main orchestrator (Z.ai Code)
+Task: Sprint 17 "PROOF OF LIFE" — regression forensics, deployment trust chain, kill the audio escalation permanently, make the CC kit real, bullet readability, new asset family, payout count-up + onboarding
+
+Work Log:
+- Phase 0 forensics: e7e5822 (claimed sprint-16 commit) does NOT exist (git cat-file fatal); last real commit was sprint 13 (91b4b1f). Sprints 14-16 were uncommitted working-tree edits — the mechanism by which "fixed" bugs came back. Wrote docs/SPRINT17_FORENSICS.md with file:line receipts; baseline-committed the inherited tree as 52f67c0 before any sprint work.
+- Audio escalation root cause: setDanger driven by nearest-foe distance (engine.ts:645) doubled drone gain in thick waves AND was never reset on death/pause/title — the drone kept its level forever. The prior "fix" (afterglow DANGER_PERIOD guard) was a call-rate limiter, not a level fix. Killed 3 ways: setDanger(0) on every phase entry; AudioEngine.tick(dt) watchdog force-decays any layer unrefreshed >0.6s in every phase; danger no longer scales raw gain (filter opening + capped arp density, DRONE_MAX ceiling). Also fixed setOverdrive clobbering biome drone roots.
+- Audio identity: BIOME_TONE table (per-biome drone root + pad chord + filter), 8-step pentatonic arp under pressure, CC cue suite (ccStun/ccRoot/ccFoeSlow/veilVolley/ccVeilHit/ccCleanse).
+- Sim CC kit (previously nonexistent — the sprint-16 "dormant kit" claim was false): Foe.stunT/rootT/chillT/hitCount; deterministic triggers (every 3rd direct shard hit stuns 0.7s, every 5th chills x0.45, dash-strike roots 1.2s; bosses x0.4); all hard-capped at assignment. Player veilT (hard cap CC.veilCap, decays on player time, dash cleanses).
+- NEW FOE herald: bell silhouette (CylinderGeometry 0.38/0.78 hex), 3hp, drifts mid-band, 0.75s ring telegraph (onVeilVolley chime + cyan ring), fans 5 veil chimes (FOE.veilSpeed 7.2, veilRadius 0.6) that never wound — they sap player speed to x0.55. Joins biome>=1 waves n>=4 (roll band + deterministic floor). BURST 240.
+- Sim determinism: weaver burst Math.random -> this.rng (sim.ts:995 violation). onHurt now carries source (sx,sz) -> damage-direction wedge. hitstopWarden 0.22->0.16 (was dead config, clamped by max).
+- View: bullets 0.9->1.2 hot-core, heavies 2.0->2.5, new veil Points layer (MAX_VEIL 80, cold cyan 1.7); CC marker pools (stun gold hex-ring above body / root amber ground ring / chill icy ring) — idle pools cost 0 draw calls; herald windup wobble; veiled-player ice wisps.
+- HUD/Overlays: VEILED — SLOWED status meter (playerSlow frac), frost screen vignette, damage-direction wedge (rotated by hit angle), first-60s hint chips (once ever, graduates at first clear via meta.onboarded), death payout count-up (score + dawn, eased rAF), build stamp on title/death/HUD footer (version.ts: tag + base hash + timestamp).
+- Assets: GLASS HOLLOW monolith set via tier-1 assetgen (Blender ABSENT in rebuilt sandbox — /home/z/tools gone; Makefile skips gracefully, declared): glass_monolith (162v), vesica_arch (60v), prism_cluster (162v); optimize quant applied=17 skipped=0, verify 17/17; wired into scene.setBiome(1) (4+2+2 props joining the spires).
+- Harness stall root-caused and fixed (bot parked forever in front of a bulwark plate; ~1-in-10 full-runs hit the frame cap): simdrive bot now commits to a 2.2s tangential flank on plate clangs. 15/15 clean after. Game code untouched by this fix.
+- Browser verification (agent-browser, live build): title attract + stamp (01), run + onboarding chips (02), hint ladder advance, stun ring (03/04), veil volley in flight (09), frost vignette + HUD meter + toast (10), veilT=0.92 confirmed + dash cleanse to 0 (probe evals), herald live + its volley (11/12), GLASS HOLLOW set (13), mobile 390px (14), death payout count-up + in-panel stamp (06), rekindle button restarts (08), perf 85 draw calls / 105 transient peak, audio internals: drone 0.05 base, danger 0, arp stepping. 14 screenshots in .qa/sprint17/.
+- Gates: tsc PASS, lint PASS, make qa = simdrive 9/9 rooms 3/3 bosses + afterglow 9/9 + forge PASS, verify-assets 17/17.
+
+Stage Summary:
+- The three standing complaints are answered with mechanisms, not patches: the drone cannot escalate or persist (watchdog law), the CC kit exists end-to-end with hard caps + readbacks (foe and player), bullets/CC/veil are readable per-biome, and the build you play is stamped on screen.
+- Trust chain restored: inherited tree = commit 52f67c0; this sprint = its own commit; CHANGELOG carries the 5-part report; docs/SPRINT17_FORENSICS.md carries the lost-work ledger.
+- Debt declared: transient draw-call peak 105 (worst biome-2 frame) vs 100 ceiling; Enter-to-rekindle dead key; <420px HUD crowding; simdrive full-run harness still time-seeded per invocation; Blender toolchain absent in sandbox.

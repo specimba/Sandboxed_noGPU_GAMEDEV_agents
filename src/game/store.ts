@@ -28,6 +28,8 @@ export interface BoonChoice {
 export interface MetaState {
   dawn: number;
   unlocked: Record<string, boolean>;
+  /** first-60s onboarding shown once ever */
+  onboarded?: boolean;
 }
 
 interface GameState {
@@ -70,6 +72,11 @@ interface GameState {
   touch: boolean;
 
   toasts: Toast[];
+
+  /** sprint-17 feel layer */
+  hint: string | null; // first-60s onboarding chip
+  hitFrom: number | null; // degrees — damage-direction wedge
+  playerSlow: number; // 0..1 remaining veil fraction (HUD status)
 
   set: (p: Partial<GameState>) => void;
   pushToast: (text: string, kind?: Toast['kind']) => void;
@@ -118,6 +125,10 @@ export const useGameStore = create<GameState>()((set) => ({
   touch: false,
 
   toasts: [],
+
+  hint: null,
+  hitFrom: null,
+  playerSlow: 0,
 
   set: (p) => set(p),
   pushToast: (text, kind = 'info') =>

@@ -390,6 +390,37 @@ export class Scene {
       }
     });
 
+    // GLASS HOLLOW monolith set (sprint 17 assetgen family) — needles, ruin
+    // gates and prism clusters deepen the second biome's skyline
+    const glassFamily: { name: string; count: number; baseR: number; h: number; rim: number; a0: number }[] = [
+      { name: 'glass_monolith', count: 4, baseR: 28, h: 6.4, rim: 0xd9a8ff, a0: 0.4 },
+      { name: 'vesica_arch', count: 2, baseR: 24.5, h: 5.2, rim: 0xff5c8a, a0: 1.35 },
+      { name: 'prism_cluster', count: 2, baseR: 30, h: 3.4, rim: 0xc9784a, a0: 3.6 },
+    ];
+    for (const fam of glassFamily) {
+      void loadAssetGeometry(fam.name, true).then((geo) => {
+        if (!geo) return;
+        geo.computeBoundingBox();
+        const bb = geo.boundingBox;
+        if (!bb) return;
+        const size = bb.getSize(new THREE.Vector3());
+        const k = fam.h / size.y;
+        geo.scale(k, k, k);
+        for (let i = 0; i < fam.count; i++) {
+          const a = fam.a0 + (i / fam.count) * Math.PI * 2;
+          const r = fam.baseR + ((i * 7) % 4);
+          const mat = stylizedMaterial({ base: 0x160d1a, lit: 0x2c1830, rim: fam.rim, rimK: 0.95, rimPow: 2.0, emis: fam.rim, emisK: 0.06, fog: true });
+          const m = new THREE.Mesh(geo, mat);
+          m.position.set(Math.cos(a) * r, 0, Math.sin(a) * r);
+          m.rotation.y = a * 2.9;
+          m.userData.biomeIdx = 1;
+          m.visible = false;
+          this.scene.add(m);
+          this.biomeProps.push(m);
+        }
+      });
+    }
+
     // THE HEART roots (forge v3) — knurled obsidian roots, biome 3 only
     void loadAssetGeometry('heart_root', true).then((geo) => {
       if (!geo) return;

@@ -4,18 +4,53 @@ import { PENTATONIC } from './constants';
  * HOLLOW SUN audio — 100% synthesized WebAudio, zero assets.
  * The signature: ricochet chains climb a pentatonic ladder, one note per
  * bounce, so every good throw plays a melody.
+ *
+ * SPRINT 17 LAW (the escalation kill-chain):
+ *  - Danger NEVER scales raw loudness. It opens a filter and adds arp density
+ *    — pressure reads as the music brightening, capped, never a swelling hum.
+ *  - Every ambient target is refreshed per-frame by the engine; `tick()` is a
+ *    hard watchdog: any layer not refreshed within 0.6s force-decays to zero.
+ *    No ambience state can outlive its driver.
+ *  - Biomes own a root note + pad chord + filter color (identity, not volume).
  */
+
+/** per-biome identity: drone roots, pad chord, filter color */
+const BIOME_TONE = [
+  { roots: [55, 55.4, 82.4], pad: [110, 130.8, 164.8], padFilter: 430 }, // ASHFALL — dusty A
+  { roots: [46.2, 46.6, 69.3], pad: [92.5, 110, 138.6], padFilter: 640 }, // GLASS HOLLOW — cold F#
+  { roots: [65.4, 65.9, 98], pad: [130.8, 164.8, 196], padFilter: 540 }, // THE HEART — open C
+] as const;
+
+/** 8-step arp pattern (pentatonic degree, octave lift) — fixed, deterministic */
+const ARP_PATTERN: [number, number][] = [
+  [0, 0], [2, 0], [4, 0], [2, 1], [0, 0], [4, 0], [5, 1], [2, 0],
+];
+
+const DRONE_BASE = 0.05;
+const DRONE_MAX = 0.075; // hard ceiling — the drone may never swell past this
+const WATCHDOG_S = 0.6; // a layer not refreshed this long is force-decayed
 
 export class AudioEngine {
   private ctx: AudioContext | null = null;
   private master: GainNode | null = null;
   private droneGain: GainNode | null = null;
+  private droneFilter: BiquadFilterNode | null = null;
   private droneOscs: OscillatorNode[] = [];
   private padGain: GainNode | null = null;
+  private padFilter: BiquadFilterNode | null = null;
   private muted = false;
   private noiseBuf: AudioBuffer | null = null;
   private lastGrazeT = 0;
   private lastMoteT = -10;
+
+  // ambient state machine (watchdog-driven)
+  private dangerLevel = 0;
+  private lastDangerAt = -10;
+  private biome = 0;
+
+  // arp sequencer
+  private arpT = 0;
+  private arpStep = 0;
 
   get ready(): boolean {
     return this.ctx !== null && this.ctx.state === 'running';
@@ -70,16 +105,121 @@ export class AudioEngine {
     }
   }
 
-  /* biome drone root: A1 → C#2 → E2 */
+  /* ---------------------------------------------------------------- */
+  /* ambient — biome identity + watchdog-driven danger                 */
+  /* ---------------------------------------------------------------- */
+
+  /** biome identity: root note, pad chord, filter color — NOT loudness */
   setBiome(b: number): void {
+    this.biome = Math.max(0, Math.min(BIOME_TONE.length - 1, b));
     if (!this.ctx) return;
-    const ratios = [1, 1.26, 1.5];
-    const r = ratios[Math.min(ratios.length - 1, Math.max(0, b))];
-    const bases = [55, 55.4, 82.4];
+    const tone = BIOME_TONE[this.biome];
+    const t = this.ctx.currentTime;
     for (let i = 0; i < 3 && i < this.droneOscs.length; i++) {
-      this.droneOscs[i].frequency.setTargetAtTime(bases[i] * r, this.ctx.currentTime, 0.6);
+      this.droneOscs[i].frequency.setTargetAtTime(tone.roots[i], t, 0.6);
+    }
+    // pad chord morph (indexes 3..5 of droneOscs are the pad voices)
+    for (let i = 0; i < 3 && i + 3 < this.droneOscs.length; i++) {
+      this.droneOscs[i + 3].frequency.setTargetAtTime(tone.pad[i], t, 0.8);
+    }
+    this.padFilter?.frequency.setTargetAtTime(tone.padFilter, t, 0.8);
+  }
+
+  /**
+   * Danger level 0..1 — pressure opens the drone filter and adds arp density.
+   * MUST be refreshed per frame by the engine while playing; the tick()
+   * watchdog force-decays anything stale. Clamped; never scales raw gain
+   * beyond the DRONE_MAX ceiling.
+   */
+  setDanger(level: number): void {
+    if (!this.ctx || !this.droneGain || !this.droneFilter) return;
+    const l = Math.max(0, Math.min(1, Number.isFinite(level) ? level : 0));
+    this.dangerLevel = l;
+    this.lastDangerAt = this.ctx.currentTime;
+    const t = this.ctx.currentTime;
+    this.droneGain.gain.setTargetAtTime(DRONE_BASE + l * (DRONE_MAX - DRONE_BASE), t, 0.4);
+    this.droneFilter.frequency.setTargetAtTime(200 + l * 380, t, 0.5);
+  }
+
+  /**
+   * Per-frame ambient maintenance — call from the engine loop in EVERY phase.
+   * The failsafe: if setDanger stopped being driven (death, pause, crash of
+   * the caller), decay everything to silence within WATCHDOG_S. Also runs
+   * the arp sequencer (danger = density + brightness, never loudness).
+   */
+  tick(dt: number): void {
+    if (!this.ctx || !this.droneGain || !this.droneFilter) return;
+    const now = this.ctx.currentTime;
+    if (now - this.lastDangerAt > WATCHDOG_S && this.dangerLevel > 0) {
+      this.dangerLevel = 0;
+      this.droneGain.gain.setTargetAtTime(DRONE_BASE, now, 0.35);
+      this.droneFilter.frequency.setTargetAtTime(200, now, 0.45);
+    }
+    if (this.muted) return;
+    // arp: only speaks under pressure, denser + brighter as danger climbs
+    if (this.dangerLevel > 0.06) {
+      this.arpT -= dt;
+      if (this.arpT <= 0) {
+        const period = 0.62 - this.dangerLevel * 0.22; // 0.62s calm → 0.40s hot
+        this.arpT = period;
+        const [deg, oct] = ARP_PATTERN[this.arpStep % ARP_PATTERN.length];
+        this.arpStep = (this.arpStep + 1) % ARP_PATTERN.length;
+        const root = BIOME_TONE[this.biome].roots[0];
+        const semi = PENTATONIC[deg % PENTATONIC.length] / 261.63; // degree ratio
+        const freq = root * 4 * semi * (oct > 0 ? 1.5 : 1);
+        const g = 0.045 + this.dangerLevel * 0.035; // capped: quiet by design
+        this.tone(freq, 0.34, 'triangle', g);
+      }
+    } else {
+      this.arpT = Math.max(this.arpT, 0.18); // first note lands immediately
     }
   }
+
+  /* ---------------------------------------------------------------- */
+  /* CC cue suite — stun / root / slow have SOUND, not just visuals    */
+  /* ---------------------------------------------------------------- */
+
+  /** foe STUNNED — crystal crack: two bright sines + a snap of noise */
+  ccStun(): void {
+    this.tone(1980, 0.09, 'sine', 0.14, 2650);
+    this.tone(2640, 0.14, 'sine', 0.09, 1980, 0.05);
+    this.noise(0.08, 0.1, 'highpass', 5200);
+  }
+
+  /** foe ROOTED — ash clamps: low thud + gravel scrape, descending */
+  ccRoot(): void {
+    this.thump(0.8, 82);
+    this.noise(0.22, 0.13, 'bandpass', 420, 160);
+  }
+
+  /** foe SLOWED — cold drag: muted descending square */
+  ccFoeSlow(): void {
+    this.tone(520, 0.18, 'square', 0.07, 240);
+    this.noise(0.14, 0.06, 'bandpass', 900, 380);
+  }
+
+  /** herald rings a veil volley — glassy double-chime telegraph */
+  veilVolley(): void {
+    this.tone(1244, 0.16, 'sine', 0.1, 1174);
+    this.tone(1864, 0.22, 'sine', 0.07, 1760, 0.07);
+  }
+
+  /** PLAYER VEILED (slowed) — icy hit: downward saw + frost noise + thud */
+  ccVeilHit(): void {
+    this.tone(340, 0.3, 'sawtooth', 0.16, 96);
+    this.noise(0.34, 0.14, 'bandpass', 2600, 500);
+    this.thump(0.7, 70);
+  }
+
+  /** slow cleansed (dash) — recovery blip climbing back to pitch */
+  ccCleanse(): void {
+    this.tone(392, 0.1, 'triangle', 0.12, 784);
+    this.noise(0.08, 0.08, 'highpass', 3600);
+  }
+
+  /* ---------------------------------------------------------------- */
+  /* one-shots (existing score)                                        */
+  /* ---------------------------------------------------------------- */
 
   recall(): void {
     this.noise(0.18, 0.12, 'bandpass', 2600, 900);
@@ -124,45 +264,42 @@ export class AudioEngine {
   }
 
   /* ---------------------------------------------------------------- */
-  /* ambience                                                          */
+  /* ambience graph                                                    */
   /* ---------------------------------------------------------------- */
 
   private startDrone(): void {
     if (!this.ctx || !this.master) return;
     this.droneGain = this.ctx.createGain();
-    this.droneGain.gain.value = 0.05;
-    const filter = this.ctx.createBiquadFilter();
-    filter.type = 'lowpass';
-    filter.frequency.value = 220;
-    this.droneGain.connect(filter);
-    filter.connect(this.master);
-    for (const [freq, detune] of [
-      [55, 0],
-      [55.4, 4],
-      [82.4, -6],
-    ] as const) {
+    this.droneGain.gain.value = DRONE_BASE;
+    this.droneFilter = this.ctx.createBiquadFilter();
+    this.droneFilter.type = 'lowpass';
+    this.droneFilter.frequency.value = 200;
+    this.droneGain.connect(this.droneFilter);
+    this.droneFilter.connect(this.master);
+    const tone = BIOME_TONE[this.biome];
+    for (let i = 0; i < 3; i++) {
       const o = this.ctx.createOscillator();
       o.type = 'sawtooth';
-      o.frequency.value = freq;
-      o.detune.value = detune;
+      o.frequency.value = tone.roots[i];
+      o.detune.value = [0, 4, -6][i];
       o.connect(this.droneGain);
       o.start();
       this.droneOscs.push(o);
     }
 
-    // overdrive pad — silent until enabled
+    // overdrive pad — silent until enabled; chord = biome identity
     this.padGain = this.ctx.createGain();
     this.padGain.gain.value = 0;
-    const padFilter = this.ctx.createBiquadFilter();
-    padFilter.type = 'bandpass';
-    padFilter.frequency.value = 440;
-    padFilter.Q.value = 1.4;
-    this.padGain.connect(padFilter);
-    padFilter.connect(this.master);
-    for (const freq of [110, 164.8, 220, 329.6]) {
-      const o = this.ctx!.createOscillator();
+    this.padFilter = this.ctx.createBiquadFilter();
+    this.padFilter.type = 'bandpass';
+    this.padFilter.frequency.value = tone.padFilter;
+    this.padFilter.Q.value = 1.4;
+    this.padGain.connect(this.padFilter);
+    this.padFilter.connect(this.master);
+    for (let i = 0; i < 3; i++) {
+      const o = this.ctx.createOscillator();
       o.type = 'sawtooth';
-      o.frequency.value = freq;
+      o.frequency.value = tone.pad[i];
       o.detune.value = (Math.random() - 0.5) * 12;
       o.connect(this.padGain);
       o.start();
@@ -174,20 +311,15 @@ export class AudioEngine {
     if (!this.ctx || !this.padGain) return;
     const target = active ? 0.055 : 0;
     this.padGain.gain.setTargetAtTime(target * (1 - t01 * 0.4), this.ctx.currentTime, active ? 0.08 : 0.3);
-    // world slowed: pitch the ambience down
+    // world slowed: pitch the DRONE down, then restore the biome root —
+    // the pre-17 bug clobbered the biome identity with hardcoded numbers
     if (this.droneGain) {
-      // detune via playbackRate is not on osc; nudge frequency instead
+      const tone = BIOME_TONE[this.biome];
       for (let i = 0; i < 3; i++) {
         const o = this.droneOscs[i];
-        const base = [55, 55.4, 82.4][i];
-        o.frequency.setTargetAtTime(active ? base * 0.72 : base, this.ctx.currentTime, 0.15);
+        o.frequency.setTargetAtTime(active ? tone.roots[i] * 0.72 : tone.roots[i], this.ctx.currentTime, 0.15);
       }
     }
-  }
-
-  setDanger(level: number): void {
-    if (!this.ctx || !this.droneGain) return;
-    this.droneGain.gain.setTargetAtTime(0.05 + level * 0.05, this.ctx.currentTime, 0.4);
   }
 
   heartbeat(): void {
@@ -196,7 +328,7 @@ export class AudioEngine {
   }
 
   /* ---------------------------------------------------------------- */
-  /* one-shots                                                         */
+  /* one-shot builders                                                 */
   /* ---------------------------------------------------------------- */
 
   private tone(freq: number, dur: number, type: OscillatorType, gain: number, slideTo?: number, delay = 0): void {
@@ -241,9 +373,9 @@ export class AudioEngine {
 
   ricochet(bounceIndex: number): void {
     const note = PENTATONIC[Math.min(PENTATONIC.length - 1, bounceIndex)];
-    this.tone(note, 0.34, 'triangle', 0.30);
+    this.tone(note, 0.34, 'triangle', 0.3);
     this.tone(note * 2, 0.18, 'sine', 0.12);
-    this.noise(0.06, 0.10, 'highpass', 3200);
+    this.noise(0.06, 0.1, 'highpass', 3200);
   }
 
   throwShard(): void {
@@ -337,7 +469,7 @@ export class AudioEngine {
   }
 
   /* ---------------------------------------------------------------- */
-  /* AFTERGLOW additive SFX (Task 14-d) — volley / motes / draft / husk */
+  /* additive SFX — volley / motes / draft / husk                      */
   /* ---------------------------------------------------------------- */
 
   /** light volley shot — bandpass noise sweep + rising sine chirp */

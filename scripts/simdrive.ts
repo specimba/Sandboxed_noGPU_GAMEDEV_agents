@@ -34,6 +34,10 @@ function drive(seedMods: { dmg: number; maxEmbers: number; revive: boolean }): D
   let biome = 0;
   let room = 1;
   let pendingAdvance = false;
+  // flank memory: the bot is unskilled, but a bulwark plate is a WALL —
+  // blocked shards mean "go around", or the room can stall forever
+  let flankT = 0;
+  let flankDir = 1;
 
   const ev: SimEvents = {
     onThrow: () => {},
@@ -45,7 +49,11 @@ function drive(seedMods: { dmg: number; maxEmbers: number; revive: boolean }): D
     onDash: () => {},
     onRecall: () => {},
     onShieldBreak: () => {},
-    onBlock: () => {},
+    onBlock: () => {
+      // plate clang — pick a flank side and commit to it for a while
+      flankT = 2.2;
+      flankDir = Math.random() < 0.5 ? -1 : 1;
+    },
     onHeavyShot: () => {},
     onBossPhase: (_x, _z, p) => res.phasesSeen.add(p),
     onRevive: () => {},
@@ -101,6 +109,12 @@ function drive(seedMods: { dmg: number; maxEmbers: number; revive: boolean }): D
     } else if (nearest > 12 && nearest < 1e9) {
       mx = ndx / nearest;
       my = -ndz / nearest;
+    }
+    // active flank: strafe tangentially around the plated foe
+    if (flankT > 0 && nearest > 0.01) {
+      flankT -= 1 / 60;
+      mx = flankDir * (-ndz / nearest);
+      my = flankDir * (ndx / nearest);
     }
     const wantDash = frames % 90 === 0;
 

@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import {
   ARENA,
+  CC,
   FEEL,
   OVERDRIVE,
   PLAYER,
@@ -71,6 +72,7 @@ const BURST: Record<FoeKind, number> = {
   striker: 220,
   weaver: 280,
   caster: 260,
+  herald: 240,
   bulwark: 420,
   warden: 900,
 };
@@ -96,7 +98,10 @@ export class Engine {
   private hudT = 0;
   private heartT = 0;
   private deathT = -1;
+  private runT = 0; // time in the current room — drives the onboarding hints
+  private hitFromT = 0; // countdown for the damage-direction wedge
   private aim = new THREE.Vector3(0, 0, -6);
+  private lastHitFrom = 0; // degrees, for the damage-direction wedge
   private raycaster = new THREE.Raycaster();
   private ndc = new THREE.Vector2();
   private disposed = false;
@@ -173,6 +178,7 @@ export class Engine {
   private startRun(): void {
     this.audio.unlock();
     this.audio.uiClick();
+    this.audio.setDanger(0); // ambient law: every phase entry resets pressure
     // stack the shrine into a fresh build; every descent is numbered
     const seed = (Date.now() ^ Math.floor(Math.random() * 0xffffff)) % 100000;
     this.sim.setSeed(seed);
@@ -187,6 +193,8 @@ export class Engine {
     this.deathT = -1;
     this.hitstop = 0;
     this.slowT = 0;
+    this.runT = 0;
+    this.hitFromT = 0;
     this.scene.setBiome(0);
     this.audio.setBiome(0);
     this.rig.engage(this.sim.px, this.sim.pz);
@@ -258,6 +266,14 @@ export class Engine {
 
   private advanceRoom(): void {
     this.runRoom += 1;
+    this.runT = 0;
+    this.store.getState().set({ hint: null });
+    // first-60s onboarding graduates at the first room clear (once ever)
+    if (!loadMeta().onboarded) {
+      const meta = loadMeta();
+      meta.onboarded = true;
+      saveMeta(meta);
+    }
     if (this.runRoom > RUN.roomsPerBiome) {
       this.runBiome += 1;
       this.runRoom = 1;
@@ -312,6 +328,7 @@ export class Engine {
   pause(): void {
     if (this.store.getState().phase !== 'playing') return;
     this.store.getState().set({ phase: 'paused' });
+    this.audio.setDanger(0); // the drone must not outlive the fight
     this.audio.uiClick();
   }
 
@@ -324,7 +341,8 @@ export class Engine {
 
   abandon(): void {
     this.sim.reset();
-    this.store.getState().set({ phase: 'title', banner: null });
+    this.audio.setDanger(0);
+    this.store.getState().set({ phase: 'title', banner: null, hint: null });
     this.rig.setTitleMode();
     this.audio.uiClick();
   }
@@ -422,11 +440,16 @@ export class Engine {
         this.audio.graze();
         this.fx.spawn(x, 1, z, (Math.random() - 0.5) * 4, 2, (Math.random() - 0.5) * 4, { life: 0.3, size: 0.4, color: WHITE_C });
       },
-      onHurt: (x, z) => {
+      onHurt: (x, z, sx, sz) => {
         this.audio.hurt();
         this.rig.addShake(FEEL.traumaHurt);
         this.fx.burst(x, z, 180, 20, { color: FOE_C, life: 0.8, size: 0.6 });
         this.store.getState().set({ embers: Math.max(0, this.sim.embers) });
+        // damage DIRECTION — the hit is located, not just felt: a wedge at
+        // screen edge points at the source for ~0.9s
+        this.hitFromT = 0.9;
+        this.lastHitFrom = (Math.atan2(sx - x, -(sz - z)) * 180) / Math.PI;
+        this.store.getState().set({ hitFrom: this.lastHitFrom });
       },
       onDash: (x, z) => {
         this.audio.dash();
@@ -515,6 +538,7 @@ export class Engine {
       },
       onDeath: () => {
         this.audio.death();
+        this.audio.setDanger(0); // the fight is over — the drone stands down
         this.rig.addShake(1);
         this.slowT = 1.3;
         this.deathT = 1.35;
@@ -524,6 +548,32 @@ export class Engine {
       },
       onSpawnMark: (x, z) => {
         this.rings.fire(x, z, 2.2, 0.8, 0xff2d4e);
+      },
+      /* ---- CC KIT notify (sprint 17): sound + light, zero sim coupling ---- */
+      onFoeStun: (x, z) => {
+        this.audio.ccStun();
+        this.fx.burst(x, z, 14, 8, { color: new THREE.Color(0xffe9a0), life: 0.3, size: 0.4, up: 0.5 });
+      },
+      onFoeRoot: (x, z) => {
+        this.audio.ccRoot();
+        this.fx.burst(x, z, 12, 6, { color: new THREE.Color(0xc9784a), life: 0.4, size: 0.45 });
+      },
+      onFoeChill: (x, z) => {
+        this.audio.ccFoeSlow();
+      },
+      onVeilVolley: (x, z) => {
+        this.audio.veilVolley();
+        this.rings.fire(x, z, 3.4, 0.5, 0x9adfff);
+      },
+      onVeil: (x, z) => {
+        this.audio.ccVeilHit();
+        this.rig.addShake(0.1);
+        this.fx.burst(x, z, 30, 10, { color: new THREE.Color(0x9adfff), life: 0.5, size: 0.5 });
+        this.store.getState().pushToast('VEILED — DASH TO CLEANSE', 'info');
+      },
+      onCleanse: (x, z) => {
+        this.audio.ccCleanse();
+        this.fx.burst(x, z, 20, 9, { color: EMBER_C, life: 0.35, size: 0.45, up: 0.3 });
       },
     };
   }
@@ -547,6 +597,9 @@ export class Engine {
     this.lastT = now;
     this.hitstopCd = Math.max(0, this.hitstopCd - dtReal);
     this.samplePerf(dtReal);
+    // ambient watchdog runs in EVERY phase — no audio layer can outlive its
+    // driver (the sprint-17 failsafe law)
+    this.audio.tick(dtReal);
     const phase = this.store.getState().phase;
 
     if (phase === 'title') {
@@ -651,6 +704,27 @@ export class Engine {
       }
     }
 
+    // damage-direction wedge expiry
+    if (this.hitFromT > 0) {
+      this.hitFromT -= dtReal;
+      if (this.hitFromT <= 0) {
+        this.store.getState().set({ hitFrom: null });
+      }
+    }
+
+    // first-60s onboarding — timed chips, once ever (graduates at room clear)
+    this.runT += dtReal;
+    if (!loadMeta().onboarded) {
+      let hint: string | null = null;
+      if (this.runT < 4.5) hint = 'MOVE — WASD / ARROWS';
+      else if (this.runT < 10) hint = 'THROW — F / LEFT CLICK';
+      else if (this.runT < 15.5) hint = 'DASH — SPACE (ALSO CLEANSES SLOW)';
+      else if (this.runT < 21) hint = 'GRAZE BULLETS — CHARGE OVERDRIVE';
+      else if (this.runT < 27) hint = '3RD HIT STUNS · DASH-STRIKE ROOTS';
+      const cur = this.store.getState().hint;
+      if (hint !== cur) this.store.getState().set({ hint });
+    }
+
     // HUD at ~12Hz
     this.hudT += dtReal;
     if (this.hudT > 0.085) {
@@ -675,6 +749,7 @@ export class Engine {
         roomLabel: `${biomeName(this.runBiome)} · ${isBossRoom(this.runRoom) ? 'BOSS' : 'ROOM ' + this.runRoom}`,
         bossBar: boss ? { name: bossName(this.runBiome), frac: Math.max(0, boss.hp / boss.maxHp) } : null,
         boonsTaken: boonLabels,
+        playerSlow: Math.max(0, Math.min(1, this.sim.veilT / CC.veilCap)),
       });
     }
 

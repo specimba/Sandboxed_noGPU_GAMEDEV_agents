@@ -1,6 +1,7 @@
 import {
   ARENA,
   BURN,
+  CC,
   FOE,
   OVERDRIVE,
   PLAYER,
@@ -32,7 +33,7 @@ import {
  * Overdrive and the score→sun feedback all live here.
  */
 
-export type FoeKind = 'drifter' | 'striker' | 'weaver' | 'caster' | 'bulwark' | 'warden';
+export type FoeKind = 'drifter' | 'striker' | 'weaver' | 'caster' | 'bulwark' | 'herald' | 'warden';
 export type ShardState = 'orbit' | 'fly' | 'chain' | 'return';
 
 export interface SimEvents {
@@ -48,7 +49,9 @@ export interface SimEvents {
   /** optional pure-notify: death-light arced from (fx,fz) to (tx,tz) for dmg */
   onSpark?(fx: number, fz: number, tx: number, tz: number, dmg: number): void;
   onGraze(x: number, z: number): void;
-  onHurt(x: number, z: number): void;
+  /** sx/sz = where the hurt came from (foe body / bullet) — feeds the
+   *  damage-direction indicator. Pure notify, digest-safe. */
+  onHurt(x: number, z: number, sx: number, sz: number): void;
   onDash(x: number, z: number): void;
   onRecall(x: number, z: number): void;
   onShieldBreak(x: number, z: number): void;
@@ -64,6 +67,17 @@ export interface SimEvents {
   onShardGain(): void;
   onDeath(): void;
   onSpawnMark(x: number, z: number): void;
+  /** CC notify suite — optional pure-notify hooks (view/audio sugar).
+   *  Zero rng, zero state writes outside the CC timers themselves. */
+  onFoeStun?(x: number, z: number): void;
+  onFoeRoot?(x: number, z: number): void;
+  onFoeChill?(x: number, z: number): void;
+  /** herald rang its veil volley */
+  onVeilVolley?(x: number, z: number): void;
+  /** the PLAYER was veiled (speed sapped) — hard-capped state */
+  onVeil?(x: number, z: number): void;
+  /** player dash cleansed the veil */
+  onCleanse?(x: number, z: number): void;
 }
 
 interface Shard {
@@ -106,6 +120,11 @@ interface Foe {
   face: number; // bulwark armor facing
   burn: number; // EMBER ROT stacks
   burnT: number; // seconds to next burn beat
+  // CC KIT (sprint 17) — every timer is hard-capped at assignment
+  stunT: number; // >0: FSM skipped, velocity damps out
+  rootT: number; // >0: movement canceled, attacks allowed
+  chillT: number; // >0: speed/act ×0.45
+  hitCount: number; // deterministic CC trigger counter (never rng)
 }
 
 interface Bullet {
@@ -116,6 +135,7 @@ interface Bullet {
   life: number;
   grazed: boolean;
   heavy: boolean; // caster shots: bigger, faster, dodge me
+  veil: boolean; // herald chimes: harmless to embers, CHILLS your speed
 }
 
 export interface SpawnMark {
@@ -157,6 +177,8 @@ export class Sim {
   dashDx = 0;
   dashDz = 0;
   reviveUsed = false;
+  /** player veil (speed sap) — hard-capped at CC.veilCap, cleansed by dash */
+  veilT = 0;
 
   // shards
   shards: Shard[] = [];
@@ -218,6 +240,7 @@ export class Sim {
     this.dashT = 0;
     this.dashCd = 0;
     this.reviveUsed = false;
+    this.veilT = 0;
     this.dashHit.clear();
     this.biome = 0;
     this.room = 1;
@@ -298,7 +321,7 @@ export class Sim {
         const x = Math.sin(a) * r;
         const z = Math.cos(a) * r;
         const d = Math.hypot(x, z) || 1;
-        this.bullets.push({ x, z, vx: (-x / d) * 8.5, vz: (-z / d) * 8.5, life: 6, grazed: false, heavy: false });
+        this.bullets.push({ x, z, vx: (-x / d) * 8.5, vz: (-z / d) * 8.5, life: 6, grazed: false, heavy: false, veil: false });
       }
     }
   }
@@ -384,6 +407,11 @@ export class Sim {
         }
       }
       if (recalled) this.events.onRecall(this.px, this.pz);
+      // DASH CLEANSES THE VEIL — counterplay law: dash is always an answer
+      if (this.veilT > 0) {
+        this.veilT = 0;
+        this.events.onCleanse?.(this.px, this.pz);
+      }
       let dx = moveX;
       let dz = -moveY;
       const len = Math.hypot(dx, dz);
@@ -417,8 +445,14 @@ export class Sim {
       this.pvz = this.dashDz * PLAYER.dashSpeed;
     } else {
       const spd = this.mods.speed;
-      const ax = moveX * PLAYER.accel * spd;
-      const az = -moveY * PLAYER.accel * spd;
+      // VEILED: the herald's chill saps acceleration (terminal speed follows);
+      // the state is hard-capped at CC.veilCap and decays on player time
+      if (this.veilT > 0) {
+        this.veilT = Math.max(0, this.veilT - dt);
+      }
+      const slowK = this.veilT > 0 ? CC.veilSpeedK : 1;
+      const ax = moveX * PLAYER.accel * spd * slowK;
+      const az = -moveY * PLAYER.accel * spd * slowK;
       this.pvx += (ax - PLAYER.drag * this.pvx) * dt;
       this.pvz += (az - PLAYER.drag * this.pvz) * dt;
     }
@@ -452,13 +486,18 @@ export class Sim {
           if (!dead) {
             f.vx += kx;
             f.vz += kz;
+            // DASH-STRIKE ROOTS — the counterplay answer to drifters/casters;
+            // deterministic (every dash contact), hard-capped, bosses resist
+            const rootDur = CC.rootTime * (f.boss ? 0.4 : 1);
+            if (rootDur > f.rootT) f.rootT = Math.min(CC.rootTime, rootDur);
+            this.events.onFoeRoot?.(f.x, f.z);
           }
         }
       }
     }
   }
 
-  private hurt(): void {
+  private hurt(sx: number, sz: number): void {
     if (this.invuln > 0 || this.dashT > 0 || this.over) return;
     this.embers -= 1;
     this.chain = 0;
@@ -471,7 +510,7 @@ export class Sim {
       return;
     }
     this.invuln = PLAYER.invulnTime;
-    this.events.onHurt(this.px, this.pz);
+    this.events.onHurt(this.px, this.pz, sx, sz);
     if (this.embers <= 0) {
       this.over = true;
       this.events.onDeath();
@@ -708,6 +747,17 @@ export class Sim {
             const sl = Math.hypot(s.vx, s.vz) || 1;
             f.vx += (s.vx / sl) * 9;
             f.vz += (s.vz / sl) * 9;
+            // CC KIT — deterministic hit-counter triggers (never rng):
+            // every 3rd direct hit STUNS, every 5th CHILLS. Bosses resist.
+            f.hitCount += 1;
+            const bossK = f.boss ? 0.4 : 1;
+            if (f.hitCount % CC.stunEvery === 0 && f.stunT <= 0) {
+              f.stunT = Math.min(CC.stunTime, CC.stunTime * bossK);
+              this.events.onFoeStun?.(f.x, f.z);
+            } else if (f.hitCount % CC.foeSlowEvery === 0 && f.chillT <= 0) {
+              f.chillT = Math.min(CC.foeSlowTime, CC.foeSlowTime * bossK);
+              this.events.onFoeChill?.(f.x, f.z);
+            }
           }
           // SEARING CHAIN: splash around every shard impact
           if (this.mods.splash > 0) {
@@ -867,6 +917,9 @@ export class Sim {
     } else if (kind === 'caster') {
       hp = 2;
       r = 0.85;
+    } else if (kind === 'herald') {
+      hp = 3;
+      r = 0.95;
     } else if (kind === 'bulwark') {
       hp = 6;
       r = 1.3;
@@ -894,7 +947,7 @@ export class Sim {
       boss,
       spawnT: kind === 'warden' ? 1.4 : kind === 'bulwark' ? 0.7 : 0.45,
       state: boss ? 1 : 0, // boss phase
-      timer: kind === 'caster' ? 1.2 + this.rng() * 0.8 : 0,
+      timer: kind === 'caster' ? 1.2 + this.rng() * 0.8 : kind === 'herald' ? 1.6 + this.rng() * 0.8 : 0,
       tx: 0,
       tz: 0,
       dx: 0,
@@ -905,6 +958,10 @@ export class Sim {
       face: Math.atan2(this.px - x, this.pz - z), // armor starts facing the ember
       burn: 0,
       burnT: 0,
+      stunT: 0,
+      rootT: 0,
+      chillT: 0,
+      hitCount: 0,
     });
     if (kind === 'warden' && boss) this.events.onWardenSpawn(x, z);
   }
@@ -919,7 +976,12 @@ export class Sim {
     const spdScale = Math.min(1.6, 1 + this.wave * 0.03) * this.mutator.mods.foeSpeed; // per-foe swift handled below
     for (const f of this.foes) {
       const swiftK = f.elite === 'swift' ? 1.55 : 1;
-      const eff = spdScale * swiftK;
+      // CC KIT — tick the timers, then let them bend the FSM
+      if (f.stunT > 0) f.stunT = Math.max(0, f.stunT - dt);
+      if (f.rootT > 0) f.rootT = Math.max(0, f.rootT - dt);
+      if (f.chillT > 0) f.chillT = Math.max(0, f.chillT - dt);
+      const ccK = f.chillT > 0 ? CC.foeSlowK : 1;
+      const eff = spdScale * swiftK * ccK;
       if (f.spawnT > 0) {
         f.spawnT -= dt;
         continue;
@@ -928,7 +990,14 @@ export class Sim {
       const pdz = this.pz - f.z;
       const pd = Math.hypot(pdx, pdz) || 1;
 
-      switch (f.kind) {
+      if (f.stunT > 0) {
+        // STUNNED: the FSM is skipped entirely — no movement intent, no
+        // attacks; existing velocity damps out hard. Contact still bites.
+        const damp = Math.max(0, 1 - dt * 9);
+        f.vx *= damp;
+        f.vz *= damp;
+      } else {
+        switch (f.kind) {
         case 'drifter': {
           const sp = 4.3 * eff;
           f.vx += ((pdx / pd) * sp - f.vx) * Math.min(1, dt * 2.2);
@@ -992,7 +1061,7 @@ export class Sim {
             if (f.burstT <= 0) {
               f.burstLeft -= 1;
               f.burstT = 0.13;
-              this.fireAt(f, (Math.random() - 0.5) * 0.18);
+              this.fireAt(f, (this.rng() - 0.5) * 0.18);
             }
           } else {
             f.timer -= dt;
@@ -1000,6 +1069,50 @@ export class Sim {
               f.timer = 2.7;
               f.burstLeft = 3;
               f.burstT = 0.01;
+            }
+          }
+          break;
+        }
+        case 'herald': {
+          // THE HERALD OF CHIMES — drifts at the mid band, RINGS (0.75s
+          // wobble telegraph + chime), then fans 5 slow veil chimes. The
+          // volley cannot wound you; it SAPS your speed until you dash.
+          if (f.state === 0) {
+            const tangX = -pdz / pd;
+            const tangZ = pdx / pd;
+            const radial = pd > 20 ? -0.6 : pd < 13 ? 0.9 : 0;
+            const wantVx = tangX * 3.6 * eff + (pdx / pd) * radial * 4;
+            const wantVz = tangZ * 3.6 * eff + (pdz / pd) * radial * 4;
+            f.vx += (wantVx - f.vx) * Math.min(1, dt * 2.2);
+            f.vz += (wantVz - f.vz) * Math.min(1, dt * 2.2);
+            f.timer -= dt;
+            if (f.timer <= 0) {
+              f.state = 1;
+              f.timer = FOE.heraldWindup;
+              this.events.onVeilVolley?.(f.x, f.z);
+            }
+          } else if (f.state === 1) {
+            // ring telegraph — dead in the air, trembling
+            f.vx *= Math.max(0, 1 - dt * 7);
+            f.vz *= Math.max(0, 1 - dt * 7);
+            f.timer -= dt;
+            if (f.timer <= 0) {
+              f.state = 0;
+              f.timer = 3.1 + this.rng() * 1.2;
+              const base = Math.atan2(pdx, pdz);
+              for (let i = 0; i < FOE.veilFan; i++) {
+                const a = base + ((i - (FOE.veilFan - 1) / 2) / Math.max(1, (FOE.veilFan - 1) / 2)) * (FOE.veilSpread / 2);
+                this.bullets.push({
+                  x: f.x + Math.sin(a) * f.r,
+                  z: f.z + Math.cos(a) * f.r,
+                  vx: Math.sin(a) * FOE.veilSpeed,
+                  vz: Math.cos(a) * FOE.veilSpeed,
+                  life: FOE.veilLife,
+                  grazed: false,
+                  heavy: false,
+                  veil: true,
+                });
+              }
             }
           }
           break;
@@ -1043,6 +1156,7 @@ export class Sim {
                 life: FOE.heavyLife,
                 grazed: false,
                 heavy: true,
+                veil: false,
               });
               this.events.onHeavyShot(f.x, f.z);
             }
@@ -1095,6 +1209,7 @@ export class Sim {
                 life: FOE.bulletLife,
                 grazed: false,
                 heavy: false,
+                veil: false,
               });
             }
             // The Hollow Choir: escorts in phase 3
@@ -1107,6 +1222,13 @@ export class Sim {
           }
           break;
         }
+        } // switch — ends the not-stunned FSM branch
+      }
+
+      // ROOTED: attacks run (the FSM above executed) but movement is canceled
+      if (f.rootT > 0) {
+        f.vx = 0;
+        f.vz = 0;
       }
 
       f.x += f.vx * dt;
@@ -1130,8 +1252,8 @@ export class Sim {
       f.x = c.x;
       f.z = c.z;
 
-      // contact damage
-      if (pd < f.r + FOE.contactRadius) this.hurt();
+      // contact damage — the hurt source is the foe body (direction indicator)
+      if (pd < f.r + FOE.contactRadius) this.hurt(f.x, f.z);
     }
 
     // EMBER ROT beats — after the movement pass so burn deaths never desync
@@ -1161,6 +1283,7 @@ export class Sim {
       life: FOE.bulletLife,
       grazed: false,
       heavy: false,
+      veil: false,
     });
   }
 
@@ -1170,17 +1293,27 @@ export class Sim {
       b.life -= dt;
       b.x += b.vx * dt;
       b.z += b.vz * dt;
-      const brad = b.heavy ? FOE.heavyRadius : FOE.bulletRadius;
+      const brad = b.veil ? FOE.veilRadius : b.heavy ? FOE.heavyRadius : FOE.bulletRadius;
       const dx = this.px - b.x;
       const dz = this.pz - b.z;
       const d = Math.hypot(dx, dz);
       if (d < PLAYER.radius + brad) {
+        if (b.veil) {
+          // VEIL CHIMES never wound — they SAP speed. Dashing through one
+          // shrugs it off (dash = cleanse window); otherwise the chill takes.
+          this.bullets.splice(i, 1);
+          if (this.dashT <= 0 && this.veilT <= 0) {
+            this.veilT = Math.min(CC.veilCap, CC.veilTime);
+            this.events.onVeil?.(this.px, this.pz);
+          }
+          continue;
+        }
         if (this.invuln <= 0 && this.dashT <= 0) {
-          this.hurt();
+          this.hurt(b.x, b.z);
           this.bullets.splice(i, 1);
           continue;
         }
-      } else if (!b.grazed && d < this.grazeR + brad) {
+      } else if (!b.grazed && !b.veil && d < this.grazeR + brad) {
         b.grazed = true;
         this.addOverdrive(OVERDRIVE.grazeCharge);
         this.score += SCORE.graze;
@@ -1216,6 +1349,10 @@ export class Sim {
       if (n >= 5 && roll < 0.18 && points >= 4) {
         q.push('bulwark');
         points -= 4;
+      } else if (this.biome >= 1 && n >= 4 && roll < 0.34 && points >= 3) {
+        // HERALDS join the deep rooms — the veil threat lives below ASHFALL
+        q.push('herald');
+        points -= 3;
       } else if (n >= 4 && roll < 0.4 && points >= 3) {
         q.push('caster');
         points -= 3;
@@ -1235,6 +1372,7 @@ export class Sim {
     if (n >= 2 && !q.includes('striker')) q.push('striker');
     if (n >= 5 && !q.includes('caster')) q.push('caster');
     if (n >= 8 && !q.includes('bulwark')) q.push('bulwark');
+    if (this.biome >= 1 && n >= 4 && !q.includes('herald')) q.push('herald');
     for (let i = q.length - 1; i > 0; i--) {
       const j = Math.floor(this.rng() * (i + 1));
       [q[i], q[j]] = [q[i], q[j]];

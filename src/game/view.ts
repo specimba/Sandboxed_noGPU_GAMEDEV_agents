@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { loadAssetGeometry } from './assetLib';
-import { ARENA, COLORS } from './constants';
+import { ARENA, COLORS, FOE } from './constants';
 import type { FoeKind, Sim } from './sim';
 import { makeGlowTexture, ParticlePool } from './fx';
 import { coreMaterial, makeDiamondTexture, makeStreakTexture, stylizedMaterial } from './materials';
@@ -23,6 +23,7 @@ const FOE_GEO: Record<FoeKind, THREE.BufferGeometry> = {
   weaver: new THREE.TorusGeometry(0.66, 0.15, 6, 3).rotateX(Math.PI / 2), // hex weaver ring, flat
   caster: new THREE.CylinderGeometry(0.22, 0.52, 1.8, 4), // grave obelisk
   bulwark: new THREE.BoxGeometry(1.7, 1.5, 1.7), // tomb slab that walks
+  herald: new THREE.CylinderGeometry(0.38, 0.78, 1.0, 6), // the flared bell
   warden: new THREE.OctahedronGeometry(2.2, 0).scale(1, 1.35, 1), // the monolith titan
 };
 
@@ -33,6 +34,7 @@ const FOE_COL: Record<FoeKind, number> = {
   weaver: 0xff2d6e,
   caster: 0xb8e63d,
   bulwark: 0xffb35c,
+  herald: 0x9adfff, // the only cold voice in a warm world — the veil speaks ice
   warden: COLORS.warden,
 };
 
@@ -77,6 +79,16 @@ const FOE_MAT: Record<FoeKind, THREE.ShaderMaterial> = {
     rimK: 0.9,
     rimPow: 3,
   }),
+  herald: stylizedMaterial({
+    base: 0x0e1a20,
+    lit: 0x24404c,
+    rim: FOE_COL.herald,
+    rimK: 1.5,
+    rimPow: 2.2,
+    emis: FOE_COL.herald,
+    emisK: 0.14,
+    pulse: 0.2,
+  }),
   warden: stylizedMaterial({
     base: 0x140d08,
     lit: COLORS.obsidianLit,
@@ -106,6 +118,7 @@ const FOE_HEART: Record<FoeKind, { color: number; scale: number; opacity: number
   weaver: { color: 0xff2d6e, scale: 1.6, opacity: 0.3 },
   caster: { color: 0xc9ff6a, scale: 1.5, opacity: 0.35 },
   bulwark: { color: 0xffb35c, scale: 1.8, opacity: 0.3 },
+  herald: { color: 0x9adfff, scale: 1.9, opacity: 0.45 },
   warden: { color: 0xff5a2d, scale: 4.5, opacity: 0.4 },
 };
 
@@ -137,8 +150,10 @@ interface SparkView {
 
 const MAX_BULLETS = 340;
 const MAX_HEAVY = 60;
+const MAX_VEIL = 80; // herald chimes — the slow cold layer
 const SHADOW_POOL = 41; // 1 ember dart + 40 foes
 const SPARK_SEGS = 8;
+const CC_POOL = 12; // per-CC-type marker seats (0 draw calls when idle)
 
 export class View {
   private scene: THREE.Scene;
@@ -171,6 +186,10 @@ export class View {
   private heavyPos = new THREE.BufferAttribute(new Float32Array(MAX_HEAVY * 3), 3);
   private heavyPoints: THREE.Points;
 
+  private veilGeo = new THREE.BufferGeometry();
+  private veilPos = new THREE.BufferAttribute(new Float32Array(MAX_VEIL * 3), 3);
+  private veilPoints: THREE.Points;
+
   private markPool: MarkView[] = [];
   private markCursor = 0;
   private markRingGeo = new THREE.RingGeometry(0.9, 1.0, 40).rotateX(-Math.PI / 2);
@@ -189,6 +208,20 @@ export class View {
   private sparkViews: SparkView[] = [];
 
   private telegraphs: { line: THREE.Line; mat: THREE.LineBasicMaterial }[] = [];
+
+  /** CC KIT markers — pooled per state; idle pools cost zero draw calls.
+   *  stun: spinning gold hex-ring at the head · root: clamping ground ring
+   *  chill: icy ground ring (foe) — the player veil reads via HUD vignette. */
+  private stunRings: HaloView[] = [];
+  private rootRings: HaloView[] = [];
+  private chillRings: HaloView[] = [];
+  private ccGeo = new THREE.RingGeometry(0.62, 0.8, 6).rotateX(-Math.PI / 2); // hex ring
+  private stunMat = new THREE.MeshBasicMaterial({ color: 0xffe9a0, transparent: true, opacity: 0.85, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide });
+  private rootMat = new THREE.MeshBasicMaterial({ color: 0xc9784a, transparent: true, opacity: 0.8, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide });
+  private chillMat = new THREE.MeshBasicMaterial({ color: 0x9adfff, transparent: true, opacity: 0.7, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide });
+  private stunCursor = 0;
+  private rootCursor = 0;
+  private chillCursor = 0;
 
   private reticle: THREE.Group;
   private reticleSpin = new THREE.Group();
@@ -319,8 +352,8 @@ export class View {
     this.bulletGeo.setAttribute('position', this.bulletPos);
     this.bulletGeo.setDrawRange(0, 0);
     const bMat = new THREE.PointsMaterial({
-      color: COLORS.foeBullet,
-      size: 0.9,
+      color: 0xffb28a, // sprint-17 readability: hotter core, reads on every biome fog
+      size: 1.2, // was 0.9 — bullets were losing the visibility fight
       sizeAttenuation: true,
       transparent: true,
       opacity: 0.95,
@@ -339,7 +372,7 @@ export class View {
     this.heavyGeo.setDrawRange(0, 0);
     const hMat = new THREE.PointsMaterial({
       color: 0xd6ff8a,
-      size: 2.0,
+      size: 2.5,
       sizeAttenuation: true,
       transparent: true,
       opacity: 0.95,
@@ -351,6 +384,42 @@ export class View {
     this.heavyPoints.frustumCulled = false;
     this.heavyPoints.renderOrder = 9;
     scene.add(this.heavyPoints);
+
+    // ---- veil chimes (herald) — big cold hexes; the slow is the threat so
+    //      the projectile must read across every biome palette
+    this.veilPos.setUsage(THREE.DynamicDrawUsage);
+    this.veilGeo.setAttribute('position', this.veilPos);
+    this.veilGeo.setDrawRange(0, 0);
+    const vMat = new THREE.PointsMaterial({
+      color: 0x9adfff,
+      size: 1.7,
+      sizeAttenuation: true,
+      transparent: true,
+      opacity: 0.95,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      map: this.diamondTex,
+    });
+    this.veilPoints = new THREE.Points(this.veilGeo, vMat);
+    this.veilPoints.frustumCulled = false;
+    this.veilPoints.renderOrder = 9;
+    scene.add(this.veilPoints);
+
+    // ---- CC marker pools (stun / root / chill) — shared geo+mat per type
+    for (let i = 0; i < CC_POOL; i++) {
+      const defs: [HaloView[], THREE.MeshBasicMaterial][] = [
+        [this.stunRings, this.stunMat],
+        [this.rootRings, this.rootMat],
+        [this.chillRings, this.chillMat],
+      ];
+      for (const [pool, mat] of defs) {
+        const mesh = new THREE.Mesh(this.ccGeo, mat);
+        mesh.visible = false;
+        mesh.renderOrder = 7;
+        scene.add(mesh);
+        pool.push({ mesh, mat });
+      }
+    }
 
     // ---- spawn telegraph marks: foeDeep doom-floor + bright rim, thinner ----
     for (let i = 0; i < 14; i++) {
@@ -526,6 +595,16 @@ export class View {
     psh.scale.setScalar(1.15);
     (psh.material as THREE.MeshBasicMaterial).opacity = sim.dashT > 0 ? 0.32 : 0.5;
 
+    // VEILED player — cold wisps bleed off the dart while the chill lasts
+    if (sim.veilT > 0) {
+      this.fx.spawn(sim.px, 0.9, sim.pz, (Math.random() - 0.5) * 3.4, 1.6, (Math.random() - 0.5) * 3.4, {
+        life: 0.5,
+        size: 0.5,
+        color: VEIL_COL,
+        drag: 2.2,
+      });
+    }
+
     // shards
     for (let i = 0; i < this.shardViews.length; i++) {
       const v = this.shardViews[i];
@@ -557,6 +636,9 @@ export class View {
     // foes — hide all, then re-assign from sim
     let fi = 0;
     let shI = 1;
+    this.stunCursor = 0;
+    this.rootCursor = 0;
+    this.chillCursor = 0;
     for (const f of sim.foes) {
       if (fi >= this.foePool.length) break;
       const v = this.foePool[fi++];
@@ -603,6 +685,15 @@ export class View {
       }
       if (f.kind === 'drifter') v.mesh.rotation.x += dt * 1.1;
       if (f.kind === 'caster' && f.state === 1) v.mesh.rotation.x += dt * 6; // charging drill spin
+      // herald windup: the bell trembles and swells before the volley
+      if (f.kind === 'herald' && f.state === 1) {
+        v.mesh.rotation.z = Math.sin(this.time * 34) * 0.16;
+        const wobble = 1 + Math.max(0, 1 - f.timer / FOE.heraldWindup) * 0.22;
+        v.mesh.scale.setScalar(wobble);
+      } else if (f.kind === 'herald') {
+        v.mesh.rotation.z = 0;
+        v.mesh.scale.setScalar(1);
+      }
 
       // elite halo — the affix is the ring (VISUAL_AUDIO.md color law)
       if (f.elite && f.spawnT <= 0 && this.haloUsed < this.haloPool.length) {
@@ -613,6 +704,28 @@ export class View {
         h.mesh.scale.setScalar(haloR);
         h.mat.color.set(f.elite === 'swift' ? 0xffffff : f.elite === 'shield' ? 0xffe9a0 : 0xff8aa0);
         h.mat.opacity = 0.55 + 0.25 * Math.sin(this.time * 6 + f.id);
+      }
+
+      // CC KIT markers — the state is visible ON the body, never a guess
+      if (f.stunT > 0 && this.stunCursor < this.stunRings.length) {
+        const m = this.stunRings[this.stunCursor++];
+        m.mesh.visible = true;
+        m.mesh.position.set(f.x, f.kind === 'warden' ? 4.6 : 2.2, f.z);
+        m.mesh.scale.setScalar((0.7 + 0.08 * Math.sin(this.time * 20 + f.id)) * (f.kind === 'warden' ? 1.8 : 1));
+        m.mesh.rotation.y = this.time * 9 + f.id;
+      }
+      if (f.rootT > 0 && this.rootCursor < this.rootRings.length) {
+        const m = this.rootRings[this.rootCursor++];
+        m.mesh.visible = true;
+        m.mesh.position.set(f.x, 0.14, f.z);
+        m.mesh.scale.setScalar((f.r + 0.7) * (1 + 0.05 * Math.sin(this.time * 14)));
+        m.mesh.rotation.y = -this.time * 2.2;
+      }
+      if (f.chillT > 0 && this.chillCursor < this.chillRings.length) {
+        const m = this.chillRings[this.chillCursor++];
+        m.mesh.visible = true;
+        m.mesh.position.set(f.x, 0.13, f.z);
+        m.mesh.scale.setScalar((f.r + 0.55) * (1 + 0.06 * Math.sin(this.time * 8 + f.id)));
       }
 
       // striker / caster telegraph lines while aiming
@@ -634,6 +747,9 @@ export class View {
     }
     for (let i = fi; i < this.foePool.length; i++) this.foePool[i].group.visible = false;
     for (let i = shI; i < this.shadows.length; i++) this.shadows[i].visible = false;
+    for (let i = this.stunCursor; i < this.stunRings.length; i++) this.stunRings[i].mesh.visible = false;
+    for (let i = this.rootCursor; i < this.rootRings.length; i++) this.rootRings[i].mesh.visible = false;
+    for (let i = this.chillCursor; i < this.chillRings.length; i++) this.chillRings[i].mesh.visible = false;
     for (const t of this.telegraphs) {
       if (t.line.visible) {
         t.mat.opacity -= dt * 4;
@@ -648,12 +764,15 @@ export class View {
       }
     }
 
-    // bullets — light and heavy split into their own draw calls
+    // bullets — light / heavy / veil split into their own draw calls
     let n = 0;
     let hn = 0;
+    let vn = 0;
     for (let i = 0; i < sim.bullets.length; i++) {
       const b = sim.bullets[i];
-      if (b.heavy) {
+      if (b.veil) {
+        if (vn < MAX_VEIL) this.veilPos.setXYZ(vn++, b.x, 1.0, b.z);
+      } else if (b.heavy) {
         if (hn < MAX_HEAVY) this.heavyPos.setXYZ(hn++, b.x, 1.0, b.z);
       } else {
         if (n < MAX_BULLETS) this.bulletPos.setXYZ(n++, b.x, 1.0, b.z);
@@ -663,6 +782,8 @@ export class View {
     this.bulletPos.needsUpdate = true;
     this.heavyGeo.setDrawRange(0, hn);
     this.heavyPos.needsUpdate = true;
+    this.veilGeo.setDrawRange(0, vn);
+    this.veilPos.needsUpdate = true;
 
     // spawn marks
     this.markCursor = 0;
@@ -710,7 +831,7 @@ export class View {
 
   dispose(): void {
     this.disposed = true;
-    this.scene.remove(this.playerGroup, this.bulletPoints, this.heavyPoints, this.reticle);
+    this.scene.remove(this.playerGroup, this.bulletPoints, this.heavyPoints, this.veilPoints, this.reticle);
     for (const s of this.shardViews) {
       this.scene.remove(s.mesh);
       (s.glow.material as THREE.Material).dispose();
@@ -746,8 +867,17 @@ export class View {
     }
     this.bulletGeo.dispose();
     this.heavyGeo.dispose();
+    this.veilGeo.dispose();
+    this.ccGeo.dispose();
+    this.stunMat.dispose();
+    this.rootMat.dispose();
+    this.chillMat.dispose();
+    for (const pool of [this.stunRings, this.rootRings, this.chillRings]) {
+      for (const h of pool) this.scene.remove(h.mesh);
+    }
     (this.bulletPoints.material as THREE.Material).dispose();
     (this.heavyPoints.material as THREE.Material).dispose();
+    (this.veilPoints.material as THREE.Material).dispose();
     this.playerHull.geometry.dispose();
     (this.playerHull.material as THREE.Material).dispose();
     this.playerTail.material.dispose();
@@ -761,3 +891,4 @@ export class View {
 const EMBER_COL = new THREE.Color(0xffdca0);
 const SHARD_COL = new THREE.Color(0xffd27a);
 const WARDEN_COL = new THREE.Color(0xff7a2d);
+const VEIL_COL = new THREE.Color(0x9adfff);

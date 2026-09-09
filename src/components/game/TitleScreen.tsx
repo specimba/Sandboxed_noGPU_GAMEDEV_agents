@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { getEngine } from '@/game/engine';
 import { SHRINE_UPGRADES } from '@/game/run';
 import { useGameStore } from '@/game/store';
+import { buildStamp } from '@/game/version';
 
 export default function TitleScreen() {
   const phase = useGameStore((s) => s.phase);
@@ -174,6 +175,11 @@ export default function TitleScreen() {
         >
           AFTERGLOW — SYSTEMS LAB
         </a>
+
+        {/* deployment trust chain — you can always tell which build you play */}
+        <p className="hs-tracking text-[8px] text-[#f2e6cf]/25">
+          {buildStamp}
+        </p>
       </div>
     </div>
   );
