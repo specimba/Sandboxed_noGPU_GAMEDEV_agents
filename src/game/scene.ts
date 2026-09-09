@@ -216,6 +216,7 @@ export class Scene {
   private tgtSun = new THREE.Color(BIOMES[0].sun);
   private time = 0;
   private ringCursor = 0;
+  private fogSwellT = -1; // biome arrival swell clock (-1 idle)
 
   constructor(canvas: HTMLCanvasElement) {
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
@@ -475,6 +476,12 @@ export class Scene {
     r.set(x, z, this.time, 0);
   }
 
+  /** BIOME ARRIVAL fog swell — density breathes out and back over 1.4s
+   *  (uniform-only, zero draw calls). Idle = -1. */
+  fogSwell(): void {
+    this.fogSwellT = 0;
+  }
+
   private buildWall(): void {
     // boundary ring — a thin cold-red warning line where the shell wall rises
     const geo = new THREE.TorusGeometry(ARENA.wallGlow, 0.09, 8, 128);
@@ -731,6 +738,15 @@ export class Scene {
     (this.floorMat.uniforms.uHot.value as THREE.Color).lerp(this.tgtHot, k);
     (this.scene.fog as THREE.FogExp2).color.lerp(this.tgtFog, k);
     (this.scene.background as THREE.Color).lerp(this.tgtFog, k);
+    if (this.fogSwellT >= 0) {
+      this.fogSwellT += dt;
+      const t = Math.min(1, this.fogSwellT / 1.4);
+      (this.scene.fog as THREE.FogExp2).density = 0.016 + 0.012 * Math.sin(Math.PI * t);
+      if (t >= 1) {
+        this.fogSwellT = -1;
+        (this.scene.fog as THREE.FogExp2).density = 0.016;
+      }
+    }
     (this.starCore.material as THREE.MeshBasicMaterial).color.lerp(this.tgtSun, k);
     this.starLight.color.lerp(this.tgtSun, k);
 

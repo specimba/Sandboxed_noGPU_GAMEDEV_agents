@@ -149,7 +149,11 @@ function drive(seedMods: { dmg: number; maxEmbers: number; revive: boolean }): D
     }
   }
 
-  if (frames >= MAX_FRAMES) res.errors.push('hit frame cap (stuck run)');
+  if (frames >= MAX_FRAMES) {
+    res.errors.push('hit frame cap (stuck run)');
+    // stall forensics — what exactly refused to die?
+    console.error('STALL-DIAG wave', sim.wave, 'queue', sim['spawnQueue'].length, 'marks', JSON.stringify(sim.marks), 'foes', JSON.stringify(sim.foes.map((f) => ({ k: f.kind, hp: f.hp, x: +f.x.toFixed(1), z: +f.z.toFixed(1), st: f.state }))), 'bullets', sim.bullets.length, 'hexes', sim.hexes.length, 'px', +sim.px.toFixed(1), +sim.pz.toFixed(1));
+  }
   res.score = sim.score;
   return res;
 }

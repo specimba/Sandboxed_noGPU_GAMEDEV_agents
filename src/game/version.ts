@@ -7,8 +7,8 @@
  */
 export const BUILD = {
   tag: 'SPRINT 17 — PROOF OF LIFE',
-  base: '52f67c0', // inherited-tree baseline this sprint diffs against
-  at: '2026-09-09T05:52Z', // stamped at ship
+  base: 'e7e5822+17', // ironhold lineage head + sprint-17 merge
+  at: '2026-09-09T07:40Z', // stamped at ship
 } as const;
 
 export const buildStamp = `BUILD ${BUILD.tag} · BASE ${BUILD.base}`;

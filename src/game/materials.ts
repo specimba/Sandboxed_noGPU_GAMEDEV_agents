@@ -249,3 +249,50 @@ export function makeStreakTexture(): THREE.CanvasTexture {
   tex.colorSpace = THREE.SRGBColorSpace;
   return tex;
 }
+
+/**
+ * Dark-edged diamond — the NORMAL-blended light bullet. The outer falloff is
+ * near-opaque obsidian instead of fading to transparent, so the bullet keeps
+ * a hard silhouette against bright biome grids / bloom where the additive
+ * diamond used to wash out (the owner's projectile-visibility complaint).
+ * The white core is tinted hot by the PointsMaterial color.
+ */
+export function makeDiamondTextureDark(): THREE.CanvasTexture {
+  const c = document.createElement('canvas');
+  c.width = c.height = 96;
+  const ctx = c.getContext('2d')!;
+  // dark backing diamond — slightly larger, near-opaque
+  ctx.fillStyle = 'rgba(24,9,6,0.92)';
+  ctx.beginPath();
+  ctx.moveTo(48, 0);
+  ctx.lineTo(82, 48);
+  ctx.lineTo(48, 96);
+  ctx.lineTo(14, 48);
+  ctx.closePath();
+  ctx.fill();
+  // hot gradient core
+  const g = ctx.createRadialGradient(48, 48, 0, 48, 48, 42);
+  g.addColorStop(0, 'rgba(255,255,255,0.98)');
+  g.addColorStop(0.55, 'rgba(255,255,255,0.55)');
+  g.addColorStop(1, 'rgba(255,255,255,0.12)');
+  ctx.fillStyle = g;
+  ctx.beginPath();
+  ctx.moveTo(48, 6);
+  ctx.lineTo(74, 48);
+  ctx.lineTo(48, 90);
+  ctx.lineTo(22, 48);
+  ctx.closePath();
+  ctx.fill();
+  // white-hot heart
+  ctx.fillStyle = 'rgba(255,255,255,1)';
+  ctx.beginPath();
+  ctx.moveTo(48, 18);
+  ctx.lineTo(66, 48);
+  ctx.lineTo(48, 78);
+  ctx.lineTo(30, 48);
+  ctx.closePath();
+  ctx.fill();
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}

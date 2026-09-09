@@ -15,7 +15,7 @@ export interface Banner {
   id: number;
   text: string;
   sub: string;
-  kind: 'wave' | 'warden' | 'overdrive' | 'room' | 'boss';
+  kind: 'wave' | 'warden' | 'overdrive' | 'room' | 'boss' | 'biome';
 }
 
 export interface BoonChoice {
@@ -60,6 +60,9 @@ interface GameState {
   boonsTaken: string[];
   boonChoices: BoonChoice[];
   bossBar: { name: string; frac: number } | null;
+  /** CC status — the ROOTED chip's state (the bind is ALWAYS on screen) */
+  rooted: boolean;
+  rootT: number;
   won: boolean;
   dawnEarned: number;
 
@@ -107,6 +110,8 @@ export const useGameStore = create<GameState>()((set) => ({
   overdrive: 0,
   overdriveActive: false,
   sun: 0,
+  rooted: false,
+  rootT: 0,
 
   roomLabel: '',
   mutatorLabel: '',
@@ -142,10 +147,13 @@ export const useGameStore = create<GameState>()((set) => ({
   showBanner: (text, sub, kind) => {
     const id = ++bannerId;
     set({ banner: { id, text, sub, kind } });
+    // biome arrival holds shorter (1.5s beat) — the ROOM banner it replaces
+    // used to follow 2.6s later and double-banner the moment
+    const dur = kind === 'biome' ? 1500 : 2200;
     window.setTimeout(() => {
       const cur = useGameStore.getState().banner;
       if (cur && cur.id === id) set({ banner: null });
-    }, 2200);
+    }, dur);
   },
 }));
 

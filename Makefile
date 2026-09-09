@@ -67,6 +67,7 @@ qa:
 	bun scripts/simdrive.ts
 	bun scripts/simdrive-afterglow.ts
 	bun scripts/simdrive-forge.ts
+	bun scripts/simdrive-controls.ts
 
 # AFTERGLOW M0 pivot: fresh deep-sim arena survivor core under src/game/afterglow/
 qa-afterglow:

@@ -9,7 +9,9 @@ import {
   starEnergy,
 } from './constants';
 import { AudioEngine } from './audio';
+import { ccFailsafe, dashBufferStep } from './control';
 import { DamageNumbers } from './damageNumbers';
+import { FoePips } from './foePips';
 import { CameraRig } from './cameraRig';
 import { ParticlePool, RingPool } from './fx';
 import { Input } from './input';
@@ -62,6 +64,38 @@ let perfMsEma = 0;
 let perfDrawPeak = 0;
 const perfScratch: number[] = []; // reused by perfSnapshot's p95 sort
 
+/* ------------------------------------------------------------------ */
+/* ?debug=1 control forensics — the black box behind the stuck-control */
+/* investigation. Preallocated ring + transition-only console.debug;    */
+/* zero cost unless the URL carries ?debug=1 (owner directive law).     */
+/* ------------------------------------------------------------------ */
+
+const SUPPRESS_RING = 120; // ~2s of samples at ~10Hz
+interface SuppressSample {
+  t: number;
+  phase: string;
+  hitstop: number;
+  slowT: number;
+  dashBufT: number;
+  mx: number;
+  my: number;
+  edges: string;
+  downCount: number;
+}
+const suppressRing: SuppressSample[] = Array.from({ length: SUPPRESS_RING }, () => ({
+  t: 0,
+  phase: '',
+  hitstop: 0,
+  slowT: 0,
+  dashBufT: 0,
+  mx: 0,
+  my: 0,
+  edges: '',
+  downCount: 0,
+}));
+let suppressAt = 0;
+let suppressLen = 0;
+
 let active: Engine | null = null;
 export function getEngine(): Engine | null {
   return active;
@@ -74,6 +108,7 @@ const BURST: Record<FoeKind, number> = {
   caster: 260,
   herald: 240,
   bulwark: 420,
+  hound: 320,
   warden: 900,
 };
 
@@ -93,18 +128,39 @@ export class Engine {
   private acc = 0;
   private hitstop = 0;
   private hitstopCd = 0;
+  private dashBufT = 0; // buffered dash edge (0.12s window, engine-side)
   private dmgNums = new DamageNumbers();
+  private pips = new FoePips();
   private slowT = 0;
   private hudT = 0;
   private heartT = 0;
   private deathT = -1;
   private runT = 0; // time in the current room — drives the onboarding hints
   private hitFromT = 0; // countdown for the damage-direction wedge
-  private aim = new THREE.Vector3(0, 0, -6);
   private lastHitFrom = 0; // degrees, for the damage-direction wedge
+  private aim = new THREE.Vector3(0, 0, -6);
   private raycaster = new THREE.Raycaster();
   private ndc = new THREE.Vector2();
   private disposed = false;
+
+  // ?debug=1 forensics state
+  private debug = false;
+  private lastRt = 0;
+  private lastSteps = 0;
+  private lastMx = 0;
+  private lastMy = 0;
+  private prevPhase = '';
+  private prevHitstop = 0;
+  private prevSuppressT = 0;
+  private rootAudioPrev = false;
+
+  // reduced motion — read once, obeyed by rig + view + struggle shake
+  private reduceMq: MediaQueryList | null = null;
+  private reduceFx = false;
+  private onReduceChange = (): void => {
+    this.reduceFx = this.reduceMq?.matches ?? false;
+    this.view.setReduceFx(this.reduceFx);
+  };
 
   // run progression
   private runBiome = 0;
@@ -113,6 +169,9 @@ export class Engine {
   private bossesKilled = 0;
   private boonsTaken: Record<string, number> = {};
   private lastBoonChoices: BoonDef[] = [];
+  /** biome arrival beat armed — the next ROOM banner is redundant (the
+   *  arrival banner already named the place) and is skipped exactly once */
+  private arrivalHold = false;
 
   constructor(canvas: HTMLCanvasElement) {
     // eslint-disable-next-line @typescript-eslint/no-this-alias
@@ -124,6 +183,17 @@ export class Engine {
     this.input = new Input(canvas);
 
     this.sim = new Sim(this.makeEvents());
+
+    // ?debug=1 — control forensics live (rt / steps / input vector /
+    // suppress states). Read once; zero cost otherwise.
+    this.debug = new URLSearchParams(window.location.search).get('debug') === '1';
+
+    // reduced motion — the rig shake sites were hard-coded false forever;
+    // the media query finally reaches them (and the view's struggle nudge)
+    this.reduceMq = window.matchMedia('(prefers-reduced-motion: reduce)');
+    this.reduceFx = this.reduceMq.matches;
+    this.view.setReduceFx(this.reduceFx);
+    this.reduceMq.addEventListener('change', this.onReduceChange);
 
     const best = loadBest();
     const meta = loadMeta();
@@ -163,6 +233,8 @@ export class Engine {
       store: this.store,
       perf: () => this.perfSnapshot(),
       perfSnapshot: () => this.perfSnapshot(),
+      debug: this.debug,
+      forensics: () => this.forensics(),
     };
   }
 
@@ -178,7 +250,6 @@ export class Engine {
   private startRun(): void {
     this.audio.unlock();
     this.audio.uiClick();
-    this.audio.setDanger(0); // ambient law: every phase entry resets pressure
     // stack the shrine into a fresh build; every descent is numbered
     const seed = (Date.now() ^ Math.floor(Math.random() * 0xffffff)) % 100000;
     this.sim.setSeed(seed);
@@ -192,11 +263,23 @@ export class Engine {
     this.lastBoonChoices = [];
     this.deathT = -1;
     this.hitstop = 0;
+    this.dashBufT = 0;
     this.slowT = 0;
     this.runT = 0;
     this.hitFromT = 0;
+    this.input.clearEdges(); // no phantom dash/pause survives a run start
     this.scene.setBiome(0);
     this.audio.setBiome(0);
+    this.audio.setMusicLevel(0);
+    this.audio.setMusicPaused(false);
+    this.audio.setDanger(0); // sprint-17 ambient law: every phase entry resets pressure
+    this.store.getState().set({ hitFrom: null, playerSlow: 0, hint: null });
+    this.pips.clear();
+    // BIOME ARRIVAL BEAT — the descent begins: banner + fog swell + floor pulse
+    this.arrivalHold = true;
+    this.scene.fogSwell();
+    this.scene.floorPulse(this.sim.px, this.sim.pz);
+    this.store.getState().showBanner(biomeName(0), 'THE DESCENT BEGINS', 'biome');
     this.rig.engage(this.sim.px, this.sim.pz);
     this.sim.startRoom(0, 1);
     this.store.getState().set({
@@ -210,7 +293,8 @@ export class Engine {
       overdrive: 0,
       overdriveActive: false,
       sun: 0,
-      banner: null,
+      // NOTE: no `banner: null` here — the biome arrival beat above owns the
+      // banner on run start; abandon() clears it on the title path
       boonsTaken: [],
       bossBar: null,
       won: false,
@@ -279,9 +363,16 @@ export class Engine {
       this.runRoom = 1;
       this.scene.setBiome(this.runBiome);
       this.audio.setBiome(this.runBiome);
-      this.store.getState().showBanner(biomeName(this.runBiome), 'DEEPER INTO THE DEAD STAR', 'room');
+      // BIOME ARRIVAL BEAT — one beat per biome, fired here and at startRun
+      // (the only two setBiome sites): banner + fog swell + floor pulse
+      this.arrivalHold = true;
+      this.scene.fogSwell();
+      this.scene.floorPulse(this.sim.px, this.sim.pz);
+      this.store.getState().showBanner(biomeName(this.runBiome), 'DEEPER INTO THE DEAD STAR', 'biome');
     }
     this.sim.startRoom(this.runBiome, this.runRoom);
+    this.input.clearEdges(); // Escape pressed during the shrine must not pause the next room
+    this.dashBufT = 0;
     this.store.getState().set({
       phase: 'playing',
       boonChoices: [],
@@ -328,22 +419,28 @@ export class Engine {
   pause(): void {
     if (this.store.getState().phase !== 'playing') return;
     this.store.getState().set({ phase: 'paused' });
-    this.audio.setDanger(0); // the drone must not outlive the fight
+    this.audio.setMusicPaused(true);
+    this.audio.setDanger(0); // the tension bed must not outlive the fight
     this.audio.uiClick();
   }
 
   resume(): void {
     if (this.store.getState().phase !== 'paused') return;
+    this.input.clearEdges(); // edges queued while frozen never fire on resume
+    this.dashBufT = 0;
     this.store.getState().set({ phase: 'playing' });
     this.audio.unlock();
+    this.audio.setMusicPaused(false);
     this.audio.uiClick();
   }
 
   abandon(): void {
     this.sim.reset();
+    this.pips.clear();
+    this.store.getState().set({ phase: 'title', banner: null, hint: null, hitFrom: null, playerSlow: 0 });
     this.audio.setDanger(0);
-    this.store.getState().set({ phase: 'title', banner: null, hint: null });
     this.rig.setTitleMode();
+    this.audio.setMusicPaused(true);
     this.audio.uiClick();
   }
 
@@ -370,12 +467,14 @@ export class Engine {
     cancelAnimationFrame(this.raf);
     window.removeEventListener('resize', this.onResize);
     document.removeEventListener('visibilitychange', this.onVisibility);
+    this.reduceMq?.removeEventListener('change', this.onReduceChange);
     this.input.dispose();
     this.audio.dispose();
     this.view.dispose();
     this.fx.dispose();
     this.rings.dispose();
     this.dmgNums.dispose();
+    this.pips.dispose();
     this.scene.renderer.dispose();
     this.scene.sun.dispose();
   }
@@ -418,6 +517,7 @@ export class Engine {
       },
       onFoeHurt: (kind, x, z, dmg, chain) => {
         this.dmgNums.spawn(x, z, dmg, chain);
+        this.view.flashAt(x, z); // the shell answers the hit — per-entry materials
         void kind;
       },
       onBurnTick: (x, z, dmg) => {
@@ -469,10 +569,15 @@ export class Engine {
         this.store.getState().pushToast(`${bossName(this.runBiome)} FELLED — SHARD OF THE SUN +1`, 'gold');
       },
       onWaveStart: (n) => {
-        void n;
+        // music depth: waves 1-2 sub only → 3-4 +pad → 5+ +arp; boss rooms roar
+        this.audio.setMusicLevel(Math.min(2, Math.floor((n - 1) / 2)));
+        this.audio.waveStart(n);
         const st = this.store.getState();
         if (isBossRoom(this.runRoom)) {
           // boss banner fires from onWardenSpawn
+        } else if (this.arrivalHold) {
+          // the arrival beat already named this place — no ROOM double-banner
+          this.arrivalHold = false;
         } else {
           const mut = this.sim.mutator.name ? ` — ${this.sim.mutator.name}` : '';
           st.showBanner(`ROOM ${this.runRoom}`, `${biomeName(this.runBiome)}${mut}`, 'room');
@@ -508,11 +613,54 @@ export class Engine {
         this.fx.burst(x, z, 26, 11, { color: WHITE_C, life: 0.28, size: 0.42, up: 0.2 });
         this.rings.fire(x, z, 2.4, 0.22, 0xfff4dc);
       },
-      onHeavyShot: (x, z) => {
+      onHeavyShot: (x, z, tx, tz) => {
         this.audio.heavyShot();
         this.rig.addShake(0.12);
         this.rings.fire(x, z, 3.0, 0.3, 0xc9ff6a);
         this.fx.burst(x, z, 30, 10, { color: new THREE.Color(0xc9ff6a), life: 0.4, size: 0.5, up: 0.2 });
+        // the lance names its line — readable at 21 u/s (telegraph-pool reuse)
+        if (tx !== undefined && tz !== undefined) this.view.fireVolleyLine(x, z, tx, tz);
+      },
+      onHexAnchor: (x, z, t) => {
+        this.audio.hexAnchor();
+        this.debugLog(`hex anchor @(${x.toFixed(1)},${z.toFixed(1)}) t=${t.toFixed(2)}`);
+      },
+      onHexDetonate: (x, z, hit) => {
+        this.audio.hexDetonate(hit);
+        this.rings.fire(x, z, hit ? 4.6 : 3.2, 0.45, 0xff2d6e);
+        if (hit) this.scene.floorPulse(x, z);
+        this.debugLog(`hex detonate @(${x.toFixed(1)},${z.toFixed(1)}) hit=${hit}`);
+      },
+      onFoeStun: (x, z) => {
+        this.audio.ccStun();
+        this.fx.burst(x, z, 14, 8, { color: new THREE.Color(0xffe9a0), life: 0.3, size: 0.4, up: 0.5 });
+      },
+      onFoeRoot: (x, z) => {
+        this.audio.ccRootCue();
+        this.fx.burst(x, z, 12, 6, { color: new THREE.Color(0xc9784a), life: 0.4, size: 0.45 });
+      },
+      onFoeChill: (x, z) => {
+        this.audio.ccFoeSlow();
+      },
+      onVeilVolley: (x, z) => {
+        this.audio.veilVolley();
+        this.rings.fire(x, z, 3.4, 0.5, 0x9adfff);
+      },
+      onVeil: (x, z) => {
+        this.audio.ccVeilHit();
+        this.rig.addShake(0.1);
+        this.fx.burst(x, z, 30, 10, { color: new THREE.Color(0x9adfff), life: 0.5, size: 0.5 });
+        this.store.getState().pushToast('VEILED — DASH TO CLEANSE', 'info');
+      },
+      onCleanse: (x, z) => {
+        this.audio.ccCleanse();
+        this.fx.burst(x, z, 20, 9, { color: EMBER_C, life: 0.35, size: 0.45, up: 0.3 });
+      },
+      onPlayerRoot: (x, z, dur) => {
+        this.audio.rootBind();
+        this.rig.addShake(0.1);
+        this.store.getState().pushToast('ROOTED — LEAVE THE HEX NEXT TIME', 'red');
+        this.debugLog(`player root @(${x.toFixed(1)},${z.toFixed(1)}) dur=${dur.toFixed(2)}`);
       },
       onBossPhase: (x, z, phase) => {
         this.audio.bossPhase();
@@ -538,7 +686,8 @@ export class Engine {
       },
       onDeath: () => {
         this.audio.death();
-        this.audio.setDanger(0); // the fight is over — the drone stands down
+        this.audio.setMusicPaused(true); // the stinger plays alone
+        this.pips.clear();
         this.rig.addShake(1);
         this.slowT = 1.3;
         this.deathT = 1.35;
@@ -548,32 +697,6 @@ export class Engine {
       },
       onSpawnMark: (x, z) => {
         this.rings.fire(x, z, 2.2, 0.8, 0xff2d4e);
-      },
-      /* ---- CC KIT notify (sprint 17): sound + light, zero sim coupling ---- */
-      onFoeStun: (x, z) => {
-        this.audio.ccStun();
-        this.fx.burst(x, z, 14, 8, { color: new THREE.Color(0xffe9a0), life: 0.3, size: 0.4, up: 0.5 });
-      },
-      onFoeRoot: (x, z) => {
-        this.audio.ccRoot();
-        this.fx.burst(x, z, 12, 6, { color: new THREE.Color(0xc9784a), life: 0.4, size: 0.45 });
-      },
-      onFoeChill: (x, z) => {
-        this.audio.ccFoeSlow();
-      },
-      onVeilVolley: (x, z) => {
-        this.audio.veilVolley();
-        this.rings.fire(x, z, 3.4, 0.5, 0x9adfff);
-      },
-      onVeil: (x, z) => {
-        this.audio.ccVeilHit();
-        this.rig.addShake(0.1);
-        this.fx.burst(x, z, 30, 10, { color: new THREE.Color(0x9adfff), life: 0.5, size: 0.5 });
-        this.store.getState().pushToast('VEILED — DASH TO CLEANSE', 'info');
-      },
-      onCleanse: (x, z) => {
-        this.audio.ccCleanse();
-        this.fx.burst(x, z, 20, 9, { color: EMBER_C, life: 0.35, size: 0.45, up: 0.3 });
       },
     };
   }
@@ -595,12 +718,27 @@ export class Engine {
     this.raf = requestAnimationFrame(this.frame);
     const dtReal = Math.min(0.1, (now - this.lastT) / 1000);
     this.lastT = now;
+    this.lastRt = dtReal;
     this.hitstopCd = Math.max(0, this.hitstopCd - dtReal);
+    // hitstop drains on WALL CLOCK — a stutter can never extend a freeze,
+    // and the watchdog clamps any runaway above the designed ceiling
+    if (this.hitstop > 0) this.hitstop = Math.max(0, this.hitstop - dtReal);
+    if (this.hitstop > FEEL.hitstopMax + 1e-6) {
+      this.debugLog(`hitstop watchdog clamp ${this.hitstop.toFixed(3)}`);
+      this.hitstop = FEEL.hitstopMax;
+    }
+    // [HS:CTRL] transition log — hitstop enter/exit with real durations
+    if (this.debug) {
+      if (this.hitstop > 0 && this.prevHitstop <= 0) this.debugLog(`hitstop ENTER ${this.hitstop.toFixed(3)}s`);
+      if (this.hitstop <= 0 && this.prevHitstop > 0) this.debugLog(`hitstop EXIT`);
+      this.prevHitstop = this.hitstop;
+    }
     this.samplePerf(dtReal);
-    // ambient watchdog runs in EVERY phase — no audio layer can outlive its
-    // driver (the sprint-17 failsafe law)
-    this.audio.tick(dtReal);
     const phase = this.store.getState().phase;
+    if (this.debug && phase !== this.prevPhase) {
+      this.debugLog(`phase ${this.prevPhase || '∅'} → ${phase}`);
+      this.prevPhase = phase;
+    }
 
     if (phase === 'title') {
       // living attract: the sim idles forward so shards keep orbiting the
@@ -608,7 +746,7 @@ export class Engine {
       this.sim.update(dtReal, dtReal, 0, 0, 0, 0, false, false);
       this.scene.setEnergy(0.16 + 0.09 * Math.sin(performance.now() * 0.00045));
       this.scene.update(dtReal);
-      this.rig.update(dtReal, this.scene.camera, 0, 0, 0, 0, false, false);
+      this.rig.update(dtReal, this.scene.camera, 0, 0, 0, 0, false, this.reduceFx);
       this.view.sync(this.sim, 0, 0, false, dtReal);
       this.rings.update(dtReal);
       this.fx.update(dtReal);
@@ -617,6 +755,22 @@ export class Engine {
     }
 
     if (phase === 'paused' || phase === 'dead' || phase === 'reward') {
+      // the overlays advertise their keys — ESC — RESUME / ENTER — REKINDLE —
+      // so those keys MUST work here. Everything else is discarded per frame:
+      // a stale edge must never fire on re-entry into play.
+      if (phase === 'paused') {
+        if (this.input.consumePause()) this.resume();
+        this.input.consumeBegin();
+      } else if (phase === 'dead') {
+        if (this.input.consumeBegin()) this.restart();
+        this.input.consumePause();
+      } else {
+        this.input.consumePause();
+        this.input.consumeBegin();
+      }
+      this.input.consumeThrow();
+      this.input.consumeDash();
+      this.dashBufT = 0;
       this.scene.render();
       return;
     }
@@ -637,7 +791,7 @@ export class Engine {
       this.dmgNums.update(this.scene.camera, dtReal);
       this.scene.update(dtReal * 0.45);
       this.rig.setVelocity(0, 0);
-      this.rig.update(dtReal, this.scene.camera, this.sim.px, this.sim.pz, 0, 0, false, false);
+      this.rig.update(dtReal, this.scene.camera, this.sim.px, this.sim.pz, 0, 0, false, this.reduceFx);
       this.view.sync(this.sim, this.aim.x, this.aim.z, false, dtReal);
       this.scene.render();
       if (this.deathT <= 0) {
@@ -650,17 +804,32 @@ export class Engine {
     this.updateAim();
 
     const wantThrow = this.input.consumeThrow();
-    const wantDash = this.input.consumeDash();
+    const wantDashRaw = this.input.consumeDash();
     const mx = this.input.moveX;
     const my = this.input.moveY;
+    this.lastMx = mx;
+    this.lastMy = my;
+
+    // 0.12s dash buffer: an edge pressed just before ready fires the frame
+    // it readies — the input is never silently eaten (pure law, control.ts)
+    const buf = dashBufferStep(this.dashBufT, this.sim.dashCd, wantDashRaw, dtReal);
+    this.dashBufT = buf.bufT;
+    const wantDash = buf.wantDash;
+
+    // CC failsafe: no bind ever outlives max × failsafeFactor (the law)
+    const ccFired = ccFailsafe(this.sim);
+    if (ccFired.length > 0) {
+      for (const k of ccFired) this.debugLog(`CC failsafe fired: ${k} clamped`);
+      this.store.getState().pushToast('HEX BIND SUPPRESSED', 'red');
+    }
+    this.sampleSuppress(mx, my);
 
     this.acc += dtReal;
     let steps = 0;
     while (this.acc >= STEP && steps < 5) {
       let dt = STEP;
       if (this.hitstop > 0) {
-        this.hitstop -= STEP;
-        dt = 0;
+        dt = 0; // drained on wall clock above — stutter cannot extend it
       }
       let enemyDt = dt * (this.sim.odActive ? OVERDRIVE.enemyTimeScale : 1);
       if (this.slowT > 0) {
@@ -668,11 +837,13 @@ export class Engine {
         dt *= 0.35;
         enemyDt *= 0.35;
       }
-      this.sim.update(dt, enemyDt, mx, my, this.aim.x, this.aim.z, wantThrow, wantDash);
+      // edges reach the FIRST step only — a stutter frame cannot double-fire
+      this.sim.update(dt, enemyDt, mx, my, this.aim.x, this.aim.z, steps === 0 && wantThrow, steps === 0 && wantDash);
       this.acc -= STEP;
       steps++;
     }
     if (steps === 5) this.acc = 0;
+    this.lastSteps = steps;
 
     // visuals follow the sim
     const st = this.store.getState();
@@ -682,12 +853,21 @@ export class Engine {
     this.scene.bloom.strength = 0.5 + (this.sim.odActive ? 0.16 : 0) + energy * 0.07;
     this.scene.update(dtReal);
     this.rig.setVelocity(this.sim.pvx, this.sim.pvz);
-    this.rig.update(dtReal, this.scene.camera, this.sim.px, this.sim.pz, this.sim.pvx, this.sim.pvz, this.sim.odActive, false);
-    this.view.sync(this.sim, this.aim.x, this.aim.z, !st.touch, dtReal);
+    this.rig.update(dtReal, this.scene.camera, this.sim.px, this.sim.pz, this.sim.pvx, this.sim.pvz, this.sim.odActive, this.reduceFx);
+    this.view.sync(this.sim, this.aim.x, this.aim.z, !st.touch, dtReal, mx !== 0 || my !== 0);
     this.rings.update(dtReal);
     this.fx.update(dtReal);
     this.dmgNums.update(this.scene.camera, dtReal);
-    this.audio.setOverdrive(this.sim.odActive, this.sim.odActive ? 1 - this.sim.odT / OVERDRIVE.duration : 0);
+    this.pips.update(this.scene.camera, this.sim, isBossRoom(this.runRoom));
+    this.audio.setOverdrive(this.sim.odActive);
+
+    // root-break snap (state-diffed — fires on the apply→clear edge only)
+    if (this.rootAudioPrev && this.sim.pRootT <= 0) this.audio.rootBreak();
+    this.rootAudioPrev = this.sim.pRootT > 0;
+    // sustained struggle: a tiny shake while rooted + fighting the bind
+    if (this.sim.pRootT > 0 && (mx !== 0 || my !== 0) && !this.reduceFx) {
+      this.rig.addShake(CC.struggleShake);
+    }
 
     // danger ambience + heartbeat at one ember
     let nearest = 99;
@@ -749,6 +929,8 @@ export class Engine {
         roomLabel: `${biomeName(this.runBiome)} · ${isBossRoom(this.runRoom) ? 'BOSS' : 'ROOM ' + this.runRoom}`,
         bossBar: boss ? { name: bossName(this.runBiome), frac: Math.max(0, boss.hp / boss.maxHp) } : null,
         boonsTaken: boonLabels,
+        rooted: this.sim.pRootT > 0,
+        rootT: this.sim.pRootT,
         playerSlow: Math.max(0, Math.min(1, this.sim.veilT / CC.veilCap)),
       });
     }
@@ -776,6 +958,72 @@ export class Engine {
       perfFpsEma += ((1000 / ms) - perfFpsEma) * 0.05;
       perfMsEma += (ms - perfMsEma) * 0.05;
     }
+  }
+
+  /** [HS:CTRL] debug-gated transition log — silent unless ?debug=1 */
+  private debugLog(note: string): void {
+    if (!this.debug) return;
+    console.debug(`[HS:CTRL] ${note}`);
+  }
+
+  /** ~10Hz ring sample of every input-suppressing state (?debug=1 only) —
+   *  the black box a stuck-control report is postmortemed from */
+  private sampleSuppress(mx: number, my: number): void {
+    if (!this.debug) return;
+    const now = performance.now() / 1000;
+    if (now - this.prevSuppressT < 0.1) return;
+    this.prevSuppressT = now;
+    const s = suppressRing[suppressAt];
+    suppressAt = (suppressAt + 1) % SUPPRESS_RING;
+    if (suppressLen < SUPPRESS_RING) suppressLen++;
+    s.t = now;
+    s.phase = this.store.getState().phase;
+    s.hitstop = this.hitstop;
+    s.slowT = this.slowT;
+    s.dashBufT = this.dashBufT;
+    s.mx = mx;
+    s.my = my;
+    const e = this.input.debugEdges();
+    s.edges = `${e.throw ? 'T' : ''}${e.dash ? 'D' : ''}${e.pause ? 'P' : ''}${e.begin ? 'B' : ''}` || '-';
+    s.downCount = e.downCount;
+  }
+
+  /** ?debug=1 forensics snapshot — live control truth for agent-browser to
+   *  screenshot: rt / acc / steps / input vector / edges / suppress tail */
+  private forensics(): Record<string, unknown> {
+    const perf = this.perfSnapshot();
+    const tail: SuppressSample[] = [];
+    for (let i = 0; i < suppressLen; i++) {
+      tail.push(suppressRing[(suppressAt - suppressLen + i + SUPPRESS_RING) % SUPPRESS_RING]);
+    }
+    return {
+      rt: this.lastRt,
+      acc: this.acc,
+      steps: this.lastSteps,
+      fps: perf.fps,
+      frameMs: perf.frameMs,
+      phase: this.store.getState().phase,
+      hitstop: this.hitstop,
+      hitstopCd: this.hitstopCd,
+      slowT: this.slowT,
+      dashBufT: this.dashBufT,
+      input: {
+        mx: this.lastMx,
+        my: this.lastMy,
+        touch: { x: this.input.touchMoveX, y: this.input.touchMoveY },
+        edges: this.input.debugEdges(),
+      },
+      sim: {
+        dashCd: this.sim.dashCd,
+        dashT: this.sim.dashT,
+        invuln: this.sim.invuln,
+        throwCd: this.sim.throwCd,
+        over: this.sim.over,
+        pRootT: this.sim.pRootT,
+      },
+      reduceFx: this.reduceFx,
+      suppressTail: tail,
+    };
   }
 
   /** live snapshot for the debug hook — query-time only (may sort/allocate) */

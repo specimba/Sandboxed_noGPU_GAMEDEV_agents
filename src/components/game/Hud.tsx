@@ -15,6 +15,7 @@ const BANNER_CLS: Record<string, string> = {
   room: 'text-[#f2e6cf]',
   wave: 'text-[#f2e6cf]',
   warden: 'text-[#f2e6cf]',
+  biome: 'text-[#ffc766]', // the biome name IS run-state — one-gold law
 };
 
 export default function Hud() {
@@ -40,6 +41,8 @@ export default function Hud() {
   const hint = useGameStore((s) => s.hint);
   const hitFrom = useGameStore((s) => s.hitFrom);
   const playerSlow = useGameStore((s) => s.playerSlow);
+  const rooted = useGameStore((s) => s.rooted);
+  const rootT = useGameStore((s) => s.rootT);
 
   if (phase === 'loading' || phase === 'error' || phase === 'title') return null;
 
@@ -49,28 +52,32 @@ export default function Hud() {
     <div className="pointer-events-none absolute inset-0 z-10 select-none">
       {/* veil frost — the slow is a STATE you see on the screen edge */}
       {playerSlow > 0 && <div aria-hidden="true" className="hs-veil-vignette" />}
-      {/* top center — score, flanked by hairlines */}
-      <div className="absolute left-1/2 top-3 flex -translate-x-1/2 flex-col items-center">
-        <div className="flex items-center gap-3">
-          <span aria-hidden="true" className="hs-hairline hs-hairline--bare w-8 sm:w-12" />
-          <span className="sr-only">Score</span>
-          <div
-            className="hs-tracking text-2xl font-bold tabular-nums text-[#f2e6cf] sm:text-3xl"
-            style={{ textShadow: '0 0 8px rgba(255,190,90,0.35)' }}
-          >
-            {score.toLocaleString()}
+      {/* top center — score in an engraved panel (hidden on death/shrine
+          panels so the big score is never duplicated behind them) */}
+      {phase !== 'dead' && phase !== 'reward' && (
+        <div className="absolute left-1/2 top-3 flex -translate-x-1/2 flex-col items-center">
+          <div className="hs-panel flex items-center gap-3 px-4 py-1.5">
+            <span aria-hidden="true" className="hs-hairline hs-hairline--bare w-6 sm:w-10" />
+            <span className="sr-only">Score</span>
+            <div
+              className="hs-tracking text-xl font-bold tabular-nums text-[#f2e6cf] sm:text-2xl"
+              style={{ textShadow: '0 0 8px rgba(255,190,90,0.35)' }}
+            >
+              {score.toLocaleString()}
+            </div>
+            <span aria-hidden="true" className="hs-hairline hs-hairline--bare w-6 sm:w-10" />
           </div>
-          <span aria-hidden="true" className="hs-hairline hs-hairline--bare w-8 sm:w-12" />
+          {mult > 1.01 && (
+            <div className="hs-tracking mt-1.5 rounded-[2px] border border-[rgba(255,199,102,0.45)] bg-[rgba(46,32,12,0.72)] px-2 py-0.5 text-[9px] text-[#ffc766] sm:text-[10px]">
+              ×{mult.toFixed(1)} CHAIN
+            </div>
+          )}
         </div>
-        {mult > 1.01 && (
-          <div className="hs-tracking mt-1.5 rounded-[2px] border border-[rgba(255,199,102,0.45)] bg-[rgba(46,32,12,0.72)] px-2 py-0.5 text-[9px] text-[#ffc766] sm:text-[10px]">
-            ×{mult.toFixed(1)} CHAIN
-          </div>
-        )}
-      </div>
+      )}
 
-      {/* top left — room strip, instrument micro-rows */}
-      <div className="hs-panel absolute left-3 top-3 flex max-w-44 flex-col divide-y divide-[rgba(255,196,120,0.1)] px-3 py-1.5 sm:max-w-56">
+      {/* top left — room strip, instrument micro-rows (drops below the
+          centered score chip on narrow screens so the two never collide) */}
+      <div className="hs-panel absolute left-3 top-14 flex max-w-40 flex-col divide-y divide-[rgba(255,196,120,0.1)] px-3 py-1.5 sm:top-3 sm:max-w-56">
         <span className="hs-tracking py-1 text-[10px] text-[#f2e6cf]/85 sm:text-[11px]">{roomLabel}</span>
         {mutatorLabel && playing && (
           <span className="hs-tracking py-1 text-[9px] text-[#ff5a4a] sm:text-[10px]">◆ {mutatorLabel}</span>
@@ -124,38 +131,53 @@ export default function Hud() {
           <span aria-hidden="true" className="hs-ticks pointer-events-none absolute inset-0" />
         </div>
         <span className="hs-tracking text-[9px] tabular-nums text-[#ffc766]/80">{Math.round(sun * 100)}%</span>
+        {/* CC status — if it's not on screen, it didn't happen (boss rooms
+            never contain weavers, so this cannot collide with the boss bar) */}
+        {playing && rooted && (
+          <div className="hs-panel flex max-w-[112px] items-center gap-1.5 px-2 py-1">
+            <span
+              aria-hidden="true"
+              className="hs-pip"
+              style={{ borderColor: 'rgba(255,45,110,0.75)', background: 'rgba(255,45,110,0.22)' }}
+            />
+            <span className="hs-tracking text-[9px] text-[#ff8ab0] sm:text-[10px]">ROOTED</span>
+            <span className="hs-tracking text-[9px] tabular-nums text-[#f2e6cf]/70">{rootT.toFixed(1)}</span>
+          </div>
+        )}
       </div>
 
-      {/* bottom left — embers (hp) */}
-      <div className="hs-panel absolute bottom-4 left-3 flex items-center gap-2.5 px-3 py-2">
-        <span className="hs-tracking text-[9px] text-[#f2e6cf]/55 sm:text-[10px]">EMBERS</span>
-        <span aria-hidden="true" className="h-px w-3 bg-[rgba(255,196,120,0.25)]" />
-        {Array.from({ length: embersMax }).map((_, i) => (
-          <span key={i} className={`hs-pip ${i < embers ? 'hs-pip--on' : ''}`} />
-        ))}
+      {/* bottom row — embers | shards as one flex row: overlap is impossible
+          by construction (was two absolute panels colliding at ≤420px) */}
+      <div className="absolute inset-x-3 bottom-3 flex items-end justify-between gap-2">
+        <div className="hs-panel flex items-center gap-2 px-2.5 py-2 sm:gap-2.5 sm:px-3">
+          <span className="hs-tracking text-[9px] text-[#f2e6cf]/55 sm:text-[10px]">EMBERS</span>
+          <span aria-hidden="true" className="h-px w-3 bg-[rgba(255,196,120,0.25)]" />
+          {Array.from({ length: embersMax }).map((_, i) => (
+            <span key={i} className={`hs-pip ${i < embers ? 'hs-pip--on' : ''}`} />
+          ))}
+        </div>
+        <div className="hs-panel flex items-center gap-2 px-2.5 py-2 sm:gap-2.5 sm:px-3">
+          <span className="hs-tracking text-[9px] text-[#f2e6cf]/55 sm:text-[10px]">SHARDS</span>
+          <span aria-hidden="true" className="h-px w-3 bg-[rgba(255,196,120,0.25)]" />
+          {Array.from({ length: shardsMax }).map((_, i) => (
+            <span key={i} className={`hs-pip hs-pip--sm ${i < shards ? 'hs-pip--on' : ''}`} />
+          ))}
+          <span
+            className="hs-tracking ml-1 rounded-[2px] border px-2 py-0.5 text-[9px] transition-all sm:text-[10px]"
+            style={
+              dashReady >= 1
+                ? { borderColor: 'rgba(255,199,102,0.6)', color: '#ffd98f', background: 'rgba(255,199,102,0.07)' }
+                : { borderColor: 'rgba(255,196,120,0.18)', color: 'rgba(242,230,207,0.35)' }
+            }
+          >
+            DASH
+          </span>
+        </div>
       </div>
 
-      {/* bottom right — shards + dash */}
-      <div className="hs-panel absolute bottom-4 right-3 flex items-center gap-2.5 px-3 py-2">
-        <span className="hs-tracking text-[9px] text-[#f2e6cf]/55 sm:text-[10px]">SHARDS</span>
-        <span aria-hidden="true" className="h-px w-3 bg-[rgba(255,196,120,0.25)]" />
-        {Array.from({ length: shardsMax }).map((_, i) => (
-          <span key={i} className={`hs-pip hs-pip--sm ${i < shards ? 'hs-pip--on' : ''}`} />
-        ))}
-        <span
-          className="hs-tracking ml-1 rounded-[2px] border px-2 py-0.5 text-[9px] transition-all sm:text-[10px]"
-          style={
-            dashReady >= 1
-              ? { borderColor: 'rgba(255,199,102,0.6)', color: '#ffd98f', background: 'rgba(255,199,102,0.07)' }
-              : { borderColor: 'rgba(255,196,120,0.18)', color: 'rgba(242,230,207,0.35)' }
-          }
-        >
-          DASH
-        </span>
-      </div>
-
-      {/* bottom center — overdrive, 12-segment meter */}
-      <div className="absolute bottom-4 left-1/2 flex w-48 -translate-x-1/2 flex-col items-center gap-1.5 sm:w-64">
+      {/* bottom center — overdrive, 12-segment meter (lifted above the row
+          on narrow screens, centered between the panels on wide ones) */}
+      <div className="absolute bottom-16 left-1/2 flex w-44 -translate-x-1/2 flex-col items-center gap-1.5 sm:bottom-4 sm:w-64">
         <span
           className={`hs-tracking text-[9px] sm:text-[10px] ${
             overdriveActive
@@ -226,14 +248,16 @@ export default function Hud() {
         </div>
       )}
 
-      {/* room / boss banner — engraved caps between hairlines */}
+      {/* room / boss / biome banner — engraved caps between hairlines */}
       {banner && (
         <div
           key={banner.id}
-          className="hs-banner absolute left-1/2 top-1/3 flex -translate-x-1/2 flex-col items-center gap-2.5"
+          className={`hs-banner ${banner.kind === 'biome' ? 'hs-banner--biome' : ''} absolute left-1/2 top-1/3 flex -translate-x-1/2 flex-col items-center gap-2.5`}
         >
           <span aria-hidden="true" className="hs-hairline w-40 sm:w-60" />
-          <span className={`hs-tracking px-4 text-center text-3xl font-bold sm:text-5xl ${BANNER_CLS[banner.kind]}`}>
+          <span
+            className={`hs-tracking max-w-[86vw] px-4 text-center leading-tight font-bold ${banner.kind === 'biome' ? 'text-2xl sm:text-4xl' : 'text-3xl sm:text-5xl'} ${BANNER_CLS[banner.kind] ?? BANNER_CLS.room}`}
+          >
             {banner.text}
           </span>
           <span className="hs-tracking text-[10px] text-[#f2e6cf]/60 sm:text-xs">{banner.sub}</span>
@@ -242,7 +266,7 @@ export default function Hud() {
       )}
 
       {/* toasts — hairline chips */}
-      <div className="absolute bottom-24 left-1/2 flex -translate-x-1/2 flex-col items-center gap-1.5">
+      <div className="absolute bottom-28 left-1/2 flex -translate-x-1/2 flex-col items-center gap-1.5 sm:bottom-24">
         {toasts.map((t) => (
           <div
             key={t.id}

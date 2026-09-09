@@ -3,6 +3,8 @@ import {
   BURN,
   CC,
   FOE,
+  HEX,
+  HOUND,
   OVERDRIVE,
   PLAYER,
   RUN,
@@ -33,7 +35,7 @@ import {
  * Overdrive and the score→sun feedback all live here.
  */
 
-export type FoeKind = 'drifter' | 'striker' | 'weaver' | 'caster' | 'bulwark' | 'herald' | 'warden';
+export type FoeKind = 'drifter' | 'striker' | 'weaver' | 'caster' | 'bulwark' | 'herald' | 'hound' | 'warden';
 export type ShardState = 'orbit' | 'fly' | 'chain' | 'return';
 
 export interface SimEvents {
@@ -56,7 +58,25 @@ export interface SimEvents {
   onRecall(x: number, z: number): void;
   onShieldBreak(x: number, z: number): void;
   onBlock(x: number, z: number): void;
-  onHeavyShot(x: number, z: number): void;
+  onHeavyShot(x: number, z: number, tx?: number, tz?: number): void;
+  /** optional pure-notify: weaver anchored a hex zone at (x,z), t s to detonation.
+   *  No rng consumed, run digests unchanged — same law as onFoeHurt. */
+  onHexAnchor?(x: number, z: number, t: number): void;
+  /** optional pure-notify: a hex zone detonated; hit = the ember was caught */
+  onHexDetonate?(x: number, z: number, hit: boolean): void;
+  /** optional pure-notify: the ember is ROOTED for dur s (movement zeroed) */
+  onPlayerRoot?(x: number, z: number, dur: number): void;
+  /** sprint 17 CC notify suite — optional pure-notify hooks (view/audio
+   *  sugar). Zero rng, zero state writes outside the CC timers themselves. */
+  onFoeStun?(x: number, z: number): void;
+  onFoeRoot?(x: number, z: number): void;
+  onFoeChill?(x: number, z: number): void;
+  /** herald rang its veil volley */
+  onVeilVolley?(x: number, z: number): void;
+  /** the PLAYER was veiled (speed sapped) — hard-capped state */
+  onVeil?(x: number, z: number): void;
+  /** player dash cleansed the veil */
+  onCleanse?(x: number, z: number): void;
   onBossPhase(x: number, z: number, phase: number): void;
   onRevive(x: number, z: number): void;
   onWardenSpawn(x: number, z: number): void;
@@ -67,17 +87,6 @@ export interface SimEvents {
   onShardGain(): void;
   onDeath(): void;
   onSpawnMark(x: number, z: number): void;
-  /** CC notify suite — optional pure-notify hooks (view/audio sugar).
-   *  Zero rng, zero state writes outside the CC timers themselves. */
-  onFoeStun?(x: number, z: number): void;
-  onFoeRoot?(x: number, z: number): void;
-  onFoeChill?(x: number, z: number): void;
-  /** herald rang its veil volley */
-  onVeilVolley?(x: number, z: number): void;
-  /** the PLAYER was veiled (speed sapped) — hard-capped state */
-  onVeil?(x: number, z: number): void;
-  /** player dash cleansed the veil */
-  onCleanse?(x: number, z: number): void;
 }
 
 interface Shard {
@@ -116,6 +125,7 @@ interface Foe {
   dz: number;
   burstLeft: number; // weaver burst queue
   burstT: number;
+  hexCd: number; // weaver hex-zone cooldown (enemy time)
   patternAngle: number; // warden radial offset
   face: number; // bulwark armor facing
   burn: number; // EMBER ROT stacks
@@ -143,6 +153,16 @@ export interface SpawnMark {
   z: number;
   t: number;
   kind: FoeKind;
+}
+
+/** HEX LOOM zone — a named patch of floor; detonates when t expires.
+ *  Rendered by the view's own pipe (parallel to marks: a zone is not a foe
+ *  spawn and must never count into enemiesLeft). */
+export interface HexZone {
+  x: number;
+  z: number;
+  t: number; // seconds to detonation (enemy time)
+  weaverId: number;
 }
 
 const TAU = Math.PI * 2;
@@ -177,8 +197,6 @@ export class Sim {
   dashDx = 0;
   dashDz = 0;
   reviveUsed = false;
-  /** player veil (speed sap) — hard-capped at CC.veilCap, cleansed by dash */
-  veilT = 0;
 
   // shards
   shards: Shard[] = [];
@@ -189,6 +207,14 @@ export class Sim {
   foes: Foe[] = [];
   bullets: Bullet[] = [];
   marks: SpawnMark[] = [];
+  hexes: HexZone[] = [];
+  /** player crowd control — ROOTED: movement zeroed, dash blocked, throwing
+   *  free. Ticks on PLAYER time. Public: the engine watchdog enforces the
+   *  failsafe law (never locked > CC.max × factor). */
+  pRootT = 0;
+  /** player veil (herald speed sap) — hard-capped at CC.veilCap, cleansed
+   *  by dash. Ticks on PLAYER time. Public: engine + HUD read it. */
+  veilT = 0;
   private nextId = 1;
 
   // waves
@@ -240,7 +266,6 @@ export class Sim {
     this.dashT = 0;
     this.dashCd = 0;
     this.reviveUsed = false;
-    this.veilT = 0;
     this.dashHit.clear();
     this.biome = 0;
     this.room = 1;
@@ -250,6 +275,9 @@ export class Sim {
     this.foes = [];
     this.bullets = [];
     this.marks = [];
+    this.hexes = [];
+    this.pRootT = 0;
+    this.veilT = 0;
     this.wave = 1;
     this.waveState = 'idle';
     this.intermissionT = 0;
@@ -294,6 +322,8 @@ export class Sim {
     this.foes.length = 0;
     this.bullets.length = 0;
     this.marks.length = 0;
+    this.hexes.length = 0;
+    this.pRootT = 0;
     this.spawnQueue.length = 0;
     this.invuln = Math.max(this.invuln, 0.8);
     this.wave = biome * RUN.roomsPerBiome + room;
@@ -365,10 +395,14 @@ export class Sim {
     this.updatePlayer(dt, moveX, moveY, wantDash);
     this.updateShards(dt);
 
+    // the root binds the PLAYER — it ticks on player time
+    this.pRootT = Math.max(0, this.pRootT - dt);
+
     // foes & bullets live on enemy time (slowed by Overdrive)
     this.updateFoes(enemyDt);
     this.updateBullets(enemyDt);
     this.updateMarks(enemyDt);
+    this.updateHexes(enemyDt);
     this.updateWave(dt);
 
     // chain decay
@@ -395,7 +429,15 @@ export class Sim {
     this.invuln = Math.max(0, this.invuln - dt);
     this.dashCd = Math.max(0, this.dashCd - dt);
 
-    if (wantDash && this.dashCd <= 0 && this.dashT <= 0) {
+    // ROOTED: an in-flight dash dies the frame the bind lands; no new dash
+    if (this.pRootT > 0) this.dashT = 0;
+
+    if (wantDash && this.dashCd <= 0 && this.dashT <= 0 && this.pRootT <= 0) {
+      // DASH CLEANSES THE VEIL — counterplay law: dash is always an answer
+      if (this.veilT > 0) {
+        this.veilT = 0;
+        this.events.onCleanse?.(this.px, this.pz);
+      }
       // dash-recall: airborne shards whip home at 1.5× speed
       let recalled = false;
       for (const s of this.shards) {
@@ -407,11 +449,6 @@ export class Sim {
         }
       }
       if (recalled) this.events.onRecall(this.px, this.pz);
-      // DASH CLEANSES THE VEIL — counterplay law: dash is always an answer
-      if (this.veilT > 0) {
-        this.veilT = 0;
-        this.events.onCleanse?.(this.px, this.pz);
-      }
       let dx = moveX;
       let dz = -moveY;
       const len = Math.hypot(dx, dz);
@@ -443,6 +480,12 @@ export class Sim {
       this.dashT -= dt;
       this.pvx = this.dashDx * PLAYER.dashSpeed;
       this.pvz = this.dashDz * PLAYER.dashSpeed;
+    } else if (this.pRootT > 0) {
+      // ROOTED: input is ignored, velocity hard-decays under the bind —
+      // throwing stays free (the counterplay ladder keeps a weapon in hand)
+      const drag = Math.max(0, 1 - dt * 12);
+      this.pvx *= drag;
+      this.pvz *= drag;
     } else {
       const spd = this.mods.speed;
       // VEILED: the herald's chill saps acceleration (terminal speed follows);
@@ -486,8 +529,8 @@ export class Sim {
           if (!dead) {
             f.vx += kx;
             f.vz += kz;
-            // DASH-STRIKE ROOTS — the counterplay answer to drifters/casters;
-            // deterministic (every dash contact), hard-capped, bosses resist
+            // DASH-STRIKE ROOTS (sprint 17) — deterministic counterplay;
+            // hard-capped, bosses resist
             const rootDur = CC.rootTime * (f.boss ? 0.4 : 1);
             if (rootDur > f.rootT) f.rootT = Math.min(CC.rootTime, rootDur);
             this.events.onFoeRoot?.(f.x, f.z);
@@ -585,6 +628,8 @@ export class Sim {
     }
     this.spawnQueue.length = 0;
     this.marks.length = 0;
+    this.hexes.length = 0;
+    this.pRootT = 0;
   }
 
   /** QA hook: strike the nearest live foe as a direct shard-class hit — the
@@ -831,6 +876,8 @@ export class Sim {
         return false;
       }
     }
+    // CINDER HOUND recovery: mid-dash-past you, it pays extra to die
+    if (f.kind === 'hound' && f.state === 3) dmg *= HOUND.recoverVuln;
     f.hp -= dmg;
     if (f.hp > 0) {
       // EMBER ROT: direct hits stack burning light on the survivor
@@ -923,6 +970,9 @@ export class Sim {
     } else if (kind === 'bulwark') {
       hp = 6;
       r = 1.3;
+    } else if (kind === 'hound') {
+      hp = HOUND.hp;
+      r = HOUND.radius;
     } else if (kind === 'warden') {
       hp = boss ? bossHp(this.biome) : WAVES.wardenHpBase;
       r = 2.2;
@@ -947,13 +997,21 @@ export class Sim {
       boss,
       spawnT: kind === 'warden' ? 1.4 : kind === 'bulwark' ? 0.7 : 0.45,
       state: boss ? 1 : 0, // boss phase
-      timer: kind === 'caster' ? 1.2 + this.rng() * 0.8 : kind === 'herald' ? 1.6 + this.rng() * 0.8 : 0,
+      timer:
+        kind === 'caster'
+          ? 1.2 + this.rng() * 0.8
+          : kind === 'hound'
+            ? HOUND.cooldown * 0.5 + this.rng() * 0.4
+            : kind === 'herald'
+              ? 1.6 + this.rng() * 0.8
+              : 0,
       tx: 0,
       tz: 0,
       dx: 0,
       dz: 0,
       burstLeft: 0,
       burstT: 0,
+      hexCd: kind === 'weaver' ? 1.2 : 0, // first hex waits one beat
       patternAngle: this.rng() * TAU,
       face: Math.atan2(this.px - x, this.pz - z), // armor starts facing the ember
       burn: 0,
@@ -996,8 +1054,8 @@ export class Sim {
         const damp = Math.max(0, 1 - dt * 9);
         f.vx *= damp;
         f.vz *= damp;
-      } else {
-        switch (f.kind) {
+      } else
+      switch (f.kind) {
         case 'drifter': {
           const sp = 4.3 * eff;
           f.vx += ((pdx / pd) * sp - f.vx) * Math.min(1, dt * 2.2);
@@ -1047,7 +1105,74 @@ export class Sim {
           }
           break;
         }
+        case 'hound': {
+          // CINDER HOUND: lurk → locked wind-up → straight dash → exposed
+          // recovery. The dash line is named by the wind-up and never re-aims.
+          if (f.state === 0) {
+            // lurk: hold the 12..18 band, slow tangential drift
+            const tangX = -pdz / pd;
+            const tangZ = pdx / pd;
+            const radial = pd > 18 ? -0.6 : pd < 12 ? 0.6 : 0;
+            const wantVx = tangX * HOUND.lurkSpeed * eff + (pdx / pd) * radial * HOUND.lurkSpeed;
+            const wantVz = tangZ * HOUND.lurkSpeed * eff + (pdz / pd) * radial * HOUND.lurkSpeed;
+            f.vx += (wantVx - f.vx) * Math.min(1, dt * 2.2);
+            f.vz += (wantVz - f.vz) * Math.min(1, dt * 2.2);
+            f.timer -= dt;
+            if (pd < HOUND.triggerRange && f.timer <= 0) {
+              f.state = 1;
+              f.timer = HOUND.windupTime;
+              // lock the line NOW — the telegraph names exactly where it goes
+              const dl = pd || 1;
+              f.dx = pdx / dl;
+              f.dz = pdz / dl;
+              f.tx = f.x + f.dx * 20;
+              f.tz = f.z + f.dz * 20;
+              f.face = Math.atan2(f.dx, f.dz);
+            }
+          } else if (f.state === 1) {
+            // wind-up — uninterruptible, velocity dies, line burns
+            f.vx *= Math.max(0, 1 - dt * 10);
+            f.vz *= Math.max(0, 1 - dt * 10);
+            f.timer -= dt;
+            if (f.timer <= 0) {
+              f.state = 2;
+              f.timer = HOUND.dashTime;
+            }
+          } else if (f.state === 2) {
+            // dash — dead straight, full commit
+            f.vx = f.dx * HOUND.dashSpeed * eff;
+            f.vz = f.dz * HOUND.dashSpeed * eff;
+            f.timer -= dt;
+            if (f.timer <= 0) {
+              f.state = 3;
+              f.timer = HOUND.recoverTime;
+            }
+          } else {
+            // recovery — the punish window (damageFoe pays x1.5 here)
+            f.vx *= Math.max(0, 1 - dt * 7);
+            f.vz *= Math.max(0, 1 - dt * 7);
+            f.timer -= dt;
+            if (f.timer <= 0) {
+              f.state = 0;
+              f.timer = HOUND.cooldown;
+            }
+          }
+          break;
+        }
         case 'weaver': {
+          // HEX LOOM: name a patch of floor at the ember's feet — leave it or
+          // be rooted. Zero rng; all timers on enemy time.
+          f.hexCd -= dt;
+          if (
+            f.hexCd <= 0 &&
+            pd <= HEX.castRange &&
+            this.hexes.length < HEX.maxZones &&
+            !this.hexes.some((h) => h.weaverId === f.id)
+          ) {
+            f.hexCd = HEX.cooldown;
+            this.hexes.push({ x: this.px, z: this.pz, t: HEX.telegraph, weaverId: f.id });
+            this.events.onHexAnchor?.(this.px, this.pz, HEX.telegraph);
+          }
           // hold the 15..21 band, strafe clockwise
           const tangX = -pdz / pd;
           const tangZ = pdx / pd;
@@ -1061,7 +1186,7 @@ export class Sim {
             if (f.burstT <= 0) {
               f.burstLeft -= 1;
               f.burstT = 0.13;
-              this.fireAt(f, (this.rng() - 0.5) * 0.18);
+              this.fireAt(f, (this.rng() - 0.5) * 0.18); // seeded — the sim is deterministic under a fixed seed
             }
           } else {
             f.timer -= dt;
@@ -1158,7 +1283,7 @@ export class Sim {
                 heavy: true,
                 veil: false,
               });
-              this.events.onHeavyShot(f.x, f.z);
+              this.events.onHeavyShot(f.x, f.z, f.tx, f.tz);
             }
           }
           break;
@@ -1222,7 +1347,6 @@ export class Sim {
           }
           break;
         }
-        } // switch — ends the not-stunned FSM branch
       }
 
       // ROOTED: attacks run (the FSM above executed) but movement is canceled
@@ -1252,7 +1376,7 @@ export class Sim {
       f.x = c.x;
       f.z = c.z;
 
-      // contact damage — the hurt source is the foe body (direction indicator)
+      // contact damage
       if (pd < f.r + FOE.contactRadius) this.hurt(f.x, f.z);
     }
 
@@ -1337,6 +1461,22 @@ export class Sim {
     }
   }
 
+  /** HEX LOOM detonations — enemy time (Overdrive slows the trap) */
+  private updateHexes(dt: number): void {
+    for (let i = this.hexes.length - 1; i >= 0; i--) {
+      const h = this.hexes[i];
+      h.t -= dt;
+      if (h.t > 0) continue;
+      const hit = Math.hypot(this.px - h.x, this.pz - h.z) <= HEX.radius;
+      this.hexes.splice(i, 1);
+      this.events.onHexDetonate?.(h.x, h.z, hit);
+      if (hit) {
+        this.pRootT = Math.max(this.pRootT, HEX.rootDur); // never stacks/extends
+        this.events.onPlayerRoot?.(h.x, h.z, HEX.rootDur);
+      }
+    }
+  }
+
   /* ------------------------------------------------------------------ */
   /* waves                                                               */
   /* ------------------------------------------------------------------ */
@@ -1349,6 +1489,9 @@ export class Sim {
       if (n >= 5 && roll < 0.18 && points >= 4) {
         q.push('bulwark');
         points -= 4;
+      } else if (n >= 5 && roll < 0.3 && points >= 3) {
+        q.push('hound');
+        points -= 3;
       } else if (this.biome >= 1 && n >= 4 && roll < 0.34 && points >= 3) {
         // HERALDS join the deep rooms — the veil threat lives below ASHFALL
         q.push('herald');
@@ -1371,6 +1514,7 @@ export class Sim {
     if (n >= 3 && !q.includes('weaver')) q.push('weaver');
     if (n >= 2 && !q.includes('striker')) q.push('striker');
     if (n >= 5 && !q.includes('caster')) q.push('caster');
+    if (n >= 5 && !q.includes('hound')) q.push('hound');
     if (n >= 8 && !q.includes('bulwark')) q.push('bulwark');
     if (this.biome >= 1 && n >= 4 && !q.includes('herald')) q.push('herald');
     for (let i = q.length - 1; i > 0; i--) {

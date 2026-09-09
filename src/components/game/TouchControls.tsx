@@ -18,12 +18,33 @@ export default function TouchControls() {
     }
   }, [touch, phase]);
 
+  // safety net: if the finger lifts OUTSIDE the stick (capture dropped, knob
+  // unmounted mid-drag), the ember must never keep drifting on a frozen value
+  useEffect(() => {
+    if (!touch) return;
+    const release = () => {
+      if (stickId.current === -1) return;
+      stickId.current = -1;
+      setKnob({ x: 0, y: 0, active: false });
+      getEngine()?.setTouchMove(0, 0);
+    };
+    window.addEventListener('pointerup', release);
+    window.addEventListener('pointercancel', release);
+    return () => {
+      window.removeEventListener('pointerup', release);
+      window.removeEventListener('pointercancel', release);
+    };
+  }, [touch]);
+
   if (!touch || (phase !== 'playing' && phase !== 'paused')) return null;
 
   const startStick = (e: React.PointerEvent<HTMLDivElement>) => {
     e.preventDefault();
+    if (stickId.current !== -1) return; // second finger never steals the stick
     stickId.current = e.pointerId;
-    (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
+    // capture the CONTAINER (not e.target — a pointerdown on the knob child
+    // must still drag the stick when the pointer leaves the knob)
+    stickRef.current?.setPointerCapture?.(e.pointerId);
     moveStick(e);
   };
 
@@ -53,6 +74,12 @@ export default function TouchControls() {
   const endStick = (e: React.PointerEvent<HTMLDivElement>) => {
     if (stickId.current !== e.pointerId) return;
     stickId.current = -1;
+    // drop the capture explicitly so the next touch starts clean
+    try {
+      stickRef.current?.releasePointerCapture?.(e.pointerId);
+    } catch {
+      // capture already released — nothing to do
+    }
     setKnob({ x: 0, y: 0, active: false });
     getEngine()?.setTouchMove(0, 0);
   };
