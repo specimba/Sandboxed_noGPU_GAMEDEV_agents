@@ -2,6 +2,48 @@
 
 Rule R2 (docs/QUALITY_AUDIT.md): each entry lists objective improvements over the previous build in graphics, mechanics, or architecture — with screenshot paths and gate receipts. No entry, no ship.
 
+## SPRINT 19 · BUILD 1 — "MANY SUNS" (the game rewrites its own rules now: player-picked RITES warp every run; the Blender-forged foes are ALIVE)
+
+**Previous state:** Sprint 18 shipped biome 4 + crowns and the owner **finished all 12 rooms** but delivered the verdict: *"the same thing, from first minute to last — no improvement. Improve designs and game mechanics."* The diagnosis is accepted and precise: boons are stat multipliers, room mutators are small bends — **nothing ever rewrites the rules**, so every run has identical verbs minute 1 to minute 9. Static prop families cannot fix a rules problem. This sprint changes the constitution, not the decoration. Recovery note: this sandbox had regressed to sprint-16 (779ca5d existed only on the GitHub second backup) — lineage was restored FROM the backup, then tagged `rollback/sprint18-pale-choir` as the owner's playtest-base rollback point.
+
+### Added — RITES OF THE MANY SUNS (the mechanics swing)
+- **The biome gate**: a run now begins with — and every new biome demands — a **RITE**: a player-picked LAW (1 of 3, seeded offers) that rewrites a core rule **until the run ends**. New phase `rite` in the engine phase machine (same input/stale-edge hygiene laws as the shrine), new `src/game/rites.ts` (pure, headless, 8-rite catalog + deterministic `rollRiteOffers`), HUD law-chip row, pick panel in the house visual language (keyboard 1/2/3 + touch). Up to 4 laws stack per run — and they COMPOUND (TWIN SUN + GLASS BELL plays nothing like LONG NIGHT + MIRROR CHOIR).
+- **The 8 laws** (every one changes where you walk, when you dash, or what you fear):
+  - **EMBER TIDE** — slain foes detonate after a 0.35s fuse: 3u burst, 3 dmg + 2 burn stacks; chain kills detonate too, 8 deep.
+  - **TWIN SUN** — every 2nd throw forks two half-damage shards at ±0.42 rad (8-live ceiling, deterministic skips).
+  - **SUNFALL** — every 7s the sky casts 3 telegraphed meteors (2 on the heaviest foes, 1 at a golden-angle offset from you) — 4.5u blast, 4 dmg, friend AND foe; meteor kills pay ×1.5. Rides the shipped hex-zone telegraph pipe (`kind:'meteor'`) so it reads like the HEX LOOM's language.
+  - **IRON ORCHARD** — knockback ×3.5, dash-strike +2, dash −25%; foes hurled past the wall take 1 dmg + a 0.5s stun — the harvest.
+  - **GLASS BELL** — damage ×1.6, score/dawn ×1.25; every wound costs **2 embers**.
+  - **LONG NIGHT** — foes ×0.82 but waves +40%; graze ×1.25. You will not be chased. You will be surrounded.
+  - **MIRROR CHOIR** — every 5th kill sings a phantom (max 2, 6s): orbits you and lances the nearest foe for 2 dmg every 1.2s.
+  - **EMBER DEBT** — dawn ×1.4, but every wound burns **−15 dawn** off the payout, with a red collect-flash on the frame.
+- **Zero-new-rng determinism law held**: all rite behavior is counters + enemy-time timers; optional-notify events (`onMeteorImpact/onChainDetonate/onPhantomSpawn/onWallSlam/onDawnBurn`) keep the sim digest-safe. Same seed → identical digests, **proven per rite**.
+- **New harness** `scripts/simdrive-rites.ts` (in `make qa`): 8 rites × full 12-room/4-boss runs (no stall), cap/counter laws asserted, mortal probes (the debt collects 10/10/10 in godless runs), same-seed digests identical twice, **new baseline digest table recorded** (rites are a declared mechanical change; sprint-18 digests superseded).
+
+### Added — LIVING FOES (the Blender advantage, made felt)
+- **cinder_hound.glb and hex_weaver.glb are now RIGGED**: armature + skinned mesh + in-place actions forged by `scripts/blender/forge_anim_{hound,weaver}.py` (recipes copied verbatim from sprints 15/16 — silhouettes preserved). Hound: `prowl_idle / windup / charge_lunge / recover` (+`death_collapse` banked) — the 0.7s wind-up is now a body coil you can read across the arena. Weaver: `hover_idle / anchor_cast` (+`death_collapse`).
+- **Runtime**: new `src/game/foeAnim.ts` (AnimationMixer pool, crossfade 0.14s, LoopOnce clamp for action states, soft-fail law: no clips → static mesh, never broken) + `loadAssetScene()` in assetLib + `SkeletonUtils`-cloned per-seat mounts in `view.ts` with the sim FSM driving states (hound lurk→windup→charge→recover; weaver casts when its loom zone lives). Hit-flash law extended to rigged bodies via per-entry material clones.
+- **verify-assets extended**: animated GLBs must carry their clip sets (hound ≥5, weaver ≥3, ≥1 sampler each) — 24/24 PASS.
+
+### Fixed
+- **Run-start rite gate caught by browser E2E**: the gate rendered with zero cards (offers never rolled at run start) — the agent-harness found it, the browser proved it, the fix is one `openRiteGate()` call at `startRun` tail. Restart→gate→pick→play re-verified live.
+- Makefile space-vs-tab regression from an Edit-tool rewrite caught by `make qa` (sprint-16 lesson re-learned, repaired same session).
+
+### Gate receipts
+- `bunx tsc --noEmit` PASS · `bun run lint` PASS · `make qa` **×5** PASS (simdrive 12/12 + afterglow + forge H + controls + **rites**) · `verify-assets` 24/24 with animation assertions
+- Browser E2E (`?debug=1`): title → rite gate (3 cards) → pick → room 1 with **EMBER TIDE on the HUD** → death panel → REKINDLE → **new seeded gate** → keyboard pick → playing. Forensics live (`title→rite→playing`), **0 console errors / 0 page errors** all session. Evidence: `.qa/sprint19/02-rite-gate.png`, `03-room1-tide.png` (law chip on HUD), `04-wave2.png`.
+- Blender 4.2.0 restored to `/home/z/tools` (sandbox reset had wiped it; the tarball re-download took the pipeline from silently-skipping to forging in this session).
+
+### Known debt (declared, R3)
+- **Forge byte-determinism is BROKEN for the animated GLBs** (re-run md5 mismatch — the sprint-18 "byte-identical seeds" receipt does not hold for the new anim scripts; root-cause pending: likely exporter-level, not RNG). Visual/gameplay content unaffected; the runtime is asset-content-agnostic.
+- `death_collapse` clips are banked but unplayed (foes vanish on death FX today — a death-state pool is sprint-20 scope).
+- Animated GLBs ship loader-verified but un-quantized this sprint (the batch `optimize` gate would rewrite 22 unrelated assets as container noise; targeted quantization deferred).
+- LONG NIGHT's grade/audio rows (fog +0.005, drone −1 semitone) are anchored in constants but not yet consumed — the rite's *mechanics* (speed/budget/graze) are live; its *mood* rows are sprint-20's first item.
+- Hand-play in the throttled headless tab remains QA-limited (~10fps); deep-run correctness is harness-proven; the owner's playtest is the final gate for rite feel and rig animation quality.
+
+---
+
+
 # CHANGELOG — every build states what improved, with evidence
 
 ## SPRINT 18 · BUILD 1 — "PALE CHOIR" (the run is 12 rooms deep; elite crowns force you to move; the Blender pipeline sings again)

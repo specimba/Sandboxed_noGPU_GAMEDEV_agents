@@ -27,6 +27,7 @@ import {
   type BoonDef,
 } from './run';
 import { mulberry32 } from './rng';
+import { baseRites, mergeRites, RITES, rollRiteOffers, type RiteDef } from './rites';
 import { Scene } from './scene';
 import { Sim, type FoeKind, type SimEvents } from './sim';
 import { loadBest, loadMeta, saveBest, saveMeta, useGameStore } from './store';
@@ -178,6 +179,12 @@ export class Engine {
   private bossesKilled = 0;
   private boonsTaken: Record<string, number> = {};
   private lastBoonChoices: BoonDef[] = [];
+  /* ---- RITES OF THE MANY SUNS (sprint 19-a) ---- */
+  private ritesTaken: string[] = [];
+  private lastRiteChoices: RiteDef[] = [];
+  /** EMBER DEBT — dawn burned off the payout by wounds (settled at run end) */
+  private dawnDebt = 0;
+  private dawnBurnId = 0;
   /** biome arrival beat armed — the next ROOM banner is redundant (the
    *  arrival banner already named the place) and is skipped exactly once */
   private arrivalHold = false;
@@ -297,9 +304,16 @@ export class Engine {
     this.scene.floorPulse(this.sim.px, this.sim.pz);
     this.store.getState().showBanner(biomeName(0), 'THE DESCENT BEGINS', 'biome');
     this.rig.engage(this.sim.px, this.sim.pz);
-    this.sim.startRoom(0, 1);
+    // RITES OF THE MANY SUNS (19-a) — every descent begins with a law;
+    // the room itself starts when the law is chosen (beginRoomAfterRite)
+    this.ritesTaken = [];
+    this.dawnDebt = 0;
+    this.sim.rites = baseRites();
     this.store.getState().set({
-      phase: 'playing',
+      phase: 'rite',
+      ritesActive: [],
+      riteChoices: [],
+      dawnBurn: null,
       score: 0,
       wave: 1,
       embers: this.sim.embers,
@@ -319,6 +333,7 @@ export class Engine {
       mutatorLabel: this.sim.mutator.name,
       roomLabel: `${biomeName(0)} · ROOM 1`,
     });
+    this.openRiteGate(); // the descent begins with a law (19-a run-start gate)
   }
 
   restart(): void {
@@ -364,6 +379,50 @@ export class Engine {
     this.advanceRoom();
   }
 
+  /* ---- rites of the many suns (sprint 19-a) ---- */
+
+  /** the biome gate: 1 of 3 seeded laws, picked before the biome's first room */
+  private openRiteGate(): void {
+    const gateRng = mulberry32((this.sim.seed ^ (0x51ce * (this.runBiome + 1))) >>> 0);
+    this.lastRiteChoices = rollRiteOffers(this.ritesTaken, 3, this.runBiome, gateRng);
+    this.store.getState().set({
+      phase: 'rite',
+      riteChoices: this.lastRiteChoices.map((r) => ({ id: r.id, name: r.name, desc: r.desc, law: r.lawLine })),
+    });
+  }
+
+  chooseRite(i: number): void {
+    if (this.store.getState().phase !== 'rite') return;
+    const def = this.lastRiteChoices[i];
+    if (!def) return;
+    this.ritesTaken.push(def.id);
+    this.sim.rites = mergeRites(this.ritesTaken);
+    // HUD chip row — every taken law stays on screen for the whole run
+    this.store.getState().set({
+      ritesActive: this.ritesTaken.map((id) => {
+        const d = RITES.find((x) => x.id === id);
+        return { name: d?.name ?? id, law: d?.chip ?? '' };
+      }),
+    });
+    this.store.getState().pushToast(`${def.name} — ${def.chip}`, 'gold');
+    this.audio.shrine(); // SPRINT19-C anchor: per-rite activation stinger replaces the shrine chime
+    this.beginRoomAfterRite();
+  }
+
+  private beginRoomAfterRite(): void {
+    this.sim.startRoom(this.runBiome, this.runRoom);
+    this.input.clearEdges(); // a stale edge from the gate must never fire in play
+    this.dashBufT = 0;
+    this.store.getState().set({
+      phase: 'playing',
+      riteChoices: [],
+      bossBar: null,
+      mutatorLabel: this.sim.mutator.name,
+      embersMax: this.sim.maxEmbers,
+      roomLabel: `${biomeName(this.runBiome)} · ${isBossRoom(this.runRoom) ? 'BOSS' : 'ROOM ' + this.runRoom}`,
+    });
+  }
+
   private advanceRoom(): void {
     this.runRoom += 1;
     this.runT = 0;
@@ -391,6 +450,12 @@ export class Engine {
         ARRIVAL_KICKERS[Math.min(ARRIVAL_KICKERS.length - 1, Math.max(0, this.runBiome))],
         'biome',
       );
+    }
+    // RITES OF THE MANY SUNS (19-a) — a new biome demands a new law first;
+    // the room starts when the law is chosen (beginRoomAfterRite)
+    if (this.runRoom === 1) {
+      this.openRiteGate();
+      return;
     }
     this.sim.startRoom(this.runBiome, this.runRoom);
     this.input.clearEdges(); // Escape pressed during the shrine must not pause the next room
@@ -420,7 +485,8 @@ export class Engine {
 
   /** bank dawn + best at run end (death or victory) */
   private finishRun(won: boolean): void {
-    const dawn = dawnEarned(this.sim.score, this.roomsCleared, this.bossesKilled, won);
+    // EMBER DEBT (19-a) — wounds burned dawn straight off the payout (min 0)
+    const dawn = Math.max(0, dawnEarned(this.sim.score, this.roomsCleared, this.bossesKilled, won) - this.dawnDebt);
     const st = this.store.getState();
     const meta = { dawn: st.dawn + dawn, unlocked: st.unlocked };
     saveMeta(meta);
@@ -682,6 +748,35 @@ export class Engine {
         this.rings.fire(x, z, 1.8, 0.3, CINDER_C);
         this.audio.emberDrop(x, z);
       },
+      /* ---- RITES OF THE MANY SUNS (19-a) — existing-pipe responses;
+       * SPRINT19-C anchor: dedicated stingers/grades upgrade these ---- */
+      onMeteorImpact: (x, z) => {
+        this.audio.hexDetonate(true);
+        this.rig.addShake(0.1);
+        this.rings.fire(x, z, 4.6, 0.45, 0xffc766);
+        this.fx.burst(x, z, 40, 12, { color: GOLD_C, life: 0.5, size: 0.5, up: 0.3 });
+      },
+      onChainDetonate: (x, z, depth) => {
+        this.audio.shieldBreak(); // death-light crackle (spark-sfx reuse debt)
+        this.rings.fire(x, z, 3.0, 0.3 + depth * 0.05, 0xff7a3d);
+        this.fx.burst(x, z, 24, 10, { color: new THREE.Color(0xff7a3d), life: 0.4, size: 0.45, up: 0.25 });
+      },
+      onPhantomSpawn: (x, z) => {
+        this.audio.shardGain();
+        this.rings.fire(x, z, 2.2, 0.4, 0xfff4dc);
+        this.fx.burst(x, z, 30, 9, { color: EMBER_C, life: 0.5, size: 0.45, up: 0.4 });
+      },
+      onWallSlam: (x, z) => {
+        this.audio.ccStun();
+        this.rig.addShake(0.14);
+        this.rings.fire(x, z, 2.6, 0.3, 0xffe9a0);
+        this.fx.burst(x, z, 30, 11, { color: WHITE_C, life: 0.35, size: 0.45 });
+      },
+      onDawnBurn: (amount) => {
+        this.dawnDebt += amount;
+        this.store.getState().set({ dawnBurn: { id: ++this.dawnBurnId, amount } });
+        this.store.getState().pushToast(`THE DEBT COLLECTS — −${amount} DAWN`, 'red');
+      },
       onPlayerRoot: (x, z, dur) => {
         this.audio.rootBind();
         this.rig.addShake(0.1);
@@ -780,7 +875,7 @@ export class Engine {
       return;
     }
 
-    if (phase === 'paused' || phase === 'dead' || phase === 'reward') {
+    if (phase === 'paused' || phase === 'dead' || phase === 'reward' || phase === 'rite') {
       // the overlays advertise their keys — ESC — RESUME / ENTER — REKINDLE —
       // so those keys MUST work here. Everything else is discarded per frame:
       // a stale edge must never fire on re-entry into play.

@@ -60,6 +60,7 @@ export default function Overlays() {
   const wave = useGameStore((s) => s.wave);
   const muted = useGameStore((s) => s.muted);
   const boonChoices = useGameStore((s) => s.boonChoices);
+  const riteChoices = useGameStore((s) => s.riteChoices);
   const won = useGameStore((s) => s.won);
   const dawnEarned = useGameStore((s) => s.dawnEarned);
   const dawn = useGameStore((s) => s.dawn);
@@ -79,6 +80,61 @@ export default function Overlays() {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [phase]);
+
+  // keyboard: 1-3 pick rites (sprint 19-a)
+  useEffect(() => {
+    if (phase !== 'rite') return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.code === 'Digit1') getEngine()?.chooseRite(0);
+      else if (e.code === 'Digit2') getEngine()?.chooseRite(1);
+      else if (e.code === 'Digit3') getEngine()?.chooseRite(2);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [phase]);
+
+  if (phase === 'rite') {
+    return (
+      <div className="hs-overlay-scrim absolute inset-0 z-30 flex items-center justify-center px-4">
+        <div className="flex w-full max-w-3xl flex-col items-center gap-5">
+          {/* header between hairlines */}
+          <div className="flex w-full items-center gap-4">
+            <span aria-hidden="true" className="hs-hairline flex-1" />
+            <h2 className="hs-tracking whitespace-nowrap text-sm text-[#ffc766] sm:text-base">
+              RITE OF THE MANY SUNS
+            </h2>
+            <span aria-hidden="true" className="hs-hairline flex-1" />
+          </div>
+          <p className="hs-tracking text-center text-[9px] text-[#f2e6cf]/50">
+            CHOOSE THE LAW THAT REWRITES THIS DESCENT — IT HOLDS UNTIL THE RUN ENDS
+          </p>
+
+          <div className="grid w-full grid-cols-1 gap-3 sm:grid-cols-3">
+            {riteChoices.map((r, i) => (
+              <button
+                key={r.id}
+                type="button"
+                onClick={() => getEngine()?.chooseRite(i)}
+                className="hs-frame hs-frame--lurk hs-panel relative flex flex-col gap-2 p-4 text-left transition-colors hover:border-[rgba(255,196,120,0.45)] hover:bg-[rgba(255,199,102,0.05)]"
+              >
+                <span aria-hidden="true" className="hs-c" />
+                <span aria-hidden="true" className="absolute inset-x-0 top-0 h-[2px]" style={{ background: '#ffc766' }} />
+                <span className="flex items-center justify-between gap-2">
+                  <span className="hs-tracking text-[9px] uppercase text-[#ffc766]">RITE</span>
+                  <span className="hs-tracking rounded-[2px] border border-[#ffc76655] px-1.5 py-0.5 text-[9px] text-[#ffc766]">
+                    [{i + 1}]
+                  </span>
+                </span>
+                <span className="hs-tracking text-sm text-[#f2e6cf]">{r.name}</span>
+                <span className="hs-tracking text-[9px] text-[#ffc766]/90">{r.law}</span>
+                <span className="text-[11px] leading-4 text-[#f2e6cf]/60">{r.desc}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   if (phase === 'reward') {
     return (

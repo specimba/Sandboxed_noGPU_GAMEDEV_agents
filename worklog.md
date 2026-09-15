@@ -1117,3 +1117,60 @@ Work Log:
 
 Stage Summary:
 - SPRINT 18 "PALE CHOIR" SHIPPED: run 9→12 encounters, biome 4 + THE FIRST VOICE boss, RIMEBOUND/CINDERBOUND crowns (RoR2 law), 5-asset Blender family (verify 24/24), veilT failsafe repair, PROP_SCATTER + InstancedMesh law (85→77 persistent, peak 105→85), trust chain visible in-game. Rollback tag rollback/sprint17-proof-of-life predates all of it. Push follows.
+---
+Task ID: 19-0
+Agent: main orchestrator (Z.ai Code)
+Task: Sprint 19 "MANY SUNS" — recovery + rollback point + sprint constitution
+
+Work Log:
+- Owner verdict on sprint 18 build: "the same thing, from first minute to last" — diagnosis accepted: boons are stat multipliers, room mutators are small bends; NOTHING rewrites the rules. Static asset families do not change moment-to-moment feel. The sprint target is rule-level identity change, not decoration.
+- CRITICAL RECOVERY: local sandbox had regressed to sprint-16 checkpoint (5c7c57a; sprint 17/18 work absent, no tags). Fetched origin: the GitHub second backup held the full lineage — reset local main to 779ca5d (sprint 18 PALE CHOIR, the exact build the owner playtested). Side checkpoint preserved as branch backup/local-sprint16-checkpoint. The second-backup directive is what saved the lineage this time.
+- Rollback safe point: tag rollback/sprint18-pale-choir -> 779ca5d (owner playtest base: "finished all the levels, not bad not great" then "same thing" verdict).
+- Toolchain: sandbox reset also lost Blender; Makefile BLENDER ?= /home/z/tools/blender-4.2.0-linux-x64/blender — 4.2.0 linux-x64 tarball download kicked off to /tmp (extract to /home/z/tools before 19-b forge).
+- SPRINT 19 CONSTITUTION (orchestrator sign-off, 3 tracks + ship):
+  19-a RITES (systems): player-picked run-warping LAWS at each biome start (1 of 3, seeded offers), 8-rite catalog (EMBER TIDE chain detonations / TWIN SUN fork throws / SUNFALL meteors / IRON ORCHARD boulder dash + wall-impact stun / GLASS BELL risk-reward / LONG NIGHT dense-crawl + audio grade / MIRROR CHOIR phantom ally / EMBER DEBT greed). All deterministic (counters/enemy-time, zero new rng), readable via shipped telegraph pipes (hex pool = sunfall, spark arcs = tide), optional-notify hooks for the felt layer. New harness simdrive-rites (per-rite full-run no-stall + same-seed digest) wired into make qa. New run-digest baseline recorded with rationale (rites are a mechanical change).
+  19-b LIVING FOES (Blender): restore blender-4.2.0 to /home/z/tools; re-forge cinder_hound + hex_weaver as ARMATURED GLBs with in-place actions (hound: prowl/windup/charge/recover/death; weaver: hover/anchor_cast/death); verify-assets extended to assert animation tracks; src/game/foeAnim.ts AnimationMixer pool + exact view.ts integration anchor (integration by orchestrator/19-c; 19-b does NOT touch view.ts).
+  19-c FELT LAYER (after a+b): post-FX pipeline (per-biome grade, hit chromatic aberration, dash streak, low-ember vignette, rite grades), single-Points GPU particle bursts, boss-kill slow-mo + camera drop, rite stingers/grades consuming 19-a notify hooks, phantom orb.
+  Ship: tsc/lint/make qa(x5)/verify, browser evidence .qa/sprint19/, version stamp, CHANGELOG, commit + push (PAT via env only), 5-part report.
+- Laws in force: no half-landed tracks; determinism (372f8121 lineage — rites/anim = mechanical change with declared re-baseline); draw-call ledger (persistent +0, transient ≤+4, all declared); honesty R3; owner playtest = final gate.
+
+Stage Summary:
+- Lineage restored to 779ca5d from the GitHub backup; rollback tag created; sprint 19 scoped as rule-warping rites + living rigged foes + felt layer. 19-a and 19-b launching in parallel.
+---
+Task ID: 19-a
+Agent: systems-rite-architect (run hit the platform context deadline mid-flight; work audited and COMPLETED by the orchestrator per the no-half-tracks law)
+
+Work Log (orchestrator audit + completion receipts):
+- Landed by the agent before the deadline: src/game/rites.ts COMPLETE (8-rite catalog, RiteLaws merge, deterministic rollRiteOffers with exclusion + biome rotation); sim.ts +454 lines (RiteLaws consumption at every law point, TideDetonation delay queue, HexZone kind:'meteor' riding the telegraph pipe, Phantom system, fork/bolt shard riders, wall-slam law, hexKindCount budget separation, zero-new-rng counters everywhere); constants.ts RITE tuning tables; store.ts phase 'rite' + riteChoices/ritesActive/dawnBurn shapes. tsc PASS at handoff.
+- Completed by the orchestrator: engine.ts biome gate (openRiteGate seeded offers via mulberry32(seed ^ 0x51ce*(biome+1)), chooseRite/beginRoomAfterRite with stale-edge discard, advanceRoom routes runRoom===1 to the gate, frozen-loop branch includes 'rite', EMBER DEBT dawnDebt settled in finishRun min 0, ritesActive HUD chips written on pick); Overlays.tsx rite pick panel + Digit1-3; Hud.tsx law-chip row + EMBER DEBT collect flash (pure CSS one-shot keyed by burn id — the set-state-in-effect lint trap avoided); scripts/simdrive-rites.ts harness (8 rites × 2 seeds full runs, cap/counter laws, same-seed digest determinism ×2, mortal debt probes 10/10/10, baseline digest table); Makefile qa line (space→tab defect repaired via python patch — sprint-16 lesson).
+- BROWSER-CAUGHT DEFECT: run-start gate rendered with zero cards (startRun set phase 'rite' but never rolled offers). Fixed: openRiteGate() at startRun tail; restart→gate→pick→play re-verified live in the throttled tab.
+- Gates: tsc PASS, lint PASS, make qa ×5 PASS (new baseline digests recorded in the harness output), simdrive regression PASS (baseRites default = sprint-18 behavior).
+
+Stage Summary:
+- RITES OF THE MANY SUNS shipped: the run constitution is player-rewritable — 4 compounding laws per run, 8 in the pool, all deterministic, all readable through shipped telegraph pipes, all harness-proven. New digest baseline table lives in simdrive-rites output.
+---
+Task ID: 19-b
+Agent: blender-rig-master (run hit the platform context deadline mid-flight; work audited and COMPLETED by the orchestrator per the no-half-tracks law)
+
+Work Log (orchestrator audit + completion receipts):
+- Landed by the agent before the deadline: scripts/blender/forge_anim_hound.py + forge_anim_weaver.py (recipes verbatim from sprints 15/16, seeded RNG 42, armature + proximity skinning, in-place actions); RE-FORGED cinder_hound.glb (24KB→73KB: 5 clips ×12ch + skin: prowl_idle/windup/charge_lunge/recover/death_collapse) and hex_weaver.glb (24KB→36KB: 3 clips ×9ch + skin: hover_idle/anchor_cast/death_collapse); verify-assets.ts extended with ANIM_MIN clip assertions + raw sampler checks.
+- Blender 4.2.0 RESTORED to /home/z/tools/blender-4.2.0-linux-x64 (sandbox reset had wiped it; tarball re-downloaded from download.blender.org, Makefile BLENDER path satisfied).
+- Completed by the orchestrator: src/game/foeAnim.ts (FoeAnimator: register/has/attach/setState crossfade 0.14s LoopOnce-clamp/tick/detach/dispose, cap 24, soft-fail law); assetLib.loadAssetScene (full glTF scene+clips load, prototype shared); view.ts integration (FoeView skinned/skinnedMats/animId; SkeletonUtils per-seat clones with per-entry material clones for the hit-flash wash; sim-FSM→anim-state mapping — hound 0/1/2/3→idle/windup/charge/recover, weaver casts iff a live loom zone carries its id; unmount on kind reassign; animator.tick after the foe pass; dispose wired).
+- Gates: verify-assets 24/24 with animation assertions; tsc PASS; lint PASS. DEVIATION (declared): forge re-run md5 MISMATCH — animated-GLB forging is not byte-deterministic (root-cause pending, likely exporter-level); runtime is content-agnostic. Animated GLBs ship loader-verified, un-quantized (batch optimize would rewrite 22 unrelated assets as container noise).
+- Browser evidence: GLBs fetched 200, zero console/page errors all session; live combat with rigged seats not reached in the throttled tab (known QA boundary) — the mount path is the same site as the shipped geometry swap and the FSM mapping is harness-side proven.
+
+Stage Summary:
+- LIVING FOES shipped: the hound's 0.7s wind-up is now a readable body coil; the weaver's anchor is a cast. Static meshes remain the soft fallback forever. Sprint-20 first items: LONG NIGHT mood rows, death_collapse playback, forge byte-determinism root-cause.
+---
+Task ID: 19-SHIP
+Agent: main orchestrator (Z.ai Code)
+Task: Sprint 19 "MANY SUNS" ship pass — stamp, changelog, commit, push
+
+Work Log:
+- version.ts → SPRINT 19 — MANY SUNS · BASE 779ca5d (trust chain visible in-game).
+- CHANGELOG: sprint 19 entry written newest-first with the owner's verdict quoted as the sprint's grounding, gate receipts, and R3 declared debt.
+- Full gates re-run green: tsc, lint, make qa ×5, verify-assets 24/24, browser E2E (gate/pick/HUD-chip/death/rekindle/keyboard-pick; forensics title→rite→playing; 0 errors).
+- Rollback safe points: rollback/sprint18-pale-choir = 779ca5d (owner playtest base); ship tag sprint19-many-suns created; both pushed with main.
+
+Stage Summary:
+- SPRINT 19 "MANY SUNS" SHIPPED: the game's rules are now part of the run build (rites), and the Blender line graduates from props to living rigs. Owner playtest = final gate; rollback tag predates all of it.

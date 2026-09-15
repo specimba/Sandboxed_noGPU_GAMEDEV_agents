@@ -1,5 +1,7 @@
 import * as THREE from 'three';
-import { loadAssetGeometry } from './assetLib';
+import { loadAssetGeometry, loadAssetScene } from './assetLib';
+import { FoeAnimator, type AnimKind } from './foeAnim';
+import * as SkeletonUtils from 'three/examples/jsm/utils/SkeletonUtils.js';
 import { ARENA, CC, CINDER, COLORS, FOE, HEX, HOUND, RIME } from './constants';
 import type { FoeKind, Sim } from './sim';
 import { makeGlowTexture, ParticlePool } from './fx';
@@ -156,6 +158,11 @@ interface FoeView {
   core: THREE.Mesh; // weaver's inner light
   plate: THREE.Mesh; // bulwark frontal armor
   kind: FoeKind;
+  /* LIVING FOES (sprint 19-b) — the skinned override for rigged kinds.
+   * null = static mesh law (fallback / not-yet-arrived asset). */
+  skinned: THREE.Group | null;
+  skinnedMats: THREE.MeshStandardMaterial[]; // per-entry clones for the hit-flash wash
+  animId: number; // FoeAnimator key (stable per pool seat)
 }
 
 interface HexView {
@@ -297,6 +304,10 @@ export class View {
   private shardMat: THREE.ShaderMaterial;
 
   private foePool: FoeView[] = [];
+  /* LIVING FOES (sprint 19-b) — rigged prototypes + per-foe mixer pool */
+  private animator = new FoeAnimator();
+  private protos = new Map<AnimKind, THREE.Group>();
+  private animSeq = 0;
   private plateGeo = new THREE.BoxGeometry(2.3, 1.7, 0.22);
   private coreGeo = new THREE.OctahedronGeometry(0.28, 0);
   private coreMat = coreMaterial(0xffaebf);
@@ -474,7 +485,7 @@ export class View {
       group.add(plate);
       group.visible = false;
       scene.add(group);
-      this.foePool.push({ group, mesh, mat, baseEmisK: FOE_STYLE.drifter.emisK ?? 0, baseRim: new THREE.Color(FOE_STYLE.drifter.rim ?? 0xffffff), flashT: 0, glow, core, plate, kind: 'drifter' });
+      this.foePool.push({ group, mesh, mat, baseEmisK: FOE_STYLE.drifter.emisK ?? 0, baseRim: new THREE.Color(FOE_STYLE.drifter.rim ?? 0xffffff), flashT: 0, glow, core, plate, kind: 'drifter', skinned: null, skinnedMats: [], animId: ++this.animSeq });
     }
 
     // ---- bullets (one draw call) — hot-core diamonds with a dark edge so
@@ -749,6 +760,33 @@ export class View {
       FOE_GEO.weaver = geo; // Blender-tier hex lattice loom (shared, never disposed)
       for (const v of this.foePool) if (v.kind === 'weaver') v.mesh.geometry = geo;
     });
+
+    // ---- LIVING FOES (sprint 19-b): rigged GLBs replace the static bodies
+    // ---- for hound + weaver; geometry above stays as the soft fallback
+    void loadAssetScene('cinder_hound').then((asset) => {
+      if (!asset || this.disposed) return;
+      if (!this.animator.register('hound', asset.clips)) return; // no clips → static law holds
+      const proto = asset.scene;
+      proto.updateMatrixWorld(true);
+      const bb = new THREE.Box3().setFromObject(proto);
+      const size = bb.getSize(new THREE.Vector3());
+      const k = 1.7 / Math.max(0.001, size.y); // match the lean wedge footprint (static law)
+      proto.scale.setScalar(k);
+      this.protos.set('hound', proto);
+      for (const v of this.foePool) if (v.kind === 'hound') this.mountSkinned(v, 'hound');
+    });
+    void loadAssetScene('hex_weaver').then((asset) => {
+      if (!asset || this.disposed) return;
+      if (!this.animator.register('weaver', asset.clips)) return;
+      const proto = asset.scene;
+      proto.updateMatrixWorld(true);
+      const bb = new THREE.Box3().setFromObject(proto);
+      const size = bb.getSize(new THREE.Vector3());
+      const k = 1.5 / Math.max(0.001, Math.max(size.x, size.y)); // match the weaver ring footprint (static law)
+      proto.scale.setScalar(k);
+      this.protos.set('weaver', proto);
+      for (const v of this.foePool) if (v.kind === 'weaver') this.mountSkinned(v, 'weaver');
+    });
   }
 
   /* ---------------------------------------------------------------- */
@@ -759,6 +797,44 @@ export class View {
     const style = FOE_STYLE[kind];
     const mat = stylizedMaterial(style);
     return mat;
+  }
+
+  /* ---------------- LIVING FOES (sprint 19-b) ---------------- */
+
+  /** swap a pool seat's static mesh for its rigged clone (soft-fail: the
+   *  static body stays whenever the prototype/clips are missing) */
+  private mountSkinned(v: FoeView, kind: AnimKind): void {
+    const proto = this.protos.get(kind);
+    if (!proto || v.skinned) return;
+    const inst = SkeletonUtils.clone(proto) as THREE.Group;
+    const mats: THREE.MeshStandardMaterial[] = [];
+    inst.traverse((o) => {
+      const m = o as THREE.Mesh & { frustumCulled?: boolean; material?: THREE.Material | THREE.Material[] };
+      if (!m.isMesh) return;
+      m.frustumCulled = false; // skinned bboxes lie — never cull a rig
+      const src = m.material as THREE.MeshStandardMaterial;
+      const cloned = (src.clone?.() ?? src) as THREE.MeshStandardMaterial; // per-entry flash wash
+      m.material = cloned;
+      for (const mm of Array.isArray(cloned) ? cloned : [cloned]) {
+        if (mm && (mm as THREE.MeshStandardMaterial).emissive) mats.push(mm as THREE.MeshStandardMaterial);
+      }
+    });
+    v.skinned = inst;
+    v.skinnedMats = mats;
+    v.group.add(inst);
+    v.mesh.visible = false;
+    this.animator.attach(v.animId, inst, kind);
+  }
+
+  /** restore the static body (kind reassignment / dispose) */
+  private unmountSkinned(v: FoeView): void {
+    if (!v.skinned) return;
+    this.animator.detach(v.animId);
+    v.group.remove(v.skinned);
+    for (const m of v.skinnedMats) m.dispose();
+    v.skinned = null;
+    v.skinnedMats = [];
+    v.mesh.visible = true;
   }
 
   /** per-foe hit-flash: light up the pool entry nearest the hit (event-time,
@@ -928,6 +1004,7 @@ export class View {
       if (fi >= this.foePool.length) break;
       const v = this.foePool[fi++];
       if (v.kind !== f.kind) {
+        this.unmountSkinned(v); // a seat changing kind always restores the static law first
         v.kind = f.kind;
         v.mesh.geometry = FOE_GEO[f.kind];
         v.mesh.material = this.foeMatFor(f.kind);
@@ -940,6 +1017,10 @@ export class View {
         (v.glow.material as THREE.SpriteMaterial).opacity = heartDef.opacity;
         v.glow.scale.setScalar(heartDef.scale);
         v.core.visible = f.kind === 'weaver';
+        // LIVING FOES — take the rigged body the moment it is available
+        if ((f.kind === 'hound' || f.kind === 'weaver') && this.animator.has(f.kind) && this.protos.has(f.kind)) {
+          this.mountSkinned(v, f.kind);
+        }
       }
       v.plate.visible = f.kind === 'bulwark' && f.spawnT <= 0;
       v.group.visible = true;
@@ -984,15 +1065,36 @@ export class View {
         v.mesh.scale.setScalar(1);
       }
 
+      // LIVING FOES — the rig follows the sim FSM (view-layer only: the
+      // digest never sees this). hound: lurk→windup→charge→recover;
+      // weaver: a live loom zone = the anchor cast.
+      if (v.skinned) {
+        if (f.kind === 'hound') {
+          this.animator.setState(v.animId, f.state === 1 ? 'windup' : f.state === 2 ? 'charge' : f.state === 3 ? 'recover' : 'idle');
+        } else if (f.kind === 'weaver') {
+          const casting = sim.hexes.some((h) => h.weaverId === f.id && h.kind !== 'meteor');
+          this.animator.setState(v.animId, casting ? 'cast' : 'idle');
+        }
+      }
+
       // per-foe hit-flash — the shell answers the hit that landed
       if (v.flashT > 0) {
         v.flashT -= dt;
         const fk = Math.max(0, v.flashT / FLASH_TIME);
-        v.mat.uniforms.uEmisK.value = v.baseEmisK + 0.9 * fk;
-        (v.mat.uniforms.uRim.value as THREE.Color).copy(v.baseRim).lerp(FLASH_RIM, fk);
+        if (v.skinned) {
+          // rigged body: wash the cloned standard materials' emissive
+          for (const m of v.skinnedMats) m.emissive.copy(FLASH_RIM).multiplyScalar(0.9 * fk);
+        } else {
+          v.mat.uniforms.uEmisK.value = v.baseEmisK + 0.9 * fk;
+          (v.mat.uniforms.uRim.value as THREE.Color).copy(v.baseRim).lerp(FLASH_RIM, fk);
+        }
         if (v.flashT <= 0) {
-          v.mat.uniforms.uEmisK.value = v.baseEmisK;
-          (v.mat.uniforms.uRim.value as THREE.Color).copy(v.baseRim);
+          if (v.skinned) {
+            for (const m of v.skinnedMats) m.emissive.setScalar(0);
+          } else {
+            v.mat.uniforms.uEmisK.value = v.baseEmisK;
+            (v.mat.uniforms.uRim.value as THREE.Color).copy(v.baseRim);
+          }
         }
       }
 
@@ -1121,6 +1223,9 @@ export class View {
     }
     for (let i = hi; i < this.hexPool.length; i++) this.hexPool[i].group.visible = false;
 
+    // LIVING FOES — advance the rigs (after the foe pass, once per frame)
+    this.animator.tick(dt);
+
     // CINDERBOUND wake — burning patches gutter in the ember family
     let ci = 0;
     for (const c of sim.cinders) {
@@ -1168,6 +1273,8 @@ export class View {
 
   dispose(): void {
     this.disposed = true;
+    this.animator.dispose();
+    for (const f of this.foePool) this.unmountSkinned(f);
     this.scene.remove(this.playerGroup, this.bulletPoints, this.heavyPoints, this.veilPoints, this.reticle);
     for (const s of this.shardViews) {
       this.scene.remove(s.mesh);

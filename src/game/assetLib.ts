@@ -12,6 +12,33 @@ import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 
 const cache = new Map<string, Promise<THREE.BufferGeometry | null>>();
 
+/** full-scene load for the LIVING FOES (sprint 19-b): returns the glTF scene
+ *  root (armature + SkinnedMesh) and its animation clips. Clone per consumer
+ *  with SkeletonUtils — the resolved scene is the SHARED prototype. */
+const sceneCache = new Map<string, Promise<{ scene: THREE.Group; clips: THREE.AnimationClip[] } | null>>();
+
+export function loadAssetScene(name: string): Promise<{ scene: THREE.Group; clips: THREE.AnimationClip[] } | null> {
+  const hit = sceneCache.get(name);
+  if (hit) return hit;
+  const p = new Promise<{ scene: THREE.Group; clips: THREE.AnimationClip[] } | null>((resolve) => {
+    let loader: GLTFLoader;
+    try {
+      loader = new GLTFLoader();
+    } catch {
+      resolve(null);
+      return;
+    }
+    loader.load(
+      `assets/meshes/${name}.glb`,
+      (gltf) => resolve({ scene: gltf.scene as unknown as THREE.Group, clips: gltf.animations ?? [] }),
+      undefined,
+      () => resolve(null),
+    );
+  });
+  sceneCache.set(name, p);
+  return p;
+}
+
 /** load the first mesh geometry from assets/meshes/<name>.glb (null on miss) */
 export function loadAssetGeometry(name: string, recenter = false): Promise<THREE.BufferGeometry | null> {
   const hit = cache.get(name);

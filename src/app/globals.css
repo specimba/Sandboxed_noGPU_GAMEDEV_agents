@@ -352,6 +352,15 @@ main button:focus-visible {
 }
 .hs-pulse { animation: hsPulse 0.9s ease-in-out infinite; }
 
+/* EMBER DEBT (sprint 19-a) — one-shot collect flash: breathes in, fades out.
+   Re-keyed by the burn id (React key) — zero timers, zero state. */
+@keyframes hsDebtFlash {
+  0% { opacity: 0; }
+  18% { opacity: 1; }
+  100% { opacity: 0; }
+}
+.hs-debt-flash { opacity: 0; animation: hsDebtFlash 1.1s ease-out forwards; }
+
 /* white-hot overdrive cells */
 @keyframes hsSegHot {
   0%, 100% { opacity: 0.65; }

@@ -272,6 +272,70 @@ export const SCORE = {
   multDecay: 3.2, // seconds without a ricochet resets the chain
 };
 
+/* ------------------------------------------------------------------ */
+/* RITES OF THE MANY SUNS (sprint 19-a) — tuning for the run-warping   */
+/* laws in src/game/rites.ts. All behavior is counters + enemy-time    */
+/* timers: ZERO new rng (determinism law). Timers tick on ENEMY time   */
+/* (Overdrive slows the rites too — same law as BURN/HEX/CINDER).      */
+/*                                                                     */
+/* SPRINT19-C anchors (felt layer — 19-c consumes these):              */
+/*  - LONG NIGHT grade: fog density +0.005, sun dim ×0.85, drone       */
+/*    pitch −1 semitone while the rite is active.                      */
+/*  - SUNFALL meteors flow through sim.hexes with kind:'meteor' +      */
+/*    radius:4.5 — the view's hex pool must size/scale per-zone radius */
+/*    (current pool renders HEX.radius shapes; upgrade = view-only).   */
+/*  - MIRROR CHOIR phantom bolts ride the shard pool (sim.shards with  */
+/*    bolt:true) — widen the 6-seat shard view pool to cover forks +   */
+/*    bolts (shard identity keyed, not index keyed).                   */
+/* ------------------------------------------------------------------ */
+export const RITE = {
+  /** EMBER TIDE — corpse detonations (zero rng: pure delay queue) */
+  TIDE: {
+    fuse: 0.35, // enemy-time from death to burst
+    radius: 3, // burst radius (u)
+    dmg: 3,
+    burnStacks: 2, // applied to survivors (EMBER ROT stack pool)
+    chainCap: 8, // max detonation depth per chain event
+  },
+  /** TWIN SUN — fork shards on every 2nd throw (sim throw counter) */
+  TWIN: {
+    forkAngle: 0.42, // rad off the aim line, ±
+    forkDmg: 0.5, // × shard damage per fork
+    maxForks: 8, // live-fork ceiling — deterministic skip past the cap
+  },
+  /** SUNFALL — telegraphed meteors via the HexZone pipe (kind:'meteor') */
+  SUNFALL: {
+    every: 7, // enemy-time between volleys
+    volley: 3, // meteors per volley: 2 heaviest foes + 1 player-offset
+    telegraph: 0.9, // enemy-time ring before impact
+    radius: 4.5, // blast radius (u) — carries on the zone for the view
+    dmg: 4, // hits foes AND the ember
+    maxLive: 3, // live-meteor cap (perf + fairness guard)
+    playerOffset: 3, // u off the player's cast-time position (golden angle)
+    scoreMult: 1.5, // × score for meteor kills
+  },
+  /** IRON ORCHARD — wall-impact harvest (law numbers live in the rite) */
+  ORCHARD: {
+    slamDmg: 1,
+    slamStun: 0.5, // s — hard-capped at CC.stunTime
+    slamCd: 0.35, // enemy-time between slams on the same foe
+  },
+  /** MIRROR CHOIR — phantom allies (kill counter, deterministic orbit) */
+  CHOIR: {
+    everyKills: 5,
+    maxPhantoms: 2,
+    life: 6, // enemy-time
+    orbitR: 2.5,
+    orbitSpeed: 1.4, // rad/s, enemy time
+    goldenAngle: 2.399963, // spawn-angle spacing per kill index (no rng)
+    fireCd: 1.2, // enemy-time between bolts
+    boltDmg: 2,
+    boltTtl: 1.5, // enemy-time; bolts die at the wall — no ricochet
+    boltSpeed: 47, // raw SHARD.speed — phantoms carry no shard mods
+  },
+} as const;
+
+
 export const FEEL = {
   dashBuffer: 0.12, // a dash pressed this close to ready fires the frame it readies
   hitstopKill: 0.055,

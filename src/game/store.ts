@@ -3,7 +3,7 @@
 import { create } from 'zustand';
 import type { Tier } from './run';
 
-export type Phase = 'loading' | 'error' | 'title' | 'playing' | 'paused' | 'reward' | 'dead';
+export type Phase = 'loading' | 'error' | 'title' | 'rite' | 'playing' | 'paused' | 'reward' | 'dead';
 
 export interface Toast {
   id: number;
@@ -23,6 +23,19 @@ export interface BoonChoice {
   name: string;
   desc: string;
   tier: Tier;
+}
+
+/** RITES OF THE MANY SUNS (sprint 19-a) — pick-panel + HUD chip shapes */
+export interface RiteChoice {
+  id: string;
+  name: string;
+  desc: string;
+  law: string; // the merged-law summary line
+}
+
+export interface RiteChip {
+  name: string;
+  law: string; // one-word law reminder
 }
 
 export interface MetaState {
@@ -59,6 +72,11 @@ interface GameState {
   seed: number;
   boonsTaken: string[];
   boonChoices: BoonChoice[];
+  /** rites — the biome-gate pick panel + the active-law chip row */
+  riteChoices: RiteChoice[];
+  ritesActive: RiteChip[];
+  /** EMBER DEBT — dawn burned off the bank on the last wound (id-guarded flash) */
+  dawnBurn: { id: number; amount: number } | null;
   bossBar: { name: string; frac: number } | null;
   /** CC status — the ROOTED chip's state (the bind is ALWAYS on screen) */
   rooted: boolean;
@@ -118,6 +136,9 @@ export const useGameStore = create<GameState>()((set) => ({
   seed: 0,
   boonsTaken: [],
   boonChoices: [],
+  riteChoices: [],
+  ritesActive: [],
+  dawnBurn: null,
   bossBar: null,
   won: false,
   dawnEarned: 0,

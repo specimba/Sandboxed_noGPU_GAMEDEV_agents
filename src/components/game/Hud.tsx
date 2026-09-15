@@ -43,6 +43,8 @@ export default function Hud() {
   const playerSlow = useGameStore((s) => s.playerSlow);
   const rooted = useGameStore((s) => s.rooted);
   const rootT = useGameStore((s) => s.rootT);
+  const ritesActive = useGameStore((s) => s.ritesActive);
+  const dawnBurn = useGameStore((s) => s.dawnBurn);
 
   if (phase === 'loading' || phase === 'error' || phase === 'title') return null;
 
@@ -52,6 +54,15 @@ export default function Hud() {
     <div className="pointer-events-none absolute inset-0 z-10 select-none">
       {/* veil frost — the slow is a STATE you see on the screen edge */}
       {playerSlow > 0 && <div aria-hidden="true" className="hs-veil-vignette" />}
+      {/* EMBER DEBT — the collect flash: keyed by burn id, pure CSS one-shot */}
+      {dawnBurn && (
+        <div
+          key={dawnBurn.id}
+          aria-hidden="true"
+          className="hs-debt-flash absolute inset-0"
+          style={{ boxShadow: 'inset 0 0 90px rgba(255,90,74,0.35)' }}
+        />
+      )}
       {/* top center — score in an engraved panel (hidden on death/shrine
           panels so the big score is never duplicated behind them) */}
       {phase !== 'dead' && phase !== 'reward' && (
@@ -91,6 +102,11 @@ export default function Hud() {
         {boonsTaken.length > 0 && (
           <span className="hs-tracking max-w-36 py-1 text-[9px] leading-4 text-[#ffc766]/60 sm:max-w-48 sm:text-[10px]">
             {boonsTaken.join(' · ')}
+          </span>
+        )}
+        {ritesActive.length > 0 && playing && (
+          <span className="hs-tracking py-1 text-[9px] leading-4 text-[#ffc766] sm:text-[10px]">
+            {ritesActive.map((r) => r.name).join(' · ')}
           </span>
         )}
       </div>

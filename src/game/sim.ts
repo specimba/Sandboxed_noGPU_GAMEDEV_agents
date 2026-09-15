@@ -10,6 +10,7 @@ import {
   HOUND,
   OVERDRIVE,
   PLAYER,
+  RITE,
   RIME,
   RUN,
   SCORE,
@@ -18,6 +19,7 @@ import {
   WAVES,
   type Elite,
 } from './constants';
+import { baseRites, type RiteLaws } from './rites';
 import { mulberry32, type Rng } from './rng';
 import {
   baseMods,
@@ -84,6 +86,19 @@ export interface SimEvents {
   /** optional pure-notify: a CINDERBOUND foe dropped a burning wake patch at
  *  (x,z) — ring the pool, zero state writes (same law as onFoeHurt). */
   onCinderDrop?(x: number, z: number): void;
+  /* ---- RITES OF THE MANY SUNS (sprint 19-a) — optional pure-notify ----
+   * Zero rng, zero state writes outside the rite timers themselves —
+   * the same digest-safe law as onFoeHurt/onHexAnchor. */
+  /** a SUNFALL meteor struck at (x,z) — foe + ember blasts already applied */
+  onMeteorImpact?(x: number, z: number): void;
+  /** an EMBER TIDE corpse detonation at (x,z), chain depth d (cap 8) */
+  onChainDetonate?(x: number, z: number, depth: number): void;
+  /** a MIRROR CHOIR phantom materialized at (x,z) */
+  onPhantomSpawn?(x: number, z: number): void;
+  /** an IRON ORCHARD wall slam at (x,z) — 1 dmg + 0.5s stun already applied */
+  onWallSlam?(x: number, z: number): void;
+  /** EMBER DEBT — a wound burned `amount` dawn off the run bank (engine-side) */
+  onDawnBurn?(amount: number): void;
   onBossPhase(x: number, z: number, phase: number): void;
   onRevive(x: number, z: number): void;
   onWardenSpawn(x: number, z: number): void;
@@ -108,6 +123,12 @@ interface Shard {
   flown: number; // straight-flight distance, forces the return leg
   boost: number; // recall speed boost timer
   hitCd: Map<number, number>;
+  /* RITES (sprint 19-a) — transient shard-pool riders. They render for
+   * free through the existing shard pool; both die instead of orbiting. */
+  fork?: boolean; // TWIN SUN fork — 50% dmg, ricochets, vanishes on return
+  bolt?: boolean; // MIRROR CHOIR bolt — straight flight, no ricochet
+  ttl?: number; // bolt life (enemy time)
+  dead?: boolean; // swept at the end of updateShards (no mid-iteration splices)
 }
 
 interface Foe {
@@ -143,6 +164,7 @@ interface Foe {
   chillT: number; // >0: speed/act ×0.45
   hitCount: number; // deterministic CC trigger counter (never rng)
   eliteT: number; // CINDERBOUND wake accumulator (enemy time while moving)
+  slamT: number; // IRON ORCHARD wall-slam cooldown (enemy time; capped)
 }
 
 interface Bullet {
@@ -165,12 +187,17 @@ export interface SpawnMark {
 
 /** HEX LOOM zone — a named patch of floor; detonates when t expires.
  *  Rendered by the view's own pipe (parallel to marks: a zone is not a foe
- *  spawn and must never count into enemiesLeft). */
+ *  spawn and must never count into enemiesLeft).
+ *  SPRINT 19-a: kind:'meteor' rides the SAME pipe — SUNFALL telegraphs
+ *  render ring+fill for free; root logic skips them. `radius` carries the
+ *  blast size so the felt layer (19-c) can scale the telegraph per zone. */
 export interface HexZone {
   x: number;
   z: number;
   t: number; // seconds to detonation (enemy time)
   weaverId: number;
+  kind?: 'hex' | 'meteor'; // absent = 'hex' (weaver/First Voice loom)
+  radius?: number; // meteor blast radius (u); hexes use HEX.radius
 }
 
 /** CINDERBOUND wake patch — a burning footprint left by a moving crowned
@@ -181,6 +208,23 @@ export interface CinderPatch {
   z: number;
   life: number; // seconds until the patch burns out (enemy time)
   tick: number; // seconds to the next wound beat (enemy time)
+}
+
+/** EMBER TIDE — a corpse waiting to burst (delay queue, zero rng). */
+export interface TideDetonation {
+  x: number;
+  z: number;
+  t: number; // enemy-time to burst
+  depth: number; // chain depth (cap RITE.TIDE.chainCap)
+}
+
+/** MIRROR CHOIR — a phantom ally orbiting the ember (enemy-time script). */
+export interface Phantom {
+  angle: number; // deterministic orbit angle (advances on enemy time)
+  x: number;
+  z: number;
+  life: number; // enemy-time remaining
+  fireT: number; // enemy-time to the next bolt
 }
 
 const TAU = Math.PI * 2;
@@ -239,6 +283,39 @@ export class Sim {
    *  by dash. Ticks on PLAYER time. Public: engine + HUD read it. */
   veilT = 0;
   private nextId = 1;
+
+  /* ---------------------------------------------------------------- */
+  /* RITES OF THE MANY SUNS (sprint 19-a)                              */
+  /* Merged laws are engine-applied (mergeRites over the taken ids);    */
+  /* every behavior below is counters + enemy-time — ZERO new rng.      */
+  /* ---------------------------------------------------------------- */
+  /** the merged run laws — engine writes, sim reads */
+  rites: RiteLaws = baseRites();
+  /** EMBER TIDE — corpses waiting to burst (cleared with the room) */
+  pendingDetonations: TideDetonation[] = [];
+  /** MIRROR CHOIR — live phantom allies (cleared with the room) */
+  phantoms: Phantom[] = [];
+  /* run-scoped counters — public for the harness; reset() only */
+  throwCount = 0; // every 2nd throw forks (TWIN SUN)
+  killCount = 0; // every 5th kill sings a phantom (MIRROR CHOIR)
+  phantomSpawns = 0;
+  tideDetonations = 0;
+  tideMaxDepth = 0;
+  forksSpawned = 0;
+  forkSkips = 0; // deterministic skips at the 8-live-fork ceiling
+  forksLiveMax = 0;
+  meteorsCast = 0;
+  meteorsLiveMax = 0;
+  meteorHitsPlayer = 0;
+  wallSlams = 0;
+  phantomBolts = 0;
+  phantomBoltHits = 0;
+  phantomsLiveMax = 0;
+  /** >0 while a detonation chain is resolving — kills born inside it queue
+   *  at depth+1 (EMBER TIDE chain cap context; single-threaded by law) */
+  private tideCtx = 0;
+  private sunfallT = 0; // enemy-time cadence accumulator (reset per room)
+  private sunfallCast = 0; // golden-angle counter for the player-offset meteor
 
   // waves
   wave = 0;
@@ -318,6 +395,27 @@ export class Sim {
     this.time = 0;
     this.over = false;
     this.mutator = { id: '', name: '', desc: '', mods: defaultRoomMods() };
+    // RITES — run-scoped state dies with the run (laws are engine-owned)
+    this.pendingDetonations = [];
+    this.phantoms = [];
+    this.throwCount = 0;
+    this.killCount = 0;
+    this.phantomSpawns = 0;
+    this.tideDetonations = 0;
+    this.tideMaxDepth = 0;
+    this.forksSpawned = 0;
+    this.forkSkips = 0;
+    this.forksLiveMax = 0;
+    this.meteorsCast = 0;
+    this.meteorsLiveMax = 0;
+    this.meteorHitsPlayer = 0;
+    this.wallSlams = 0;
+    this.phantomBolts = 0;
+    this.phantomBoltHits = 0;
+    this.phantomsLiveMax = 0;
+    this.tideCtx = 0;
+    this.sunfallT = 0;
+    this.sunfallCast = 0;
   }
 
   addShard(): void {
@@ -349,6 +447,9 @@ export class Sim {
     this.marks.length = 0;
     this.hexes.length = 0;
     this.cinders.length = 0; // the wake never outlives its room
+    this.pendingDetonations.length = 0; // rites never outlive the room either
+    this.phantoms.length = 0;
+    this.sunfallT = 0; // the sky resets its cadence with the room
     this.crownUsed = false; // one crown per wave — a new wave may claim one
     this.pRootT = 0;
     this.spawnQueue.length = 0;
@@ -365,7 +466,7 @@ export class Sim {
       this.marks.push({ x: this.px + 10, z: this.pz, t: 1.6, kind: 'warden' });
       this.events.onWaveStart(this.wave);
     } else {
-      const budget = Math.round(roomBudget(biome, room) * (1 + this.mutator.mods.budget));
+      const budget = Math.round(roomBudget(biome, room) * (1 + this.mutator.mods.budget) * this.rites.waveBudget);
       this.spawnQueue = this.buildWaveQueue(this.wave, budget);
       this.events.onWaveStart(this.wave);
     }
@@ -384,7 +485,11 @@ export class Sim {
   }
 
   get shardCount(): number {
-    return this.shards.length;
+    // orbit-capable shards only — TWIN SUN forks + CHOIR bolts are transient
+    // riders on the pool and never count toward gains or the HUD pips
+    let n = 0;
+    for (const s of this.shards) if (!s.fork && !s.bolt) n++;
+    return n;
   }
 
   get mult(): number {
@@ -431,6 +536,9 @@ export class Sim {
     this.updateMarks(enemyDt);
     this.updateHexes(enemyDt);
     this.updateCinders(enemyDt);
+    this.updateTide(enemyDt);
+    this.updateSunfall(enemyDt);
+    this.updatePhantoms(enemyDt);
     this.updateWave(dt);
 
     // chain decay
@@ -466,10 +574,12 @@ export class Sim {
         this.veilT = 0;
         this.events.onCleanse?.(this.px, this.pz);
       }
-      // dash-recall: airborne shards whip home at 1.5× speed
+      // dash-recall: airborne shards whip home at 1.5× speed (CHOIR bolts
+      // are not the player's — they keep their line)
       let recalled = false;
       for (const s of this.shards) {
         if (s.state !== 'orbit') {
+          if (s.bolt) continue;
           s.state = 'return';
           s.targetId = -1;
           s.boost = 1;
@@ -499,7 +609,7 @@ export class Sim {
       this.dashDx = dx;
       this.dashDz = dz;
       this.dashT = PLAYER.dashTime;
-      this.dashCd = PLAYER.dashCooldown * this.mods.dashCd;
+      this.dashCd = PLAYER.dashCooldown * this.mods.dashCd * this.rites.dashCd;
       this.dashHit.clear();
       this.events.onDash(this.px, this.pz);
     }
@@ -551,9 +661,10 @@ export class Sim {
             }
           }
           const dl = Math.hypot(f.x - this.px, f.z - this.pz) || 1;
-          const kx = ((f.x - this.px) / dl) * 14 * this.mods.dashKnock;
-          const kz = ((f.z - this.pz) / dl) * 14 * this.mods.dashKnock;
-          const dead = this.damageFoe(f, this.mods.dashStrike);
+          // IRON ORCHARD law — rites multiply the knock, add to the strike
+          const kx = ((f.x - this.px) / dl) * 14 * this.mods.dashKnock * this.rites.dashKnock;
+          const kz = ((f.z - this.pz) / dl) * 14 * this.mods.dashKnock * this.rites.dashKnock;
+          const dead = this.damageFoe(f, (this.mods.dashStrike + this.rites.dashStrike) * this.rites.dmgDealt);
           if (!dead) {
             f.vx += kx;
             f.vz += kz;
@@ -570,8 +681,14 @@ export class Sim {
 
   private hurt(sx: number, sz: number): void {
     if (this.invuln > 0 || this.dashT > 0 || this.over) return;
-    this.embers -= 1;
+    // GLASS BELL law — dmgTaken multiplies the ember cost (round, min 1);
+    // the base game pays exactly 1
+    const cost = Math.max(1, Math.round(this.rites.dmgTaken));
+    this.embers -= cost;
     this.chain = 0;
+    // EMBER DEBT law — the wound reaches past the embers into the run bank;
+    // the sim only announces it (bank is engine-side), digest-safe
+    if (this.rites.hurtDawnBurn > 0) this.events.onDawnBurn?.(this.rites.hurtDawnBurn);
     if (this.embers <= 0 && this.mods.revive && !this.reviveUsed) {
       // SECOND DAWN — the shrine remembers you
       this.reviveUsed = true;
@@ -634,7 +751,47 @@ export class Sim {
     if (launched) {
       this.throwCd = SHARD.throwCooldown * this.mods.throwCd;
       this.events.onThrow(this.px, this.pz);
+      // TWIN SUN law — every 2nd throw forks two shards at ±0.42 rad.
+      // Counter-driven (zero rng); the 8-live ceiling skips deterministically.
+      this.throwCount += 1;
+      if (this.rites.twin === 1 && this.throwCount % 2 === 0) this.spawnForks(aimX, aimZ);
     }
+  }
+
+  /** TWIN SUN forks — half-damage shards that fly, ricochet, return, and
+   *  die in the hand. They ride the shard pool (render for free) and are
+   *  excluded from shardCount. Hard ceiling: never > 8 live forks. */
+  private spawnForks(aimX: number, aimZ: number): void {
+    let live = 0;
+    for (const s of this.shards) if (s.fork && !s.dead) live++;
+    if (live + 2 > RITE.TWIN.maxForks) {
+      this.forkSkips += 1; // deterministic skip — documented in the rite desc
+      return;
+    }
+    const base = Math.atan2(aimX - this.px, aimZ - this.pz);
+    for (const side of [-1, 1]) {
+      const ang = base + side * RITE.TWIN.forkAngle;
+      const dirX = Math.sin(ang);
+      const dirZ = Math.cos(ang);
+      this.shards.push({
+        state: 'fly',
+        x: this.px + dirX * 1.2,
+        z: this.pz + dirZ * 1.2,
+        vx: dirX * this.shardSpeed,
+        vz: dirZ * this.shardSpeed,
+        orbitAngle: 0,
+        targetId: -1,
+        bounces: 0,
+        flown: 0,
+        boost: 0,
+        hitCd: new Map(),
+        fork: true,
+      });
+    }
+    this.forksSpawned += 2;
+    let liveNow = 0;
+    for (const s of this.shards) if (s.fork && !s.dead) liveNow++;
+    if (liveNow > this.forksLiveMax) this.forksLiveMax = liveNow;
   }
 
   /** a chosen boon reshapes the build; immediate effects apply here too */
@@ -658,6 +815,8 @@ export class Sim {
     this.marks.length = 0;
     this.hexes.length = 0;
     this.cinders.length = 0;
+    this.pendingDetonations.length = 0;
+    this.phantoms.length = 0;
     this.crownUsed = false;
     this.pRootT = 0;
   }
@@ -685,7 +844,43 @@ export class Sim {
   }
 
   private updateShards(dt: number): void {
+    let swept = false;
     for (const s of this.shards) {
+      // MIRROR CHOIR bolt — a phantom's lance: straight flight, no steering,
+      // no ricochet, no catch/return; dies on impact, ttl, or the wall.
+      if (s.bolt) {
+        s.ttl = (s.ttl ?? 0) - dt;
+        if (s.ttl <= 0) {
+          s.dead = true;
+          swept = true;
+          continue;
+        }
+        s.x += s.vx * dt;
+        s.z += s.vz * dt;
+        if (Math.hypot(s.x, s.z) > ARENA.radius - 0.2) {
+          s.dead = true;
+          swept = true;
+          continue;
+        }
+        for (const f of this.foes) {
+          if (f.spawnT > 0) continue;
+          if (Math.hypot(f.x - s.x, f.z - s.z) < f.r + 0.5) {
+            // same shield law as a shard hit: first contact strips the halo
+            if (f.shieldUp) {
+              f.shieldUp = false;
+              this.events.onShieldBreak(f.x, f.z);
+            } else {
+              this.damageFoe(f, RITE.CHOIR.boltDmg, false, 'hit');
+              this.phantomBoltHits += 1;
+            }
+            s.dead = true; // no ricochet — the bolt is spent either way
+            swept = true;
+            break;
+          }
+        }
+        continue;
+      }
+
       // per-enemy re-hit cooldowns tick on enemy time so slowed foes don't farm hits
       for (const [k, v] of s.hitCd) {
         const nv = v - dt;
@@ -708,6 +903,12 @@ export class Sim {
         const dz = this.pz - s.z;
         const d = Math.hypot(dx, dz);
         if (d < SHARD.catchRadius) {
+          if (s.fork) {
+            // TWIN SUN forks die in the hand — no catch charge, no orbit
+            s.dead = true;
+            swept = true;
+            continue;
+          }
           s.state = 'orbit';
           s.boost = 0;
           this.events.onCatch(s.x, s.z);
@@ -769,6 +970,11 @@ export class Sim {
         continue;
       }
       if (pd < SHARD.catchRadius * 0.7 && s.bounces > this.maxBounces) {
+        if (s.fork) {
+          s.dead = true;
+          swept = true;
+          continue;
+        }
         s.state = 'orbit';
         s.boost = 0;
         this.events.onCatch(s.x, s.z);
@@ -776,7 +982,11 @@ export class Sim {
       }
 
       // contact with foes
-      const dmg = (1 + (SHARD.damage - 1) + (this.mods.dmg - 1)) * (this.odActive ? OVERDRIVE.damageMult : 1);
+      const dmg =
+        (1 + (SHARD.damage - 1) + (this.mods.dmg - 1)) *
+        (this.odActive ? OVERDRIVE.damageMult : 1) *
+        this.rites.dmgDealt * // GLASS BELL law — player-dealt impact damage
+        (s.fork ? RITE.TWIN.forkDmg : 1); // TWIN SUN forks pay half
       for (const f of this.foes) {
         if (f.spawnT > 0) continue;
         if ((s.hitCd.get(f.id) ?? 0) > 0) continue;
@@ -863,6 +1073,8 @@ export class Sim {
         }
       }
     }
+    // sweep the rites' transient riders (forks/bolts) — no mid-iteration splices
+    if (swept) this.shards = this.shards.filter((sh) => !sh.dead);
   }
 
   private steer(s: Shard, wantAngle: number, dt: number): void {
@@ -896,7 +1108,7 @@ export class Sim {
   /* foes                                                                */
   /* ------------------------------------------------------------------ */
 
-  private damageFoe(f: Foe, dmg: number, chain = false, cause: 'hit' | 'burn' | 'spark' | 'splash' = 'hit'): boolean {
+  private damageFoe(f: Foe, dmg: number, chain = false, cause: 'hit' | 'burn' | 'spark' | 'splash' | 'meteor' = 'hit'): boolean {
     // BOSS PHASE FLOOR: a warden hangs on by a thread until its final phase
     // has played — burst builds can never skip the learning curve
     if (f.boss && f.state < 3) {
@@ -922,13 +1134,34 @@ export class Sim {
     // never re-spark, so the light stops there
     if (cause !== 'spark' && this.mods.spark > 0) this.fireSparks(f);
     // score: elites pay ×1.5, CROWNS pay ×2 (rime/cinder replace the elite
-    // multiplier), bosses scale by biome, mutators sweeten the pot
+    // multiplier), bosses scale by biome, mutators sweeten the pot —
+    // SUNFALL meteors pay ×1.5 for the kills they claim
     let base = f.kind === 'warden' ? WAVES.wardenScore : SCORE[f.kind];
     if (f.boss) base = bossScore(this.biome);
     if (f.elite === 'rime' || f.elite === 'cinder') base *= 2;
     else if (f.elite) base *= 1.5;
-    this.score += Math.round((base * this.mult * this.mutator.mods.score) / 5) * 5;
+    if (cause === 'meteor') base *= RITE.SUNFALL.scoreMult;
+    this.score += Math.round((base * this.mult * this.mutator.mods.score * this.rites.score) / 5) * 5;
     this.addOverdrive(OVERDRIVE.killCharge + this.mods.odOnKill + (f.elite ? 3 : 0));
+    // EMBER TIDE — every slain foe bursts after RITE.TIDE.fuse enemy-time.
+    // Kills born inside a chain queue at depth+1; the chain caps at 8.
+    this.killCount += 1;
+    if (this.rites.tide === 1) {
+      const depth = this.tideCtx > 0 ? this.tideCtx + 1 : 0;
+      if (depth <= RITE.TIDE.chainCap) {
+        this.pendingDetonations.push({ x: f.x, z: f.z, t: RITE.TIDE.fuse, depth });
+      }
+    }
+    // MIRROR CHOIR — every 5th kill sings a phantom (max 2 alive);
+    // spawn angle is a deterministic function of the kill index
+    if (this.rites.choir === 1 && this.killCount % RITE.CHOIR.everyKills === 0 && this.phantoms.length < RITE.CHOIR.maxPhantoms) {
+      const ang = (this.killCount * RITE.CHOIR.goldenAngle) % TAU;
+      const phx = this.px + Math.sin(ang) * RITE.CHOIR.orbitR;
+      const phz = this.pz + Math.cos(ang) * RITE.CHOIR.orbitR;
+      this.phantoms.push({ angle: ang, x: phx, z: phz, life: RITE.CHOIR.life, fireT: RITE.CHOIR.fireCd });
+      this.phantomSpawns += 1;
+      this.events.onPhantomSpawn?.(phx, phz);
+    }
     if (f.kind === 'warden') {
       this.wardensKilled += 1;
       this.events.onWardenDie(f.x, f.z);
@@ -1054,6 +1287,7 @@ export class Sim {
       chillT: 0,
       hitCount: 0,
       eliteT: 0,
+      slamT: 0,
     });
     if (kind === 'warden' && boss) this.events.onWardenSpawn(x, z);
   }
@@ -1081,13 +1315,15 @@ export class Sim {
   }
 
   private updateFoes(dt: number): void {
-    const spdScale = Math.min(1.6, 1 + this.wave * 0.03) * this.mutator.mods.foeSpeed; // per-foe swift handled below
+    // LONG NIGHT law — rites multiply every foe's movement/action speed
+    const spdScale = Math.min(1.6, 1 + this.wave * 0.03) * this.mutator.mods.foeSpeed * this.rites.foeSpeed; // per-foe swift handled below
     for (const f of this.foes) {
       const swiftK = f.elite === 'swift' ? 1.55 : 1;
       // CC KIT — tick the timers, then let them bend the FSM
       if (f.stunT > 0) f.stunT = Math.max(0, f.stunT - dt);
       if (f.rootT > 0) f.rootT = Math.max(0, f.rootT - dt);
       if (f.chillT > 0) f.chillT = Math.max(0, f.chillT - dt);
+      if (f.slamT > 0) f.slamT = Math.max(0, f.slamT - dt);
       const ccK = f.chillT > 0 ? CC.foeSlowK : 1;
       const eff = spdScale * swiftK * ccK;
       if (f.spawnT > 0) {
@@ -1216,7 +1452,7 @@ export class Sim {
           if (
             f.hexCd <= 0 &&
             pd <= HEX.castRange &&
-            this.hexes.length < HEX.maxZones &&
+            this.hexKindCount() < HEX.maxZones &&
             !this.hexes.some((h) => h.weaverId === f.id)
           ) {
             f.hexCd = HEX.cooldown;
@@ -1441,6 +1677,17 @@ export class Sim {
         }
       }
 
+      // IRON ORCHARD law — a foe hurled past the arena wall takes 1 dmg and
+      // eats a 0.5s stun (direct timer, capped, deterministic). Checked on
+      // the RAW position before the clamp so only genuine wall-crossings hit.
+      if (this.rites.orchard === 1 && f.slamT <= 0 && Math.hypot(f.x, f.z) > ARENA.radius) {
+        f.slamT = RITE.ORCHARD.slamCd;
+        f.stunT = Math.max(f.stunT, Math.min(RITE.ORCHARD.slamStun, CC.stunTime));
+        this.wallSlams += 1;
+        this.events.onWallSlam?.(f.x, f.z); // SPRINT19-C anchor: wall-impact flash lives in the engine hook
+        if (this.damageFoe(f, RITE.ORCHARD.slamDmg, false, 'splash')) continue; // the wall claimed it
+      }
+
       const c = clampArena(f.x, f.z, f.r);
       f.x = c.x;
       f.z = c.z;
@@ -1451,7 +1698,9 @@ export class Sim {
 
     // EMBER ROT beats — after the movement pass so burn deaths never desync
     // the foe walk. Runs on enemy time (Overdrive slows the fire too).
-    if (this.mods.burn > 0) {
+    // Gate: the EMBER TIDE's detonation burns also live in f.burn, so the
+    // pass must run whenever tide is active even without EMBER ROT stacks.
+    if (this.mods.burn > 0 || this.rites.tide === 1) {
       for (const f of this.foes.slice()) {
         if (f.burn <= 0) continue;
         f.burnT -= dt;
@@ -1642,7 +1891,7 @@ export class Sim {
       if (
         f.state === 1 &&
         f.tz % 3 === 0 &&
-        this.hexes.length < HEX.maxZones &&
+        this.hexKindCount() < HEX.maxZones &&
         !this.hexes.some((h) => h.weaverId === f.id)
       ) {
         this.hexes.push({ x: this.px, z: this.pz, t: HEX.telegraph, weaverId: f.id });
@@ -1697,8 +1946,9 @@ export class Sim {
         }
       } else if (!b.grazed && !b.veil && d < this.grazeR + brad) {
         b.grazed = true;
-        this.addOverdrive(OVERDRIVE.grazeCharge);
-        this.score += SCORE.graze;
+        // LONG NIGHT law — rites multiply the graze charge
+        this.addOverdrive(OVERDRIVE.grazeCharge * this.rites.grazeCharge);
+        this.score += Math.round(SCORE.graze * this.rites.score);
         this.events.onGraze(b.x, b.z);
       }
       if (b.life <= 0 || Math.hypot(b.x, b.z) > ARENA.radius + 1.5) {
@@ -1719,12 +1969,28 @@ export class Sim {
     }
   }
 
-  /** HEX LOOM detonations — enemy time (Overdrive slows the trap) */
+  /** HEX LOOM detonations — enemy time (Overdrive slows the trap).
+   *  SPRINT 19-a: kind:'meteor' zones ride the same array — they blast
+   *  foes AND the ember (SUNFALL law) instead of rooting. */
   private updateHexes(dt: number): void {
     for (let i = this.hexes.length - 1; i >= 0; i--) {
       const h = this.hexes[i];
       h.t -= dt;
       if (h.t > 0) continue;
+      if (h.kind === 'meteor') {
+        // SUNFALL impact — 4.5u blast, 4 dmg, friend and foe alike
+        this.hexes.splice(i, 1);
+        const blast = h.radius ?? RITE.SUNFALL.radius;
+        for (const f of this.foes.slice()) {
+          if (f.spawnT > 0) continue;
+          if (Math.hypot(f.x - h.x, f.z - h.z) <= blast) this.damageFoe(f, RITE.SUNFALL.dmg, false, 'meteor');
+        }
+        const before = this.embers;
+        if (Math.hypot(this.px - h.x, this.pz - h.z) <= blast) this.hurt(h.x, h.z); // hurt's guards apply (invuln/dash)
+        if (this.embers < before) this.meteorHitsPlayer += 1;
+        this.events.onMeteorImpact?.(h.x, h.z); // SPRINT19-C anchor: meteor impact bloom + boom live here
+        continue;
+      }
       const hit = Math.hypot(this.px - h.x, this.pz - h.z) <= HEX.radius;
       this.hexes.splice(i, 1);
       this.events.onHexDetonate?.(h.x, h.z, hit);
@@ -1732,6 +1998,154 @@ export class Sim {
         this.pRootT = Math.max(this.pRootT, HEX.rootDur); // never stacks/extends
         this.events.onPlayerRoot?.(h.x, h.z, HEX.rootDur);
       }
+    }
+  }
+
+  /** live HEX-kind zones only — SUNFALL meteors share the array but never
+   *  eat the weaver's/First Voice's loom budget */
+  private hexKindCount(): number {
+    let n = 0;
+    for (const h of this.hexes) if (h.kind !== 'meteor') n++;
+    return n;
+  }
+
+  /* ---------------------------------------------------------------- */
+  /* rites — behavior systems (sprint 19-a). All enemy-time, all        */
+  /* counters/queues: zero new rng anywhere in this block.              */
+  /* ---------------------------------------------------------------- */
+
+  /** EMBER TIDE — the delay queue: each corpse bursts at its fuse; bursts
+   *  burn 2 stacks + 3 dmg into kindred; kills inside a chain queue deeper
+   *  (cap 8). Appends during resolution land past the cursor — no recursion. */
+  private updateTide(dt: number): void {
+    if (this.pendingDetonations.length === 0) return;
+    for (let i = this.pendingDetonations.length - 1; i >= 0; i--) {
+      const d = this.pendingDetonations[i];
+      d.t -= dt;
+      if (d.t > 0) continue;
+      this.pendingDetonations.splice(i, 1);
+      this.detonate(d);
+    }
+  }
+
+  private detonate(d: TideDetonation): void {
+    this.tideDetonations += 1;
+    if (d.depth > this.tideMaxDepth) this.tideMaxDepth = d.depth;
+    this.events.onChainDetonate?.(d.x, d.z, d.depth); // SPRINT19-C anchor: chain-kill spark arc lives here
+    this.tideCtx = d.depth;
+    for (const o of this.foes.slice()) {
+      if (o.spawnT > 0) continue;
+      if (Math.hypot(o.x - d.x, o.z - d.z) > RITE.TIDE.radius) continue;
+      // burn first — a survivor keeps the stacks, a victim dies burning
+      o.burn = Math.min(BURN.maxStacks, o.burn + RITE.TIDE.burnStacks);
+      if (o.burnT <= 0) o.burnT = BURN.tick;
+      this.damageFoe(o, RITE.TIDE.dmg, true, 'splash');
+    }
+    this.tideCtx = 0;
+  }
+
+  /** SUNFALL — every RITE.SUNFALL.every enemy-time the sky casts a volley:
+   *  2 meteors on the 2 highest-HP foes (deterministic tie-break by id),
+   *  1 at golden-angle offset 3u from the player's cast-time position.
+   *  Live cap 3 — a capped sky skips deterministically. */
+  private updateSunfall(dt: number): void {
+    if (this.rites.sunfall !== 1) return;
+    this.sunfallT += dt;
+    if (this.sunfallT < RITE.SUNFALL.every) return;
+    this.sunfallT -= RITE.SUNFALL.every;
+    // heaviest-first target list — hp desc, id asc (no rng, stable)
+    const targets = this.foes.filter((f) => f.spawnT <= 0).sort((a, b) => b.hp - a.hp || a.id - b.id);
+    let castN = 0;
+    for (let k = 0; k < 2 && k < targets.length; k++) {
+      if (this.meteorLive() >= RITE.SUNFALL.maxLive) break;
+      this.hexes.push({
+        x: targets[k].x,
+        z: targets[k].z,
+        t: RITE.SUNFALL.telegraph,
+        weaverId: -1,
+        kind: 'meteor',
+        radius: RITE.SUNFALL.radius,
+      });
+      castN += 1;
+    }
+    // the player's shadow is never safe: golden-angle offset 3u off the
+    // cast-time position (deterministic function of the volley counter)
+    if (this.meteorLive() < RITE.SUNFALL.maxLive) {
+      const a = (this.sunfallCast * RITE.CHOIR.goldenAngle) % TAU;
+      const mx = this.px + Math.sin(a) * RITE.SUNFALL.playerOffset;
+      const mz = this.pz + Math.cos(a) * RITE.SUNFALL.playerOffset;
+      const dc = Math.hypot(mx, mz) || 1;
+      const clamped = Math.min(1, (ARENA.radius - 0.5) / dc);
+      this.hexes.push({
+        x: mx * clamped,
+        z: mz * clamped,
+        t: RITE.SUNFALL.telegraph,
+        weaverId: -1,
+        kind: 'meteor',
+        radius: RITE.SUNFALL.radius,
+      });
+      castN += 1;
+    }
+    this.sunfallCast += 1;
+    this.meteorsCast += castN;
+    const liveNow = this.meteorLive();
+    if (liveNow > this.meteorsLiveMax) this.meteorsLiveMax = liveNow;
+  }
+
+  private meteorLive(): number {
+    let n = 0;
+    for (const h of this.hexes) if (h.kind === 'meteor') n++;
+    return n;
+  }
+
+  /** MIRROR CHOIR — phantoms orbit the ember and lance bolts at the nearest
+   *  foe every 1.2s enemy-time. Orbit angle advances deterministically; the
+   *  spawn angle is a golden-angle function of the kill index. */
+  private updatePhantoms(dt: number): void {
+    if (this.phantoms.length === 0) return;
+    if (this.phantoms.length > this.phantomsLiveMax) this.phantomsLiveMax = this.phantoms.length;
+    for (let i = this.phantoms.length - 1; i >= 0; i--) {
+      const p = this.phantoms[i];
+      p.life -= dt;
+      if (p.life <= 0) {
+        this.phantoms.splice(i, 1);
+        continue;
+      }
+      p.angle = (p.angle + dt * RITE.CHOIR.orbitSpeed) % TAU;
+      p.x = this.px + Math.sin(p.angle) * RITE.CHOIR.orbitR;
+      p.z = this.pz + Math.cos(p.angle) * RITE.CHOIR.orbitR;
+      p.fireT -= dt;
+      if (p.fireT > 0) continue;
+      p.fireT = RITE.CHOIR.fireCd;
+      // nearest live foe — nearest-first, no rng
+      let best: Foe | null = null;
+      let bestD = 1e9;
+      for (const f of this.foes) {
+        if (f.spawnT > 0) continue;
+        const d = Math.hypot(f.x - p.x, f.z - p.z);
+        if (d < bestD) {
+          bestD = d;
+          best = f;
+        }
+      }
+      if (!best) continue; // no kindred in reach — the beat retries next tick
+      const dl = bestD || 1;
+      this.shards.push({
+        state: 'fly',
+        x: p.x,
+        z: p.z,
+        vx: ((best.x - p.x) / dl) * RITE.CHOIR.boltSpeed,
+        vz: ((best.z - p.z) / dl) * RITE.CHOIR.boltSpeed,
+        orbitAngle: 0,
+        targetId: -1,
+        bounces: 0,
+        flown: 0,
+        boost: 0,
+        hitCd: new Map(),
+        bolt: true,
+        ttl: RITE.CHOIR.boltTtl,
+      });
+      this.phantomBolts += 1;
     }
   }
 
