@@ -30,6 +30,7 @@ export interface Mods {
   startShards: number; // extra starting shards (shrine)
   burn: number; // EMBER ROT stacks applied per direct hit
   spark: number; // CHAINSPARK arcs per kill
+  contracts: number; // bounty contracts offered per run (sprint 20-4a shrine)
 }
 
 export function baseMods(): Mods {
@@ -52,6 +53,7 @@ export function baseMods(): Mods {
     startShards: 0,
     burn: 0,
     spark: 0,
+    contracts: 3,
   };
 }
 
@@ -194,6 +196,9 @@ export const SHRINE_UPGRADES: ShrineUpgrade[] = [
   { id: 'ashwalk', name: 'ASH WALK', desc: '−20% dash cooldown', cost: 50, apply: (m) => { m.dashCd *= 0.8; } },
   { id: 'prism', name: 'PRISM MEMORY', desc: '+1 shard bounce', cost: 80, apply: (m) => { m.bounces += 1; } },
   { id: 'seconddawn', name: 'SECOND DAWN', desc: 'Revive once per run at 1 ember', cost: 150, apply: (m) => { m.revive = true; } },
+  // sprint 20-4a — the ladder's next rungs (A6)
+  { id: 'wardensward', name: "WARDEN'S WARD", desc: '+1 starting max ember (stacks with Warm Ember)', cost: 90, apply: (m) => { m.maxEmbers += 1; } },
+  { id: 'thirdcontract', name: 'THIRD CONTRACT', desc: 'A 4th contract joins every descent', cost: 120, apply: (m) => { m.contracts += 1; } },
 ];
 
 /** stack every purchased shrine upgrade into fresh Mods */

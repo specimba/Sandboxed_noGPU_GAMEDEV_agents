@@ -1,14 +1,18 @@
 import * as THREE from 'three';
 
 /**
- * HOLLOW SUN — LIVING FOES (sprint 19-b).
+ * HOLLOW SUN — LIVING FOES (sprint 19-b, sprint 20-4b).
  * Per-foe AnimationMixer pool driving the Blender-rigged GLB actions.
  *
  * The forge (scripts/blender/forge_anim_*.py) bakes in-place actions into
  * cinder_hound.glb (prowl_idle / windup / charge_lunge / recover /
- * death_collapse) and hex_weaver.glb (hover_idle / anchor_cast /
- * death_collapse). The sim drives position — the rigs only pose, so the
- * deterministic digest is untouched (view-layer law).
+ * death_collapse), hex_weaver.glb (hover_idle / anchor_cast /
+ * death_collapse), and the sprint-20-4b rigged trio: striker_dart.glb
+ * (coil_idle / windup / strike_lunge / recover), bulwark_slab.glb
+ * (plod_idle / windup_slam / slam_recover) and herald_bell.glb
+ * (hover_idle / bell_swing / chime_pulse / recover). The sim drives
+ * position — the rigs only pose, so the deterministic digest is untouched
+ * (view-layer law).
  *
  * SOFT-FAIL LAW: if a GLB arrives without its clips, register() returns
  * false and the view keeps the static mesh — a missing asset never breaks
@@ -19,6 +23,9 @@ import * as THREE from 'three';
 export const ANIM_SETS = {
   hound: { idle: 'prowl_idle', windup: 'windup', charge: 'charge_lunge', recover: 'recover' },
   weaver: { idle: 'hover_idle', cast: 'anchor_cast' },
+  striker: { idle: 'coil_idle', windup: 'windup', charge: 'strike_lunge', recover: 'recover' },
+  bulwark: { idle: 'plod_idle', windup: 'windup_slam', recover: 'slam_recover' },
+  herald: { idle: 'hover_idle', windup: 'bell_swing', cast: 'chime_pulse', recover: 'recover' },
 } as const;
 
 export type AnimKind = keyof typeof ANIM_SETS;
@@ -29,7 +36,7 @@ interface Attach {
   current: string;
 }
 
-const ANIM_CAP = 24; // pool is 40 foes; hound+weaver seats in a room stay well under this
+const ANIM_CAP = 24; // pool is 40 foes; rigged seats per room stay well under this
 
 export class FoeAnimator {
   private clips = new Map<AnimKind, Map<string, THREE.AnimationClip>>();

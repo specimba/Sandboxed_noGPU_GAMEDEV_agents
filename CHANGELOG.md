@@ -2,6 +2,40 @@
 
 Rule R2 (docs/QUALITY_AUDIT.md): each entry lists objective improvements over the previous build in graphics, mechanics, or architecture — with screenshot paths and gate receipts. No entry, no ship.
 
+## SPRINT 20 · BUILD 1 — "MIDAS COURT" (the reward loop arrives: bounties, milestones, run recaps — and every remaining living thing gets a Blender body)
+
+**Previous state:** Sprint 19 "MANY SUNS" earned the owner's first positive gate: *"That is better: improvements in game mechanics and a bit more in graphical understanding, with enjoyment of gamification parts."* The directive for this sprint: deepen the gamification (rewards, milestones, retention), widen the graphical understanding, and push the Blender/Godot advantages further within sandbox limits. Base secured as `rollback/sprint19-playtest-verified` (= 5eb56d3) and pushed to GitHub with a quarantine archive branch before any work began.
+
+### Added — THE BOUNTY BOARD (gamification core)
+- **3 auto-active BOUNTY CONTRACTS per run** (new pure `src/game/bounty.ts`, zero rng beyond the seeded offer roll — the exact `openRiteGate` pattern): ASH HARVEST (fell 14 in one room), KEEPER OF THE CHAIN (chain ×10 in one room), STARE DOWN (30 grazes/descent), VENGEANCE STRIKE (4 mid-dash fells), UNTOUCHED VIGIL (20 s unwounded), RELENTLESS HAND (40 throws), CROWN TAKER (2 crowned fells), ASH ROOTS (6 dash-roots), THIRD LIGHT (8 stuns), SWIFT VERDICT (room < 25 s). Room-scoped stats reset at each room start; chain holds its PEAK (max-stat law); payouts (+10..20 dawn) settle at room clear with a toast. HUD chip row shows live progress per contract.
+- **New harness `scripts/simdrive-bounty.ts` — now the 6th gate in `make qa`**: offer determinism/distinctness/pool-membership across 8 seeds, scope semantics (room reset, max-stat peak, settle-injected clean/swift), reward math vs the CONTRACTS table, settle-once law, and the 16-deed milestone evaluator (ladders claim once, bestiary needs all 8 kinds, hurtless-streak resets on a wound, win+rites laws, deep-clone guard). Digest-identical re-drives.
+
+### Added — MILESTONES + RUN RECAP (the retention layer)
+- **16 persistent MILESTONES** (new pure `src/game/milestones.ts`, additive localStorage schema — old saves keep working): first blood, kill ladders 25/100/250, first crowned fell, first boss, bestiary (all 8 kinds), chain ×25, swift room, graze 60, strike 6, 5 hurtless rooms, first biome clear, win-any, lawsinger (win with 4 distinct rites), and more. In-run completion toast + chime; **trophy row on the title screen** (unlocked count + latest deeds).
+- **RUN RECAP on death AND win**: rooms cleared, bosses felled, contracts filled, boons taken, rites carried, and the killer's name ("FELLED BY A CINDER HOUND") — staged row-by-row with the existing count-up language. The run's story finally outlives the run.
+- **CHAIN SURFACE**: the ×CHAIN chip now carries its 3.2 s decay bar (the multiplier is a chase you can SEE), a BEST ghost line flips on when you pass your record mid-run, and chain thresholds (10/25/50) fire fanfare + toast.
+
+### Added — LIVING FOES II (the Blender line completes the roster)
+- **Three new RIGGED+ANIMATED foes through the full forge gate** (`forge_anim_{striker,bulwark,herald}.py`, recipe cloned verbatim from the proven hound/weaver law — armature, proximity skinning, in-place actions, muted-NLA stash, ACTIONS export, seed 42, BUDGETS gates): `striker_dart.glb` (coil_idle/windup/strike_lunge/recover — the telegraph is now a body coil), `bulwark_slab.glb` (plod_idle/windup_slam/slam_recover), `herald_bell.glb` (hover_idle/bell_swing/chime_pulse/recover — the bell winds, then PULSES in the last quarter of its ring telegraph before the volley breaks).
+- **Runtime mounts** (view.ts): SkeletonUtils per-seat clones + per-entry material clones (hit-flash law holds), sim-FSM→anim mapping for all three, and a new velocity-facing law for the dart (it points where it will strike). `foeAnim.ts` ANIM_SETS extended; procedural bodies remain the forever soft-fallback.
+- **DEATH GHOSTS** (Godot `AnimationPlayer.queue()` analog): a 2-seat detached ghost pool plays each hound/weaver's banked `death_collapse` on kill — the sprint-19 dormant clips finally perform — then fade/sink and release. Capped, soft-fail, transient +2 DC max.
+- **EMBER VACUUM**: kill bursts seed 2-3 motes that linger then accelerate toward the ember — payout income made physical (existing Points pool, +0 persistent DC).
+
+### Fixed — graphical understanding
+- **Biome 1 (ASHFALL VESTIBULE) — the first impression — finally joins the PROP_SCATTER instancing law**: monolith family + cracked/shard/inlay dressing are now InstancedMesh rows with bit-for-bit placement reproduction (−6 persistent DC; biomes 2–4 already lived under this law).
+- **SUNFALL meteor telegraphs now tell the truth**: the warning ring scales to the zone's real 4.5 u radius (it warned at 2.6 u for a 4.5 u blast — a shipped fairness defect).
+- **The dormant `choir_pulpit.glb`** (forged in sprint 18, referenced nowhere) now stands as a PALE CHOIR landmark.
+- **UX fix pack**: touch pause button (48×48 ≥ the 44 px law — Escape was unreachable on mobile), SUN'S PATIENCE Overdrive meter no longer reads >100% with the +2 s boon, rite chips carry their law strings (you can finally recall what LONG NIGHT does mid-run), boss bar shows 66%/33% phase notches.
+
+### Gate receipts
+- `bunx tsc --noEmit` PASS · `bun run lint` PASS · `make qa` **×6** PASS (simdrive + afterglow + forge + controls + rites + **bounty**) · `verify-assets` **30/30** with the new **content-level anim-determinism rows** (clip names + durations + sampler counts asserted for ALL animated GLBs — the declared replacement for byte-md5 on rigged assets).
+- Draw-call ledger: biome-1 re-instancing −6 persistent, pulpit +1, death ghosts ≤+2 transient (capped pool) → **NET persistent ≤ −5**. Zero sim.ts changes: all simdrive digests bit-identical.
+
+### Known debt (declared, R3)
+- Forge byte-determinism for animated GLBs remains open (root-cause pending); the new content-level verify rows are the enforcement until then. Animated GLBs still ship un-quantized (batch optimize would rewrite unrelated assets as container noise).
+- Deferred to sprint 21 (declared with reasons): DAWNFURY style rank + CINDER PACT vows (both need a declared digest re-baseline), daily seeded trial, event-bus refactor, VAT (honest NO — no 20+ instanced rigged crowd exists to justify it).
+- Foreign scaffold found in the sandbox working tree (an unrelated NEXUS/frontier tank demo) was quarantined to branch `archive/foreign-scaffold-quarantine` and removed from the tree — it never touched the game line.
+
 ## SPRINT 19 · BUILD 1 — "MANY SUNS" (the game rewrites its own rules now: player-picked RITES warp every run; the Blender-forged foes are ALIVE)
 
 **Previous state:** Sprint 18 shipped biome 4 + crowns and the owner **finished all 12 rooms** but delivered the verdict: *"the same thing, from first minute to last — no improvement. Improve designs and game mechanics."* The diagnosis is accepted and precise: boons are stat multipliers, room mutators are small bends — **nothing ever rewrites the rules**, so every run has identical verbs minute 1 to minute 9. Static prop families cannot fix a rules problem. This sprint changes the constitution, not the decoration. Recovery note: this sandbox had regressed to sprint-16 (779ca5d existed only on the GitHub second backup) — lineage was restored FROM the backup, then tagged `rollback/sprint18-pale-choir` as the owner's playtest-base rollback point.

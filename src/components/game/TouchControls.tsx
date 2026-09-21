@@ -86,6 +86,26 @@ export default function TouchControls() {
 
   return (
     <div className="pointer-events-none absolute inset-0 z-20 select-none">
+      {/* sprint-20-4a UX PACK — touch PAUSE: Escape is unreachable on a phone,
+          so the pause must be a touch target. 48×48 ≥ the 44px target law.
+          Sits at left-3 top-3 — the room panel drops below it on touch (Hud). */}
+      {phase === 'playing' && (
+        <button
+          type="button"
+          onPointerDown={(e) => {
+            e.preventDefault();
+            getEngine()?.pause();
+          }}
+          className="pointer-events-auto absolute left-3 top-3 flex h-12 w-12 touch-none items-center justify-center rounded-full border border-amber-200/40 bg-black/40 backdrop-blur-[2px] active:bg-amber-300/20"
+          aria-label="Pause"
+        >
+          <span aria-hidden="true" className="flex gap-[4px]">
+            <span className="block h-4 w-[3px] bg-amber-100/90" />
+            <span className="block h-4 w-[3px] bg-amber-100/90" />
+          </span>
+        </button>
+      )}
+
       {/* joystick */}
       <div
         ref={stickRef}

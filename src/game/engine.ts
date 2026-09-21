@@ -2,13 +2,23 @@ import * as THREE from 'three';
 import {
   ARENA,
   CC,
+  CONTRACTS,
   FEEL,
+  FOE_LABELS,
   OVERDRIVE,
   PLAYER,
   RUN,
   starEnergy,
 } from './constants';
 import { AudioEngine } from './audio';
+import {
+  bountyObserve,
+  bountyRoomStart,
+  bountySettleRoom,
+  contractById,
+  newBountyRun,
+  type BountyRunState,
+} from './bounty';
 import { ccFailsafe, dashBufferStep } from './control';
 import { DamageNumbers } from './damageNumbers';
 import { FoePips } from './foePips';
@@ -27,10 +37,18 @@ import {
   type BoonDef,
 } from './run';
 import { mulberry32 } from './rng';
+import {
+  applyMilestoneEvent,
+  cloneMilestoneSave,
+  emptyMilestoneLife,
+  emptyMilestoneSave,
+  MILESTONES,
+  type MilestoneSave,
+} from './milestones';
 import { baseRites, mergeRites, RITES, rollRiteOffers, type RiteDef } from './rites';
 import { Scene } from './scene';
 import { Sim, type FoeKind, type SimEvents } from './sim';
-import { loadBest, loadMeta, saveBest, saveMeta, useGameStore } from './store';
+import { loadBest, loadMeta, saveBest, saveMeta, useGameStore, type BountyChip } from './store';
 import { View } from './view';
 
 /**
@@ -194,6 +212,24 @@ export class Engine {
   private crownTaughtRime = false;
   private crownTaughtCinder = false;
 
+  /* ---- BOUNTY CONTRACTS + MILESTONES (sprint 20-4a) ----
+   * Engine-side only: the sim's optional-notify events + public counters are
+   * the entire data source (zero sim writes, digest-invisible — the crown-
+   * toast / dawnDebt precedent). Room counters reset at every room start. */
+  private bounty: BountyRunState = { offers: [], progress: {}, done: {} };
+  private bountyDawn = 0; // filled-contract ledger, settled in finishRun
+  private contractsDone = 0;
+  private roomKills = 0;
+  private roomStrikes = 0;
+  private roomGrazes = 0;
+  private roomHurtless = true; // no wound in the current room
+  private hurtlessStreak = 0; // consecutive hurtless rooms this run
+  private runHurtCount = 0; // wounds taken this run
+  private cleanT = 0; // seconds unwounded (room scope; reset on hurt)
+  private lastKiller = ''; // article'd label for the recap ("A CINDER HOUND")
+  private chainTiers: Record<number, boolean> = {}; // 10/25/50 crossing flags
+  private milestoneSave: MilestoneSave = emptyMilestoneSave();
+
   constructor(canvas: HTMLCanvasElement) {
     // eslint-disable-next-line @typescript-eslint/no-this-alias
     active = this;
@@ -226,6 +262,7 @@ export class Engine {
       unlocked: meta.unlocked,
       muted: false,
       touch: 'ontouchstart' in window || navigator.maxTouchPoints > 0,
+      milestones: meta.milestones ?? {}, // sprint-20-4a trophy row feeds
     });
 
     this.rig.setTitleMode();
@@ -290,6 +327,21 @@ export class Engine {
     this.hitFromT = 0;
     this.crownTaughtRime = false; // teaching toasts are once PER RUN
     this.crownTaughtCinder = false;
+    // sprint-20-4a — seeded contracts (the shrine may send a 4th), fresh
+    // room counters, chain-tier flags and the milestone working copy
+    this.bounty = newBountyRun(seed, Math.max(3, Math.min(CONTRACTS.length, this.sim.mods.contracts)));
+    this.bountyDawn = 0;
+    this.contractsDone = 0;
+    this.chainTiers = {};
+    this.runHurtCount = 0;
+    this.hurtlessStreak = 0;
+    this.lastKiller = '';
+    this.resetRoomCounters();
+    const runMeta = loadMeta();
+    this.milestoneSave = cloneMilestoneSave({
+      done: runMeta.milestones ?? {},
+      life: runMeta.life ?? emptyMilestoneLife(),
+    });
     this.input.clearEdges(); // no phantom dash/pause survives a run start
     this.scene.setBiome(0);
     this.audio.setBiome(0);
@@ -332,6 +384,11 @@ export class Engine {
       seed,
       mutatorLabel: this.sim.mutator.name,
       roomLabel: `${biomeName(0)} · ROOM 1`,
+      // sprint-20-4a — contract chips fresh, chain bar empty, recap cleared
+      bounties: this.bountyChips(),
+      chainT: 0,
+      recap: null,
+      milestones: { ...this.milestoneSave.done },
     });
     this.openRiteGate(); // the descent begins with a law (19-a run-start gate)
   }
@@ -340,6 +397,52 @@ export class Engine {
     const p = this.store.getState().phase;
     if (p !== 'paused' && p !== 'dead') return;
     this.startRun();
+  }
+
+  /* ---- bounty contracts + milestones (sprint 20-4a helpers) ---- */
+
+  /** a new room begins: room-scoped observables restart with it */
+  private resetRoomCounters(): void {
+    this.roomKills = 0;
+    this.roomStrikes = 0;
+    this.roomGrazes = 0;
+    this.roomHurtless = true;
+    this.cleanT = 0;
+    bountyRoomStart(this.bounty);
+  }
+
+  /** HUD chip projection — clean/swift read their live engine timers (the
+   *  pure module holds no running-clock state; display-only override) */
+  private bountyChips(): BountyChip[] {
+    return this.bounty.offers.map((id) => {
+      const def = contractById(id);
+      const target = def?.target ?? 1;
+      let prog = Math.floor(this.bounty.progress[id] ?? 0);
+      if (def?.stat === 'clean') prog = Math.floor(this.cleanT);
+      else if (def?.stat === 'swift') prog = Math.floor(this.runT);
+      return { id, title: def?.chip ?? id, prog: Math.min(target, prog), target, done: !!this.bounty.done[id] };
+    });
+  }
+
+  /** toast + chime + persist every newly completed milestone */
+  private settleMilestones(completed: string[]): void {
+    if (completed.length === 0) return;
+    for (const id of completed) {
+      const def = MILESTONES.find((m) => m.id === id);
+      if (def) this.store.getState().pushToast(`MILESTONE — ${def.name}`, 'gold');
+    }
+    this.audio.milestone();
+    this.persistMilestones();
+  }
+
+  /** additive persistence: merge the working milestone save into whatever
+   *  meta currently exists (dawn/unlocked/onboarded are never clobbered) */
+  private persistMilestones(): void {
+    const meta = loadMeta();
+    meta.milestones = this.milestoneSave.done;
+    meta.life = this.milestoneSave.life;
+    saveMeta(meta);
+    this.store.getState().set({ milestones: { ...this.milestoneSave.done } });
   }
 
   /* ---- reward shrine ---- */
@@ -413,6 +516,7 @@ export class Engine {
     this.sim.startRoom(this.runBiome, this.runRoom);
     this.input.clearEdges(); // a stale edge from the gate must never fire in play
     this.dashBufT = 0;
+    this.resetRoomCounters(); // sprint-20-4a: room observables restart with the room
     this.store.getState().set({
       phase: 'playing',
       riteChoices: [],
@@ -460,6 +564,7 @@ export class Engine {
     this.sim.startRoom(this.runBiome, this.runRoom);
     this.input.clearEdges(); // Escape pressed during the shrine must not pause the next room
     this.dashBufT = 0;
+    this.resetRoomCounters(); // sprint-20-4a: room observables restart with the room
     this.store.getState().set({
       phase: 'playing',
       boonChoices: [],
@@ -476,7 +581,9 @@ export class Engine {
     const st = this.store.getState();
     const up = SHRINE_UPGRADES.find((u) => u.id === id);
     if (!up || st.unlocked[id] || st.dawn < up.cost) return;
-    const meta = { dawn: st.dawn - up.cost, unlocked: { ...st.unlocked, [id]: true } };
+    // additive merge — sprint-20 meta fields (milestones/life/onboarded)
+    // must survive a shrine purchase (they used to be dropped here)
+    const meta = { ...loadMeta(), dawn: st.dawn - up.cost, unlocked: { ...st.unlocked, [id]: true } };
     saveMeta(meta);
     this.store.getState().set(meta);
     this.audio.shrine();
@@ -485,14 +592,39 @@ export class Engine {
 
   /** bank dawn + best at run end (death or victory) */
   private finishRun(won: boolean): void {
-    // EMBER DEBT (19-a) — wounds burned dawn straight off the payout (min 0)
-    const dawn = Math.max(0, dawnEarned(this.sim.score, this.roomsCleared, this.bossesKilled, won) - this.dawnDebt);
+    // MILESTONES (20-4a) — run-end evaluation: wins, rites carried to a win,
+    // and the hurtless-room streak (a woundless run claims its rooms here)
+    const hurtlessRooms = this.runHurtCount === 0 ? this.roomsCleared : 0;
+    this.settleMilestones(
+      applyMilestoneEvent({ t: 'finishRun', won, rites: [...this.ritesTaken], hurtlessRooms }, this.milestoneSave),
+    );
+    // EMBER DEBT (19-a) — wounds burned dawn straight off the payout (min 0);
+    // BOUNTIES (20-4a) — filled contracts pay INTO the same ledger at settle
+    const dawn = Math.max(
+      0,
+      dawnEarned(this.sim.score, this.roomsCleared, this.bossesKilled, won) + this.bountyDawn - this.dawnDebt,
+    );
     const st = this.store.getState();
-    const meta = { dawn: st.dawn + dawn, unlocked: st.unlocked };
+    const meta = { ...loadMeta(), dawn: st.dawn + dawn, unlocked: st.unlocked };
+    meta.milestones = this.milestoneSave.done;
+    meta.life = this.milestoneSave.life;
     saveMeta(meta);
     const rec = { score: this.sim.score, wave: this.sim.wave };
     const best = { score: Math.max(rec.score, st.best), wave: Math.max(rec.wave, st.bestWave) };
     saveBest(best);
+    // RUN RECAP (20-4a) — the death/win panel recounts the descent
+    const recap = {
+      rooms: this.roomsCleared,
+      bosses: this.bossesKilled,
+      boons: Object.entries(this.boonsTaken).map(([id, n]) => {
+        const def = BOONS.find((b) => b.id === id);
+        const name = def?.name ?? id;
+        return n > 1 ? `${name} ×${n}` : name;
+      }),
+      rites: this.ritesTaken.map((id) => RITES.find((r) => r.id === id)?.name ?? id),
+      killer: this.lastKiller,
+      contracts: this.contractsDone,
+    };
     this.store.getState().set({
       dawn: meta.dawn,
       dawnEarned: dawn,
@@ -500,6 +632,8 @@ export class Engine {
       best: best.score,
       bestWave: best.wave,
       sun: won ? 1 : starEnergy(this.sim.score),
+      recap,
+      milestones: { ...this.milestoneSave.done },
       ...(won ? { phase: 'dead' as const } : {}),
     });
   }
@@ -578,11 +712,29 @@ export class Engine {
         this.rig.addShake(FEEL.traumaThrow);
         this.rig.addFovKick(1);
         this.fx.burst(x, z, 14, 9, { color: SHARD_C, life: 0.4, size: 0.5, up: 0.2 });
+        bountyObserve(this.bounty, 'throw'); // sprint-20-4a contract observable
       },
       onBounce: (x, z, chain) => {
         this.audio.ricochet(chain - 1);
         this.fx.burst(x, z, 40, 13, { color: SHARD_C, life: 0.5, size: 0.55, up: 0.3 });
         this.rings.fire(x, z, 3.4, 0.34, 0xffd27a);
+        // sprint-20-4a CHAIN SURFACE — tier crossings are event-exact (the
+        // bounce IS the increment; no 12Hz polling can miss or double it)
+        bountyObserve(this.bounty, 'chain', chain);
+        this.settleMilestones(applyMilestoneEvent({ t: 'chain', chain }, this.milestoneSave));
+        for (const tier of [10, 25, 50]) {
+          if (chain >= tier && !this.chainTiers[tier]) {
+            this.chainTiers[tier] = true;
+            this.audio.chainTier(tier);
+            const line =
+              tier === 10
+                ? `CHAIN ×${tier} — THE SUN WATCHES`
+                : tier === 25
+                  ? `CHAIN ×${tier} — THE SUN BLAZES`
+                  : `CHAIN ×${tier} — A MIRACLE OF LIGHT`;
+            this.store.getState().pushToast(line, 'gold');
+          }
+        }
       },
       onCatch: (x, z) => {
         this.audio.catchShard();
@@ -602,6 +754,20 @@ export class Engine {
         });
         this.rings.fire(x, z, kind === 'warden' ? 16 : 8, 0.6, 0xff8a5c);
         this.scene.floorPulse(x, z);
+        /* sprint-20-4a — bounty + milestone observables (engine-side only):
+         * the slain foe is still seated when onKill fires (the event precedes
+         * removeFoe in damageFoe), so its crown is readable here. A fell that
+         * lands while the dash burns counts as a strike (mid-dash contact). */
+        this.roomKills += 1;
+        bountyObserve(this.bounty, 'kills');
+        if (this.sim.dashT > 0) {
+          this.roomStrikes += 1;
+          bountyObserve(this.bounty, 'strike');
+        }
+        const slain = this.sim.foes.find((f) => f.kind === kind && f.x === x && f.z === z);
+        const crown = slain?.elite === 'rime' || slain?.elite === 'cinder';
+        if (crown) bountyObserve(this.bounty, 'elite');
+        this.settleMilestones(applyMilestoneEvent({ t: 'kill', kind, crown }, this.milestoneSave));
       },
       onFoeHurt: (kind, x, z, dmg, chain) => {
         this.dmgNums.spawn(x, z, dmg, chain);
@@ -627,12 +793,36 @@ export class Engine {
       onGraze: (x, z) => {
         this.audio.graze();
         this.fx.spawn(x, 1, z, (Math.random() - 0.5) * 4, 2, (Math.random() - 0.5) * 4, { life: 0.3, size: 0.4, color: WHITE_C });
+        this.roomGrazes += 1; // sprint-20-4a (once per bullet — grazed flag)
+        bountyObserve(this.bounty, 'graze');
       },
       onHurt: (x, z, sx, sz) => {
         this.audio.hurt();
         this.rig.addShake(FEEL.traumaHurt);
         this.fx.burst(x, z, 180, 20, { color: FOE_C, life: 0.8, size: 0.6 });
         this.store.getState().set({ embers: Math.max(0, this.sim.embers) });
+        // sprint-20-4a — the vigil breaks: reset the clean timer + streaks,
+        // and NAME the killer (nearest live foe to the wound's source; the
+        // sim passes no kind, so the geometry speaks — contact wounds are
+        // exact, bullet wounds name the closest shooter)
+        this.cleanT = 0;
+        this.roomHurtless = false;
+        this.hurtlessStreak = 0;
+        this.runHurtCount += 1;
+        let killerFoe: { kind: string; boss: boolean } | null = null;
+        let killerD = 6;
+        for (const f of this.sim.foes) {
+          const d = Math.hypot(f.x - sx, f.z - sz);
+          if (d < killerD) {
+            killerD = d;
+            killerFoe = { kind: f.kind, boss: f.boss };
+          }
+        }
+        this.lastKiller = killerFoe
+          ? killerFoe.boss
+            ? bossName(this.runBiome)
+            : (FOE_LABELS[killerFoe.kind] ?? 'THE DARK ITSELF')
+          : 'THE DARK ITSELF';
         // damage DIRECTION — the hit is located, not just felt: a wedge at
         // screen edge points at the source for ~0.9s
         this.hitFromT = 0.9;
@@ -654,6 +844,7 @@ export class Engine {
         this.rings.fire(x, z, 24, 0.9, 0xffc766);
         this.scene.floorPulse(x, z);
         this.bossesKilled += 1;
+        this.settleMilestones(applyMilestoneEvent({ t: 'boss' }, this.milestoneSave)); // sprint-20-4a
         this.store.getState().pushToast(`${bossName(this.runBiome)} FELLED — SHARD OF THE SUN +1`, 'gold');
       },
       onWaveStart: (n) => {
@@ -677,6 +868,31 @@ export class Engine {
         this.roomsCleared += 1;
         const st = this.store.getState();
         st.set({ sun: starEnergy(this.sim.score) });
+        /* sprint-20-4a ROOM SETTLE — contracts pay + milestones judge the
+         * room BEFORE the win branch (a final-room fill must reach the
+         * payout, and finishRun re-persists milestones after its own pass) */
+        const roomSec = this.runT;
+        this.hurtlessStreak = this.roomHurtless ? this.hurtlessStreak + 1 : 0;
+        const payouts = bountySettleRoom(this.bounty, { cleanSec: this.cleanT, roomSec });
+        for (const p of payouts) {
+          this.bountyDawn += p.dawn;
+          this.contractsDone += 1;
+          st.pushToast(`CONTRACT FILLED — ${p.title} — +${p.dawn} DAWN`, 'gold');
+        }
+        if (payouts.length > 0) this.audio.contract();
+        this.settleMilestones(
+          applyMilestoneEvent(
+            {
+              t: 'roomClear',
+              roomSec,
+              grazes: this.roomGrazes,
+              strikes: this.roomStrikes,
+              hurtlessStreak: this.hurtlessStreak,
+              biomeCleared: isBossRoom(this.runRoom),
+            },
+            this.milestoneSave,
+          ),
+        );
         if (this.runBiome === 3 && isBossRoom(this.runRoom)) {
           // THE PALE CHOIR rekindles — the FIRST VOICE is answered; run won
           this.finishRun(true);
@@ -722,10 +938,12 @@ export class Engine {
       onFoeStun: (x, z) => {
         this.audio.ccStun();
         this.fx.burst(x, z, 14, 8, { color: new THREE.Color(0xffe9a0), life: 0.3, size: 0.4, up: 0.5 });
+        bountyObserve(this.bounty, 'stun'); // sprint-20-4a contract observable
       },
       onFoeRoot: (x, z) => {
         this.audio.ccRootCue();
         this.fx.burst(x, z, 12, 6, { color: new THREE.Color(0xc9784a), life: 0.4, size: 0.45 });
+        bountyObserve(this.bounty, 'root'); // sprint-20-4a — dash-strike roots only
       },
       onFoeChill: (x, z) => {
         this.audio.ccFoeSlow();
@@ -1015,6 +1233,7 @@ export class Engine {
 
     // first-60s onboarding — timed chips, once ever (graduates at room clear)
     this.runT += dtReal;
+    this.cleanT += dtReal; // sprint-20-4a — the vigil clock (onHurt resets it)
     if (!loadMeta().onboarded) {
       let hint: string | null = null;
       if (this.runT < 4.5) hint = 'MOVE — WASD / ARROWS';
@@ -1051,18 +1270,25 @@ export class Engine {
       this.store.getState().set({
         score: this.sim.score,
         mult: this.sim.mult,
+        chainT: this.sim.chainT, // sprint-20-4a — decay bar under the ×CHAIN chip
         wave: this.sim.wave,
         enemiesLeft: this.sim.enemiesLeft,
         shards: this.sim.shardCount,
         embers: this.sim.embers,
         embersMax: this.sim.maxEmbers,
         dashReady: Math.max(0, Math.min(1, 1 - this.sim.dashCd / PLAYER.dashCooldown)),
-        overdrive: this.sim.odActive ? Math.max(0, this.sim.odT / OVERDRIVE.duration) : this.sim.odCharge / OVERDRIVE.max,
+        // sprint-20-4a UX FIX: SUN'S PATIENCE (+odDuration) used to divide the
+        // extended odT by the base duration → the bar read >100% for its
+        // first seconds. The boon-aware duration is the denominator now.
+        overdrive: this.sim.odActive
+          ? Math.max(0, Math.min(1, this.sim.odT / (OVERDRIVE.duration + this.sim.mods.odDuration)))
+          : this.sim.odCharge / OVERDRIVE.max,
         overdriveActive: this.sim.odActive,
         sun: energy,
         roomLabel: `${biomeName(this.runBiome)} · ${isBossRoom(this.runRoom) ? 'BOSS' : 'ROOM ' + this.runRoom}`,
         bossBar: boss ? { name: bossName(this.runBiome), frac: Math.max(0, boss.hp / boss.maxHp) } : null,
         boonsTaken: boonLabels,
+        bounties: this.bountyChips(), // sprint-20-4a — contract chips at 12Hz
         rooted: this.sim.pRootT > 0,
         rootT: this.sim.pRootT,
         playerSlow: Math.max(0, Math.min(1, this.sim.veilT / CC.veilCap)),

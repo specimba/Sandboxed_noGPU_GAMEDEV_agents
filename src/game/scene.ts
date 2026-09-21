@@ -192,19 +192,60 @@ export interface PropScatterRow {
   baseR: number; // first ring radius (u)
   rim: number; // identity rim tint (stylizedMaterial color-coding channel)
   instanced: true; // InstancedMesh law — never one mesh per prop
-  h: number; // authored target height (u) — k = h / bbox.y normalize law
+  /** authored target height (u) — k = h / bbox.y normalize law (standing props) */
+  h?: number;
+  /** flat-inlay law — k = fitXZ / max(bbox.x, bbox.z); a stand-up mesh lays
+   *  flat via rotateX(-π/2) (the legacy engraved-inlay scale law, bit-exact) */
+  fitXZ?: number;
   a0: number; // angular offset (rad) — the deterministic seed
   rStep: number; // radius hash: r = baseR + ((i * rStep) % rMod) * rUnit
   rMod: number;
   rUnit: number;
-  rotK: number; // yaw hash: rotation.y = a * rotK
-  mat: { base: number; lit: number; rimK: number; rimPow: number; emis: number; emisK: number };
+  rotK: number; // yaw hash: rotation.y = yaw0 + a * rotK
+  /** additive yaw term — the titan law (face the arena heart) is π/2 − a */
+  yaw0?: number;
+  /** ground offset (engraved-inlay flush law: y = 0.05) */
+  y0?: number;
+  /** explicit deterministic [a, r] per index — overrides the hash when a
+   *  hand-set landmark spot must hold bit-for-bit (cracked titans, pulpits) */
+  spots?: ReadonlyArray<readonly [number, number]>;
+  mat: { base: number; lit: number; rimK: number; rimPow: number; emis?: number; emisK?: number };
 }
 
-/** the whole biome dressing sweep — spires + glass family (biome 2), heart
- *  roots (biome 3), PALE CHOIR bone cathedral (biome 4, warm bone/candle
- *  tints only — zero blue/indigo per the 18-a MUST-2 palette law) */
+/** the whole biome dressing sweep — ASHFALL VESTIBULE (biome 0, migrated
+ *  from the legacy per-mesh blocks by 20-4c C1), spires + glass family
+ *  (biome 2), heart roots (biome 3), PALE CHOIR bone cathedral (biome 4,
+ *  warm bone/candle tints only — zero blue/indigo per the 18-a MUST-2
+ *  palette law) */
 export const PROP_SCATTER: PropScatterRow[] = [
+  // ASHFALL VESTIBULE — cracked titan landmarks. The legacy loop hand-set two
+  // spots ([0.65, R−7.5], [3.9, R−8.5]) with yaw −a + π/2: reproduced exactly
+  // via the `spots` override + yaw0 (bit-for-bit placement, 2 meshes → 1 draw)
+  {
+    glb: 'monolith_cracked', biomeIdx: 0, count: 2, baseR: ARENA.radius - 7.5, rim: 0xff9a4a, instanced: true,
+    h: 6.0, a0: 0.65, rStep: 0, rMod: 1, rUnit: 0, rotK: -1, yaw0: Math.PI / 2,
+    spots: [
+      [0.65, ARENA.radius - 7.5],
+      [3.9, ARENA.radius - 8.5],
+    ],
+    mat: { base: 0x120d08, lit: 0x2a1d12, rimK: 0.4, rimPow: 3.2 },
+  },
+  // ASHFALL shard clusters — crystal growths between the lanes. Legacy law:
+  // a = (i/5)·2π + 0.5, r = 11 + (i%2)·6 (≡ rStep 1 / rMod 2 / rUnit 6),
+  // yaw = a, k = 1.6 / bbox.y, obsidian shell + ember heart (5 meshes → 1 draw)
+  {
+    glb: 'shard_cluster', biomeIdx: 0, count: 5, baseR: 11, rim: 0xffc766, instanced: true,
+    h: 1.6, a0: 0.5, rStep: 1, rMod: 2, rUnit: 6, rotK: 1,
+    mat: { base: COLORS.obsidian, lit: COLORS.obsidianLit, rimK: 0.9, rimPow: 2.6, emis: 0xff8a3d, emisK: 0.08 },
+  },
+  // ASHFALL hex floor inlays — engraved rings flush with the obsidian floor.
+  // Legacy law: a = (i/3)·2π + 1.05, r = 10 (≡ rStep 0), y = 0.05, no yaw,
+  // k = 3.4 / max(bbox.x, bbox.z) + stand-up lay-flat (fitXZ law; 3 → 1 draw)
+  {
+    glb: 'inlay_hex', biomeIdx: 0, count: 3, baseR: 10, rim: 0xffb454, instanced: true,
+    fitXZ: 3.4, a0: 1.05, rStep: 0, rMod: 1, rUnit: 0, rotK: 0, y0: 0.05,
+    mat: { base: 0x0c0805, lit: 0x181009, rimK: 0.5, rimPow: 3.0 },
+  },
   // GLASS HOLLOW spires (forge v3) — broken crystal growths
   {
     glb: 'glass_spire', biomeIdx: 1, count: 6, baseR: 26, rim: 0xff5c8a, instanced: true,
@@ -249,6 +290,15 @@ export const PROP_SCATTER: PropScatterRow[] = [
   {
     glb: 'pipe_organ_cluster', biomeIdx: 3, count: 2, baseR: 29, rim: 0xe0c9a0, instanced: true,
     h: 3.8, a0: 2.3, rStep: 1, rMod: 2, rUnit: 3, rotK: 2.6,
+    mat: { base: 0x17110b, lit: 0x2c2214, rimK: 0.9, rimPow: 2.2, emis: 0xffc98a, emisK: 0.07 },
+  },
+  // THE PALE CHOIR pulpit — the dormant forged landmark (20-4c C5) takes the
+  // nave's speaking-stone spot between the organ chest and the rib arches.
+  // Single-instance row (count 1 = +1 persistent DC, declared); titan yaw law
+  // faces the arena heart; warm bone rim per the choir family
+  {
+    glb: 'choir_pulpit', biomeIdx: 3, count: 1, baseR: 27, rim: 0xd9c8a4, instanced: true,
+    h: 2.8, a0: 5.25, rStep: 0, rMod: 1, rUnit: 0, rotK: -1, yaw0: Math.PI / 2,
     mat: { base: 0x17110b, lit: 0x2c2214, rimK: 0.9, rimPow: 2.2, emis: 0xffc98a, emisK: 0.07 },
   },
   {
@@ -380,87 +430,25 @@ export class Scene {
       }
     });
 
-    // cracked titan landmarks — broken monuments guarding the rim approaches
-    void loadAssetGeometry('monolith_cracked', true).then((geo) => {
-      if (!geo) return;
-      geo.computeBoundingBox();
-      const bb = geo.boundingBox;
-      if (!bb) return;
-      const size = bb.getSize(new THREE.Vector3());
-      const k = 6.0 / size.y; // read as a rim-field titan
-      geo.scale(k, k, k);
-      const spots: Array<[number, number]> = [
-        [0.65, ARENA.radius - 7.5],
-        [3.9, ARENA.radius - 8.5],
-      ];
-      for (const [a, r] of spots) {
-        const mat = stylizedMaterial({ base: 0x120d08, lit: 0x2a1d12, rim: 0xff9a4a, rimK: 0.4, rimPow: 3.2, fog: true });
-        const m = new THREE.Mesh(geo, mat);
-        m.position.set(Math.cos(a) * r, 0, Math.sin(a) * r);
-        m.rotation.y = -a + Math.PI / 2;
-        this.scene.add(m);
-        this.monolithMats.push(mat);
-      }
-    });
-
-    // shard clusters — crystal growths scattered between the lanes
-    void loadAssetGeometry('shard_cluster', true).then((geo) => {
-      if (!geo) return;
-      geo.computeBoundingBox();
-      const bb = geo.boundingBox;
-      if (!bb) return;
-      const size = bb.getSize(new THREE.Vector3());
-      const k = 1.6 / size.y;
-      geo.scale(k, k, k);
-      for (let i = 0; i < 5; i++) {
-        const a = (i / 5) * Math.PI * 2 + 0.5;
-        const r = 11 + (i % 2) * 6;
-        const mat = stylizedMaterial({
-          base: COLORS.obsidian,
-          lit: COLORS.obsidianLit,
-          rim: 0xffc766,
-          rimK: 0.9,
-          rimPow: 2.6,
-          emis: 0xff8a3d,
-          emisK: 0.08,
-          fog: true,
-        });
-        const m = new THREE.Mesh(geo, mat);
-        m.position.set(Math.cos(a) * r, 0, Math.sin(a) * r);
-        m.rotation.y = a;
-        this.scene.add(m);
-      }
-    });
-
-    // hex floor inlays — engraved rings flush with the obsidian floor
-    void loadAssetGeometry('inlay_hex', true).then((geo) => {
-      if (!geo) return;
-      geo.computeBoundingBox();
-      const bb = geo.boundingBox;
-      if (!bb) return;
-      const size = bb.getSize(new THREE.Vector3());
-      const k = 3.4 / Math.max(size.x, size.z);
-      geo.scale(k, k, k);
-      if (size.y > Math.max(size.x, size.z)) geo.rotateX(-Math.PI / 2); // stand-up mesh -> lay flat
-      for (let i = 0; i < 3; i++) {
-        const a = (i / 3) * Math.PI * 2 + 1.05;
-        const mat = stylizedMaterial({ base: 0x0c0805, lit: 0x181009, rim: 0xffb454, rimK: 0.5, rimPow: 3.0, fog: true });
-        const m = new THREE.Mesh(geo, mat);
-        m.position.set(Math.cos(a) * 10, 0.05, Math.sin(a) * 10);
-        this.scene.add(m);
-      }
-    });
+    // biome-0 monolith_a/b/c + lantern_slab swaps above stay as-is: they
+    // re-skin the GLOBAL rim monolith field and the Hollow Lantern slabs
+    // (Math.random-placed in buildShells/buildSun, visible in every biome —
+    // not biome-0 scatter dressing, and not reproducible by the index hash).
 
     // PROP SCATTER — every biome dressing family is one data row, one
-    // InstancedMesh (1 draw call per family; deterministic index-hash spots)
+    // InstancedMesh (1 draw call per family; deterministic index-hash spots;
+    // hand-set landmarks reproduce legacy spots via the row `spots` override)
     for (const row of PROP_SCATTER) this.buildScatterFamily(row);
   }
 
   /** one PROP_SCATTER row → ONE InstancedMesh pushed into the biomeProps
-   *  toggle. Same k-scale law (k = target_h / bbox.y) and loadAssetGeometry
+   *  toggle. Same k-scale laws (standing: k = h / bbox.y; flat-inlay:
+   *  k = fitXZ / max(x,z) + stand-up lay-flat) and loadAssetGeometry
    *  (name, true) cache as the pre-instancing blocks; one shared
    *  stylizedMaterial per family (the factory auto-registers it into the
-   *  uTime tick). Placement is pure index-hash — zero rng. */
+   *  uTime tick). Placement is pure index-hash (or the row's explicit
+   *  hand-set `spots`) — zero rng. Each row references a UNIQUE glb — the
+   *  k-scale mutates the cached geometry (worklog 18-3 cache hazard). */
   private buildScatterFamily(row: PropScatterRow): void {
     void loadAssetGeometry(row.glb, true).then((geo) => {
       if (!geo) return;
@@ -468,8 +456,16 @@ export class Scene {
       const bb = geo.boundingBox;
       if (!bb) return;
       const size = bb.getSize(new THREE.Vector3());
-      const k = row.h / size.y;
-      geo.scale(k, k, k);
+      if (row.fitXZ !== undefined) {
+        // flat-inlay law — scale by the horizontal extent; a stand-up mesh
+        // (height the long axis) lays flat (legacy engraved-inlay law)
+        const k = row.fitXZ / Math.max(size.x, size.z);
+        geo.scale(k, k, k);
+        if (size.y > Math.max(size.x, size.z)) geo.rotateX(-Math.PI / 2);
+      } else {
+        const k = (row.h ?? 1) / size.y;
+        geo.scale(k, k, k);
+      }
       const mat = stylizedMaterial({
         base: row.mat.base,
         lit: row.mat.lit,
@@ -487,10 +483,11 @@ export class Scene {
       const e = new THREE.Euler();
       const s = new THREE.Vector3(1, 1, 1);
       for (let i = 0; i < row.count; i++) {
-        const a = row.a0 + (i / row.count) * Math.PI * 2; // deterministic angle hash
-        const r = row.baseR + ((i * row.rStep) % row.rMod) * row.rUnit; // deterministic radius hash
-        p.set(Math.cos(a) * r, 0, Math.sin(a) * r);
-        e.set(0, a * row.rotK, 0);
+        const spot = row.spots?.[i];
+        const a = spot ? spot[0] : row.a0 + (i / row.count) * Math.PI * 2; // deterministic angle hash
+        const r = spot ? spot[1] : row.baseR + ((i * row.rStep) % row.rMod) * row.rUnit; // deterministic radius hash
+        p.set(Math.cos(a) * r, row.y0 ?? 0, Math.sin(a) * r);
+        e.set(0, (row.yaw0 ?? 0) + a * row.rotK, 0);
         q.setFromEuler(e);
         m.compose(p, q, s);
         inst.setMatrixAt(i, m);

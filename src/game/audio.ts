@@ -652,4 +652,33 @@ export class AudioEngine {
     this.tone(392, 0.1, 'triangle', 0.12, 784);
     this.noise(0.08, 0.08, 'highpass', 3600);
   }
+
+  /* ---------------------------------------------------------------- */
+  /* sprint 20-4a gamification cues — one-shots (same family law:      */
+  /* tone/noise only, auto-stop, modest gains, zero rng)              */
+  /* ---------------------------------------------------------------- */
+
+  /** chain tier crossing (10/25/50) — a rising two-note fanfare shaded by
+   *  tier: the ladder climbs C5 → E5 → G5. Deterministic pitch, no rng. */
+  chainTier(tier: number): void {
+    const step = tier >= 50 ? 4 : tier >= 25 ? 2 : 0;
+    const base = 523.25 * Math.pow(2, step / 12);
+    this.tone(base, 0.16, 'triangle', 0.15);
+    this.tone(base * 1.5, 0.3, 'triangle', 0.13, undefined, 0.09);
+    this.noise(0.26, 0.05, 'highpass', 4400, 2200, 0.03);
+  }
+
+  /** milestone seal — three-note choir-mark, distinct from the shrine chime
+   *  (lower root, sine crown) so the two meta-moments never blur */
+  milestone(): void {
+    this.tone(392, 0.2, 'triangle', 0.13);
+    this.tone(523.25, 0.28, 'triangle', 0.11, undefined, 0.1);
+    this.tone(783.99, 0.46, 'sine', 0.09, undefined, 0.2);
+  }
+
+  /** contract filled — an ink-stamp thud + a bright seal tick */
+  contract(): void {
+    this.thump(0.7, 92);
+    this.tone(1040, 0.1, 'sine', 0.09, 1560, 0.06);
+  }
 }

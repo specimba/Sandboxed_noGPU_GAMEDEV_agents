@@ -1,6 +1,7 @@
 'use client';
 
 import { useGameStore } from '@/game/store';
+import { SCORE } from '@/game/constants';
 import { BUILD } from '@/game/version';
 
 const TOAST_CLS: Record<'gold' | 'red' | 'info', string> = {
@@ -45,6 +46,9 @@ export default function Hud() {
   const rootT = useGameStore((s) => s.rootT);
   const ritesActive = useGameStore((s) => s.ritesActive);
   const dawnBurn = useGameStore((s) => s.dawnBurn);
+  const chainT = useGameStore((s) => s.chainT);
+  const bounties = useGameStore((s) => s.bounties);
+  const touch = useGameStore((s) => s.touch);
 
   if (phase === 'loading' || phase === 'error' || phase === 'title') return null;
 
@@ -67,28 +71,53 @@ export default function Hud() {
           panels so the big score is never duplicated behind them) */}
       {phase !== 'dead' && phase !== 'reward' && (
         <div className="absolute left-1/2 top-3 flex -translate-x-1/2 flex-col items-center">
-          <div className="hs-panel flex items-center gap-3 px-4 py-1.5">
+          <div
+            className="hs-panel flex items-center gap-3 px-4 py-1.5"
+            style={score > best && best > 0 ? { borderColor: 'rgba(255,199,102,0.55)' } : undefined}
+          >
             <span aria-hidden="true" className="hs-hairline hs-hairline--bare w-6 sm:w-10" />
             <span className="sr-only">Score</span>
             <div
-              className="hs-tracking text-xl font-bold tabular-nums text-[#f2e6cf] sm:text-2xl"
-              style={{ textShadow: '0 0 8px rgba(255,190,90,0.35)' }}
+              className="hs-tracking text-xl font-bold tabular-nums sm:text-2xl"
+              style={{
+                color: score > best && best > 0 ? '#ffc766' : '#f2e6cf',
+                textShadow: '0 0 8px rgba(255,190,90,0.35)',
+              }}
             >
               {score.toLocaleString()}
             </div>
+            {score > best && best > 0 && (
+              <span className="hs-pulse hs-tracking rounded-[2px] border border-[rgba(255,199,102,0.55)] px-1.5 py-0.5 text-[8px] text-[#ffc766] sm:text-[9px]">
+                BEST
+              </span>
+            )}
             <span aria-hidden="true" className="hs-hairline hs-hairline--bare w-6 sm:w-10" />
           </div>
           {mult > 1.01 && (
-            <div className="hs-tracking mt-1.5 rounded-[2px] border border-[rgba(255,199,102,0.45)] bg-[rgba(46,32,12,0.72)] px-2 py-0.5 text-[9px] text-[#ffc766] sm:text-[10px]">
-              ×{mult.toFixed(1)} CHAIN
+            <div className="mt-1.5 flex flex-col items-center gap-1">
+              <div className="hs-tracking rounded-[2px] border border-[rgba(255,199,102,0.45)] bg-[rgba(46,32,12,0.72)] px-2 py-0.5 text-[9px] text-[#ffc766] sm:text-[10px]">
+                ×{mult.toFixed(1)} CHAIN
+              </div>
+              {/* sprint-20-4a — the chain is a DECAY you can feel: this thin
+                  bar drains over SCORE.multDecay (3.2 s) toward silence */}
+              <div className="h-[2px] w-24 overflow-hidden bg-[rgba(255,199,102,0.14)] sm:w-28">
+                <div
+                  className="h-full bg-gradient-to-r from-[#e79a36] to-[#ffc766] transition-all duration-150"
+                  style={{ width: `${Math.max(0, Math.min(100, (chainT / SCORE.multDecay) * 100))}%` }}
+                />
+              </div>
             </div>
           )}
         </div>
       )}
 
       {/* top left — room strip, instrument micro-rows (drops below the
-          centered score chip on narrow screens so the two never collide) */}
-      <div className="hs-panel absolute left-3 top-14 flex max-w-40 flex-col divide-y divide-[rgba(255,196,120,0.1)] px-3 py-1.5 sm:top-3 sm:max-w-56">
+          centered score chip on narrow screens so the two never collide;
+          on touch it ALSO clears the 48px pause button at left-3 top-3) */}
+      <div
+        className="hs-panel absolute left-3 top-14 flex max-w-40 flex-col divide-y divide-[rgba(255,196,120,0.1)] px-3 py-1.5 sm:top-3 sm:max-w-56"
+        style={touch ? { top: '4.5rem' } : undefined}
+      >
         <span className="hs-tracking py-1 text-[10px] text-[#f2e6cf]/85 sm:text-[11px]">{roomLabel}</span>
         {mutatorLabel && playing && (
           <span className="hs-tracking py-1 text-[9px] text-[#ff5a4a] sm:text-[10px]">◆ {mutatorLabel}</span>
@@ -106,7 +135,22 @@ export default function Hud() {
         )}
         {ritesActive.length > 0 && playing && (
           <span className="hs-tracking py-1 text-[9px] leading-4 text-[#ffc766] sm:text-[10px]">
-            {ritesActive.map((r) => r.name).join(' · ')}
+            {ritesActive.map((r) => `${r.name} — ${r.law}`).join(' · ')}
+          </span>
+        )}
+        {/* BOUNTY CONTRACTS (sprint-20-4a) — auto-active, always live: three
+            seeded deeds judged at every room clear; filled ones stay visible */}
+        {bounties.length > 0 && playing && (
+          <span className="hs-tracking flex flex-col py-1 text-[9px] leading-4 sm:text-[10px]">
+            {bounties.map((b) =>
+              b.done ? (
+                <span key={b.id} className="text-[#ffc766]">✓ {b.title} — FILLED</span>
+              ) : (
+                <span key={b.id} className="text-[#ffc766]/65">
+                  ◆ {b.title} {b.prog}/{b.target}
+                </span>
+              ),
+            )}
           </span>
         )}
       </div>
@@ -121,6 +165,18 @@ export default function Hud() {
               <div
                 className="h-full bg-gradient-to-r from-[#ff5a4a] via-[#ff8a50] to-[#ffc766] transition-all duration-150"
                 style={{ width: `${Math.round(bossBar.frac * 100)}%` }}
+              />
+              {/* sprint-20-4a — phase notches: the warden's 66% / 33% phase
+                  gates are readable BEFORE the rage hits */}
+              <span
+                aria-hidden="true"
+                className="absolute top-0 h-full w-px bg-[rgba(255,199,102,0.55)]"
+                style={{ left: '33.333%' }}
+              />
+              <span
+                aria-hidden="true"
+                className="absolute top-0 h-full w-px bg-[rgba(255,199,102,0.55)]"
+                style={{ left: '66.666%' }}
               />
               <span
                 aria-hidden="true"

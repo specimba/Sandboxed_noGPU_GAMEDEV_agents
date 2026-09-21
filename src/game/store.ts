@@ -1,6 +1,7 @@
 'use client';
 
 import { create } from 'zustand';
+import { emptyMilestoneLife, type MilestoneLife } from './milestones';
 import type { Tier } from './run';
 
 export type Phase = 'loading' | 'error' | 'title' | 'rite' | 'playing' | 'paused' | 'reward' | 'dead';
@@ -38,11 +39,34 @@ export interface RiteChip {
   law: string; // one-word law reminder
 }
 
+/** BOUNTY CONTRACTS (sprint 20-4a) — the 3 auto-active offer chips */
+export interface BountyChip {
+  id: string;
+  title: string;
+  prog: number;
+  target: number;
+  done: boolean;
+}
+
+/** RUN RECAP (sprint 20-4a) — the death/win panel recount, pushed by finishRun */
+export interface RunRecap {
+  rooms: number;
+  bosses: number;
+  boons: string[]; // "SHARPENED LIGHT ×2"
+  rites: string[]; // "EMBER TIDE"
+  killer: string; // "A CINDER HOUND" (already-article'd) — '' = the dark
+  contracts: number; // contracts filled this run
+}
+
 export interface MetaState {
   dawn: number;
   unlocked: Record<string, boolean>;
   /** first-60s onboarding shown once ever */
   onboarded?: boolean;
+  /** MILESTONES (sprint 20-4a) — additive schema; old saves fall back to {} */
+  milestones?: Record<string, boolean>;
+  /** lifetime counters behind the milestone evaluator — additive, fallback defaults */
+  life?: MilestoneLife;
 }
 
 interface GameState {
@@ -78,6 +102,14 @@ interface GameState {
   /** EMBER DEBT — dawn burned off the bank on the last wound (id-guarded flash) */
   dawnBurn: { id: number; amount: number } | null;
   bossBar: { name: string; frac: number } | null;
+  /** sprint-20-4a — chain decay (0..SCORE.multDecay) under the ×CHAIN chip */
+  chainT: number;
+  /** sprint-20-4a — the seeded auto-active contracts (progress chips) */
+  bounties: BountyChip[];
+  /** sprint-20-4a — the run recount on the death/win panel */
+  recap: RunRecap | null;
+  /** sprint-20-4a — milestone completion record (mirrors meta, title trophy row) */
+  milestones: Record<string, boolean>;
   /** CC status — the ROOTED chip's state (the bind is ALWAYS on screen) */
   rooted: boolean;
   rootT: number;
@@ -140,6 +172,10 @@ export const useGameStore = create<GameState>()((set) => ({
   ritesActive: [],
   dawnBurn: null,
   bossBar: null,
+  chainT: 0,
+  bounties: [],
+  recap: null,
+  milestones: {},
   won: false,
   dawnEarned: 0,
 
@@ -211,12 +247,19 @@ export function loadMeta(): MetaState {
     const raw = window.localStorage.getItem(META_KEY);
     if (raw) {
       const o = JSON.parse(raw) as Partial<MetaState>;
-      return { dawn: o.dawn ?? 0, unlocked: o.unlocked ?? {} };
+      return {
+        dawn: o.dawn ?? 0,
+        unlocked: o.unlocked ?? {},
+        // additive schema law: absent sprint-20 fields fall back, never break
+        onboarded: o.onboarded ?? false,
+        milestones: o.milestones ?? {},
+        life: o.life ?? emptyMilestoneLife(),
+      };
     }
   } catch {
     /* storage unavailable */
   }
-  return { dawn: 0, unlocked: {} };
+  return { dawn: 0, unlocked: {}, milestones: {}, life: emptyMilestoneLife() };
 }
 
 export function saveMeta(m: MetaState): void {

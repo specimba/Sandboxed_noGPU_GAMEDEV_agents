@@ -6,9 +6,9 @@
  * Updated by hand at ship time; the report cites the resolvable hash.
  */
 export const BUILD = {
-  tag: 'SPRINT 19 — MANY SUNS',
-  base: '779ca5d', // sprint-18 PALE CHOIR head (rollback tag: rollback/sprint18-pale-choir)
-  at: '2026-09-15T13:51Z', // stamped at ship
+  tag: 'SPRINT 20 — MIDAS COURT',
+  base: '5eb56d3', // sprint-19 MANY SUNS playtest-verified head (rollback tag: rollback/sprint19-playtest-verified)
+  at: '2026-09-21T10:26Z', // stamped at ship
 } as const;
 
 export const buildStamp = `BUILD ${BUILD.tag} · BASE ${BUILD.base}`;

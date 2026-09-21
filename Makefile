@@ -7,7 +7,7 @@
 BLENDER ?= $(wildcard /home/z/tools/blender-4.2.0-linux-x64/blender)
 XVFB_DISPLAY ?= 77
 
-.PHONY: assets assets-blender assets-library previews inspect optimize forge-library forge-choir check qa qa-afterglow dev verify pipeline help
+.PHONY: assets assets-blender assets-library previews inspect optimize forge-library forge-choir forge-striker forge-bulwark forge-herald forge-ashfall check qa qa-afterglow dev verify pipeline help
 
 help:
 	@echo "make assets          - regenerate procedural .glb meshes (tier 1, pure TS)"
@@ -18,6 +18,10 @@ help:
 	@echo "make optimize        - gltf-transform gate: weld+dedup+prune+KHR_mesh_quantization on every .glb (decoder-free in three.js)"
 	@echo "make forge-library   - sprint-13 Blender v3 forge: husk_drifter + glass_spire + heart_root content assets"
 	@echo "make forge-choir     - sprint-18 Blender forge: PALE CHOIR biome-4 props (rib_arch, bone_spire, pipe_organ_cluster, reliquary_lantern, choir_pulpit)"
+	@echo "make forge-striker   - sprint-20 rigged foe: STRIKER DART (coil_idle, windup, strike_lunge, recover)"
+	@echo "make forge-bulwark   - sprint-20 rigged foe: BULWARK SLAB (plod_idle, windup_slam, slam_recover)"
+	@echo "make forge-herald    - sprint-20 rigged foe: HERALD BELL (hover_idle, bell_swing, chime_pulse, recover)"
+	@echo "make forge-ashfall   - sprint-20 biome-1 ASHFALL stones (cinder_rubble, ash_dune_rock, fallen_monolith)"
 	@echo "make textures        - regenerate AI textures via SDK CLI (tier 3)"
 	@echo "make check           - tsc + eslint"
 	@echo "make qa              - headless full-run simulation (EMBER RITE simdrive + AFTERGLOW drive)"
@@ -67,6 +71,28 @@ forge-choir:
 	@test -x "$(BLENDER)" || { echo "forge-choir: blender not found at $(BLENDER) — SKIP"; exit 0; }
 	$(BLENDER) -b -P scripts/blender/forge_choir.py -- out public/assets/meshes
 
+# sprint 20 forge: the LIVING FOES II trio — rigged through the exact
+# forge-anim-hound/weaver recipe (armature + proximity skin + in-place
+# actions + muted-NLA stash + ACTIONS export). Animated GLBs are not
+# byte-deterministic (19-b law) — verify-assets.ts pins their content.
+forge-striker:
+	@test -x "$(BLENDER)" || { echo "forge-striker: blender not found at $(BLENDER) — SKIP"; exit 0; }
+	$(BLENDER) -b -P scripts/blender/forge_anim_striker.py -- out public/assets/meshes
+
+forge-bulwark:
+	@test -x "$(BLENDER)" || { echo "forge-bulwark: blender not found at $(BLENDER) — SKIP"; exit 0; }
+	$(BLENDER) -b -P scripts/blender/forge_anim_bulwark.py -- out public/assets/meshes
+
+forge-herald:
+	@test -x "$(BLENDER)" || { echo "forge-herald: blender not found at $(BLENDER) — SKIP"; exit 0; }
+	$(BLENDER) -b -P scripts/blender/forge_anim_herald.py -- out public/assets/meshes
+
+# sprint 20 forge: biome-1 ASHFALL ground-scatter stones — static family,
+# byte-deterministic (forge-choir law, md5 twice-run)
+forge-ashfall:
+	@test -x "$(BLENDER)" || { echo "forge-ashfall: blender not found at $(BLENDER) — SKIP"; exit 0; }
+	$(BLENDER) -b -P scripts/blender/forge_ashfall.py -- out public/assets/meshes
+
 check:
 	bunx tsc --noEmit
 	bun run lint
@@ -77,6 +103,7 @@ qa:
 	bun scripts/simdrive-forge.ts
 	bun scripts/simdrive-controls.ts
 	bun scripts/simdrive-rites.ts
+	bun scripts/simdrive-bounty.ts
 
 # AFTERGLOW M0 pivot: fresh deep-sim arena survivor core under src/game/afterglow/
 qa-afterglow:

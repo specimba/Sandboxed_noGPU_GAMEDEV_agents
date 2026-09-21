@@ -336,6 +336,68 @@ export const RITE = {
 } as const;
 
 
+/* ------------------------------------------------------------------ */
+/* BOUNTY CONTRACTS (sprint 20-4a) — the data table for the 3 seeded    */
+/* auto-active contracts rolled every run (pure module: src/game/bounty.ts). */
+/* LAW: every stat is an ENGINE-side observable only — existing SimEvents */
+/* (onKill/onGraze/onBounce/onThrow/onFoeRoot/onFoeStun/onHurt) or engine  */
+/* timers. ZERO sim reads beyond public counters, ZERO sim writes.        */
+/* Scope semantics:                                                      */
+/*   'run'  — progress accumulates all run; completes at a room settle.  */
+/*   'room' — progress resets at each room start; the room's final value */
+/*            is judged at its clear (chain = max reached that room).    */
+export type BountyStat =
+  | 'kills' // onKill count
+  | 'strike' // onKill while the dash burns (mid-dash fells)
+  | 'graze' // onGraze count (once per bullet)
+  | 'throw' // onThrow count
+  | 'elite' // crowned (rime/cinder) fells
+  | 'root' // onFoeRoot — dash-strike roots
+  | 'stun' // onFoeStun — 3rd-hit stuns
+  | 'chain' // max sim.chain reached (onBounce index)
+  | 'clean' // seconds without a wound in the room (engine timer)
+  | 'swift'; // room cleared within target seconds (engine room clock)
+export type BountyScope = 'run' | 'room';
+
+export interface BountyDef {
+  id: string;
+  title: string;
+  /** short chip title for the HUD row (mobile ≤420px law) */
+  chip: string;
+  desc: string;
+  stat: BountyStat;
+  target: number;
+  /** dawn paid into the run ledger at the settling room clear */
+  dawn: number;
+  scope: BountyScope;
+}
+
+export const CONTRACTS: BountyDef[] = [
+  { id: 'harvest', title: 'ASH HARVEST', chip: 'HARVEST', desc: 'Fell 14 foes in one room', stat: 'kills', target: 14, dawn: 15, scope: 'room' },
+  { id: 'keeper', title: 'KEEPER OF THE CHAIN', chip: 'CHAIN', desc: 'Reach a chain of 10 in one room', stat: 'chain', target: 10, dawn: 15, scope: 'room' },
+  { id: 'staredown', title: 'STARE DOWN', chip: 'GRAZE', desc: 'Graze 30 bullets this descent', stat: 'graze', target: 30, dawn: 10, scope: 'run' },
+  { id: 'vengeance', title: 'VENGEANCE STRIKE', chip: 'STRIKE', desc: 'Fell 4 foes mid-dash this descent', stat: 'strike', target: 4, dawn: 15, scope: 'run' },
+  { id: 'vigil', title: 'UNTOUCHED VIGIL', chip: 'VIGIL', desc: 'Hold 20 s unwounded in one room', stat: 'clean', target: 20, dawn: 10, scope: 'room' },
+  { id: 'arsenal', title: 'RELENTLESS HAND', chip: 'THROW', desc: 'Throw 40 shards this descent', stat: 'throw', target: 40, dawn: 10, scope: 'run' },
+  { id: 'crownward', title: 'CROWN TAKER', chip: 'CROWNS', desc: 'Fell 2 crowned foes this descent', stat: 'elite', target: 2, dawn: 20, scope: 'run' },
+  { id: 'binder', title: 'ASH ROOTS', chip: 'ROOTS', desc: 'Root 6 foes with dash-strikes this descent', stat: 'root', target: 6, dawn: 15, scope: 'run' },
+  { id: 'thirdlight', title: 'THIRD LIGHT', chip: 'STUNS', desc: 'Stun 8 foes (3rd-hit stun) this descent', stat: 'stun', target: 8, dawn: 10, scope: 'run' },
+  { id: 'verdict', title: 'SWIFT VERDICT', chip: 'SWIFT', desc: 'Clear a room in under 25 s', stat: 'swift', target: 25, dawn: 15, scope: 'room' },
+];
+
+/** killer-kind display names for the run recap ("FELLED BY A CINDER HOUND")
+ *  — article included so the recap line reads in one breath */
+export const FOE_LABELS: Record<string, string> = {
+  drifter: 'A HUSK DRIFTER',
+  striker: 'A DART STRIKER',
+  weaver: 'A HEX WEAVER',
+  caster: 'AN OBELISK CASTER',
+  herald: 'A VEIL HERALD',
+  bulwark: 'AN ASH BULWARK',
+  hound: 'A CINDER HOUND',
+  warden: 'A WARDEN',
+} as const;
+
 export const FEEL = {
   dashBuffer: 0.12, // a dash pressed this close to ready fires the frame it readies
   hitstopKill: 0.055,

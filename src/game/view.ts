@@ -2,9 +2,9 @@ import * as THREE from 'three';
 import { loadAssetGeometry, loadAssetScene } from './assetLib';
 import { FoeAnimator, type AnimKind } from './foeAnim';
 import * as SkeletonUtils from 'three/examples/jsm/utils/SkeletonUtils.js';
-import { ARENA, CC, CINDER, COLORS, FOE, HEX, HOUND, RIME } from './constants';
+import { ARENA, CC, CINDER, COLORS, FOE, HEX, HOUND, RIME, RITE } from './constants';
 import type { FoeKind, Sim } from './sim';
-import { makeGlowTexture, ParticlePool } from './fx';
+import { makeGlowTexture, ParticlePool, PerPointBatch } from './fx';
 import {
   coreMaterial,
   makeDiamondTexture,
@@ -38,6 +38,10 @@ const FOE_GEO: Record<FoeKind, THREE.BufferGeometry> = {
 };
 
 /** identity color — rim, heart, halo and telegraph all speak it */
+function isAnimKind(k: FoeKind): k is AnimKind {
+  return k === 'hound' || k === 'weaver' || k === 'striker' || k === 'bulwark' || k === 'herald';
+}
+
 const FOE_COL: Record<FoeKind, number> = {
   drifter: COLORS.foe,
   striker: 0xff7a3d,
@@ -241,6 +245,39 @@ interface HaloView {
   mat: THREE.MeshBasicMaterial;
 }
 
+/** DEATH GHOST (20-4c C3) — a detached SkeletonUtils.clone of the kind's
+ *  prototype playing death_collapse once, sinking/fading, then freed */
+interface GhostView {
+  root: THREE.Group;
+  mixer: THREE.AnimationMixer;
+  mats: THREE.MeshStandardMaterial[]; // per-ghost clones — the live pool never fades with it
+  t: number;
+  dur: number; // the death clip's own duration owns the clock
+  y0: number;
+}
+
+/** last-seen live state, kept so a vanished id can die again, visibly */
+interface FoeRecord {
+  kind: FoeKind;
+  x: number;
+  y: number;
+  z: number;
+  yaw: number;
+}
+
+/** ember-vacuum mote — callers own all state (PerPointBatch is stateless) */
+interface MoteState {
+  active: boolean;
+  x: number;
+  y: number;
+  z: number;
+  vx: number;
+  vy: number;
+  vz: number;
+  age: number;
+  size: number;
+}
+
 interface CinderView {
   mesh: THREE.Mesh;
   mat: THREE.MeshBasicMaterial;
@@ -261,6 +298,18 @@ const SHADOW_POOL = 41; // 1 ember dart + 40 foes
 const SPARK_SEGS = 8;
 const FLASH_TIME = 0.09; // per-foe hit-flash window
 const HALO_R0 = 0.94; // haloGeo outer edge — scale = desired radius / HALO_R0
+
+/** DEATH GHOST one-shot queue (20-4c C3) — Godot AnimationPlayer.queue
+ *  analog: a killed rigged foe re-dies visibly. 2 concurrent seats max —
+ *  transient ≤ +2 draw calls, declared; queue full → skip silently. */
+const GHOST_POOL = 2;
+
+/** EMBER VACUUM (20-4c C4) — payout income made physical: per kill, 3 motes
+ *  linger at the corpse ~0.5s then accelerate to the dart. ONE PerPointBatch
+ *  draw while alive, +0 persistent (idle drawRange 0, bullet-pool law).
+ *  Phases are the existing hash laws — zero rng. */
+const VACUUM_SEATS = 6;
+const VACUUM = { linger: 0.5, life: 1.7, pull: 30, cap: 22, reach: 0.7 };
 
 /** sprint 18 crown halos — ring = affix, extending the elite halo law.
  *  Rime speaks the sanctioned cold voice (herald/veil family, view.ts FOE_COL
@@ -308,6 +357,22 @@ export class View {
   private animator = new FoeAnimator();
   private protos = new Map<AnimKind, THREE.Group>();
   private animSeq = 0;
+
+  /* DEATH GHOST one-shot queue (20-4c C3) + KILL DIFF — sim.killCount is the
+   * authoritative kill counter (one increment per death, ZERO on room wipes
+   * and run resets), so vanished tracked ids only count as kills when the
+   * counter moved. Pure view-side — engine.ts/sim.ts untouched. */
+  private deathClips = new Map<AnimKind, THREE.AnimationClip>();
+  private ghosts: GhostView[] = [];
+  private tracked = new Map<number, FoeRecord>();
+  private seenFoes = new Set<number>();
+  private lastKillCount = -1;
+  private killSeq = 0;
+
+  /* EMBER VACUUM (20-4c C4) — one stateless batch, we own the state */
+  private motes: MoteState[] = [];
+  private moteCursor = 0;
+  private moteBatch: PerPointBatch;
   private plateGeo = new THREE.BoxGeometry(2.3, 1.7, 0.22);
   private coreGeo = new THREE.OctahedronGeometry(0.28, 0);
   private coreMat = coreMaterial(0xffaebf);
@@ -549,6 +614,13 @@ export class View {
     this.veilPoints.renderOrder = 9;
     scene.add(this.veilPoints);
 
+    // ---- EMBER VACUUM seats (20-4c C4): one PerPointBatch draw while any
+    // ---- mote is alive; idle = drawRange 0 = the bullet-pool idle law
+    for (let i = 0; i < VACUUM_SEATS; i++) {
+      this.motes.push({ active: false, x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0, age: 0, size: 0.5 });
+    }
+    this.moteBatch = new PerPointBatch(scene, VACUUM_SEATS, { renderOrder: 8 });
+
     // ---- CC marker pools (stun / root / chill) — shared geo+mat per type
     for (let i = 0; i < CC_POOL; i++) {
       const defs: [HaloView[], THREE.MeshBasicMaterial][] = [
@@ -766,6 +838,8 @@ export class View {
     void loadAssetScene('cinder_hound').then((asset) => {
       if (!asset || this.disposed) return;
       if (!this.animator.register('hound', asset.clips)) return; // no clips → static law holds
+      const death = asset.clips.find((c) => c.name === 'death_collapse');
+      if (death) this.deathClips.set('hound', death); // ghost fuel — soft-fail: absent → no ghosts
       const proto = asset.scene;
       proto.updateMatrixWorld(true);
       const bb = new THREE.Box3().setFromObject(proto);
@@ -778,6 +852,8 @@ export class View {
     void loadAssetScene('hex_weaver').then((asset) => {
       if (!asset || this.disposed) return;
       if (!this.animator.register('weaver', asset.clips)) return;
+      const death = asset.clips.find((c) => c.name === 'death_collapse');
+      if (death) this.deathClips.set('weaver', death); // ghost fuel — soft-fail: absent → no ghosts
       const proto = asset.scene;
       proto.updateMatrixWorld(true);
       const bb = new THREE.Box3().setFromObject(proto);
@@ -786,6 +862,52 @@ export class View {
       proto.scale.setScalar(k);
       this.protos.set('weaver', proto);
       for (const v of this.foePool) if (v.kind === 'weaver') this.mountSkinned(v, 'weaver');
+    });
+
+    // ---- LIVING FOES II (sprint 20-5): the trio joins the rig law —
+    // ---- striker dart, bulwark slab, herald bell. The procedural bodies in
+    // ---- FOE_GEO above stay as the soft fallback forever (19-b law).
+    void loadAssetScene('striker_dart').then((asset) => {
+      if (!asset || this.disposed) return;
+      if (!this.animator.register('striker', asset.clips)) return; // no clips → static law holds
+      const proto = asset.scene;
+      proto.updateMatrixWorld(true);
+      const bb = new THREE.Box3().setFromObject(proto);
+      const size = bb.getSize(new THREE.Vector3());
+      // dart: forged length ≈ z (snout −Y Blender → glTF +Z forward law) —
+      // normalize LENGTH to the static dart footprint (0.62 cone × 1.7, tip = +Z)
+      const k = 1.7 / Math.max(0.001, size.z);
+      proto.scale.setScalar(k);
+      this.protos.set('striker', proto);
+      for (const v of this.foePool) if (v.kind === 'striker') this.mountSkinned(v, 'striker');
+    });
+    void loadAssetScene('bulwark_slab').then((asset) => {
+      if (!asset || this.disposed) return;
+      if (!this.animator.register('bulwark', asset.clips)) return;
+      const proto = asset.scene;
+      proto.updateMatrixWorld(true);
+      const bb = new THREE.Box3().setFromObject(proto);
+      const size = bb.getSize(new THREE.Vector3());
+      // slab: forged h=2.4 — normalize HEIGHT to 1.8 (tomb-slab presence; the
+      // group-child armor plate at 2.3×1.7 still carries the block-zone read)
+      const k = 1.8 / Math.max(0.001, size.y);
+      proto.scale.setScalar(k);
+      this.protos.set('bulwark', proto);
+      for (const v of this.foePool) if (v.kind === 'bulwark') this.mountSkinned(v, 'bulwark');
+    });
+    void loadAssetScene('herald_bell').then((asset) => {
+      if (!asset || this.disposed) return;
+      if (!this.animator.register('herald', asset.clips)) return;
+      const proto = asset.scene;
+      proto.updateMatrixWorld(true);
+      const bb = new THREE.Box3().setFromObject(proto);
+      const size = bb.getSize(new THREE.Vector3());
+      // bell: forged h=2.6 — hover at 1.6 tall (weaver precedent: the rig may
+      // exceed the procedural placeholder; the heart glow rides the group)
+      const k = 1.6 / Math.max(0.001, size.y);
+      proto.scale.setScalar(k);
+      this.protos.set('herald', proto);
+      for (const v of this.foePool) if (v.kind === 'herald') this.mountSkinned(v, 'herald');
     });
   }
 
@@ -888,6 +1010,153 @@ export class View {
     s.life = 0.14;
     s.line.visible = true;
     s.mat.opacity = 0.95;
+  }
+
+  /* ---------------- DEATH GHOST one-shot queue (20-4c C3) ---------------- */
+
+  /** reap the vanished — call once per sync after the foe pass. A vanished
+   *  tracked id whose killCount moved is a kill: it pays out vacuum motes and
+   *  (rigged kinds only, soft-fail law) re-dies as a ghost. Vanishes with a
+   *  frozen counter are room wipes / run resets — silently pruned. */
+  private reapKills(kills: number): void {
+    const dead: FoeRecord[] = [];
+    for (const [id, rec] of this.tracked) {
+      if (this.seenFoes.has(id)) continue;
+      this.tracked.delete(id);
+      dead.push(rec);
+    }
+    if (kills <= 0) return;
+    for (const rec of dead) {
+      if (kills <= 0) break;
+      kills -= 1;
+      this.spawnVacuumMotes(rec.x, rec.z); // every kill makes the payout physical
+      const kind = rec.kind as AnimKind;
+      if (!this.animator.has(kind) || !this.protos.has(kind) || !this.deathClips.has(kind)) continue;
+      if (this.ghosts.length >= GHOST_POOL) continue; // queue full — skip silently (cap law)
+      this.spawnDeathGhost(kind, rec);
+    }
+  }
+
+  /** detached SkeletonUtils.clone of the prototype, playing death_collapse
+   *  ONCE (LoopOnce + clamp — the forge's first-key-identity law means no
+   *  pose pop), then the clip's own duration drives the sink + fade */
+  private spawnDeathGhost(kind: AnimKind, rec: FoeRecord): void {
+    const proto = this.protos.get(kind);
+    const clip = this.deathClips.get(kind);
+    if (!proto || !clip) return;
+    const inst = SkeletonUtils.clone(proto) as THREE.Group;
+    const mats: THREE.MeshStandardMaterial[] = [];
+    inst.traverse((o) => {
+      const m = o as THREE.Mesh & { frustumCulled?: boolean; material?: THREE.Material | THREE.Material[] };
+      if (!m.isMesh) return;
+      m.frustumCulled = false; // skinned bboxes lie — never cull a rig
+      const src = m.material as THREE.MeshStandardMaterial;
+      const cloned = (src.clone?.() ?? src) as THREE.MeshStandardMaterial; // per-seat material-clone law (hit-flash safety)
+      cloned.transparent = true;
+      cloned.depthWrite = false; // a fading corpse must not punch holes in the pools
+      m.material = cloned;
+      for (const c of Array.isArray(cloned) ? cloned : [cloned]) {
+        if (c && (c as THREE.MeshStandardMaterial).emissive) mats.push(c as THREE.MeshStandardMaterial);
+      }
+    });
+    const root = new THREE.Group();
+    root.position.set(rec.x, rec.y, rec.z);
+    root.rotation.y = rec.yaw;
+    root.add(inst);
+    this.scene.add(root);
+    const mixer = new THREE.AnimationMixer(inst);
+    const action = mixer.clipAction(clip);
+    action.setLoop(THREE.LoopOnce, 1);
+    action.clampWhenFinished = true; // hold the slump — the fade owns the rest
+    action.play();
+    this.ghosts.push({ root, mixer, mats, t: 0, dur: clip.duration, y0: rec.y });
+  }
+
+  private updateGhosts(dt: number): void {
+    for (let i = this.ghosts.length - 1; i >= 0; i--) {
+      const g = this.ghosts[i];
+      g.t += dt;
+      g.mixer.update(dt);
+      const k = Math.min(1, g.t / g.dur);
+      g.root.position.y = g.y0 - 0.85 * k * k; // sink as it collapses
+      for (const m of g.mats) m.opacity = 1 - k; // fade over the clip's own duration
+      if (k >= 1) {
+        g.mixer.stopAllAction();
+        this.scene.remove(g.root);
+        for (const m of g.mats) m.dispose(); // clones share proto geometry — mats only (unmountSkinned law)
+        this.ghosts.splice(i, 1);
+      }
+    }
+  }
+
+  /* ---------------- EMBER VACUUM (20-4c C4) ---------------- */
+
+  /** 3 motes per kill — they linger at the corpse, then accelerate to the
+   *  dart. Spawn phases ride the existing hash laws (i/count·2π plus
+   *  killSeq·goldenAngle, constants.ts:330 convention) — zero rng. */
+  private spawnVacuumMotes(x: number, z: number): void {
+    const n = 3;
+    for (let i = 0; i < n; i++) {
+      const m = this.motes[this.moteCursor];
+      this.moteCursor = (this.moteCursor + 1) % this.motes.length; // oldest seat reused — cap law
+      const a = (i / n) * Math.PI * 2 + this.killSeq * RITE.CHOIR.goldenAngle;
+      m.active = true;
+      m.age = 0;
+      m.x = x + Math.cos(a) * 0.35;
+      m.y = 1.0;
+      m.z = z + Math.sin(a) * 0.35;
+      m.vx = Math.cos(a) * 2.4;
+      m.vy = 1.6 + 0.4 * (i % 2);
+      m.vz = Math.sin(a) * 2.4;
+      m.size = 0.5 + 0.08 * (i % 3);
+    }
+    this.killSeq += 1;
+  }
+
+  private updateMotes(dt: number, px: number, pz: number): void {
+    let n = 0;
+    for (const m of this.motes) {
+      if (!m.active) continue;
+      m.age += dt;
+      if (m.age >= VACUUM.life) {
+        m.active = false;
+        continue;
+      }
+      const drag = Math.max(0, 1 - 3.2 * dt);
+      m.vx *= drag;
+      m.vy *= drag;
+      m.vz *= drag;
+      if (m.age >= VACUUM.linger) {
+        // the pull — accelerate toward the dart, ramping in over the first beats
+        const dx = px - m.x;
+        const dy = 1.0 - m.y;
+        const dz = pz - m.z;
+        const d = Math.hypot(dx, dy, dz) || 1;
+        if (d < VACUUM.reach) {
+          m.active = false; // paid — the mote lands
+          continue;
+        }
+        const pull = VACUUM.pull * Math.min(1, (m.age - VACUUM.linger) * 2.5);
+        m.vx += (dx / d) * pull * dt;
+        m.vy += (dy / d) * pull * dt;
+        m.vz += (dz / d) * pull * dt;
+        const sp = Math.hypot(m.vx, m.vy, m.vz);
+        if (sp > VACUUM.cap) {
+          const k = VACUUM.cap / sp;
+          m.vx *= k;
+          m.vy *= k;
+          m.vz *= k;
+        }
+      }
+      m.x += m.vx * dt;
+      m.y += m.vy * dt;
+      m.z += m.vz * dt;
+      const k = m.age / VACUUM.life;
+      const alpha = 0.9 * Math.min(1, m.age * 6) * (1 - k * k);
+      this.moteBatch.set(n++, m.x, m.y, m.z, m.size * (0.7 + 0.5 * (1 - k)), EMBER_COL, alpha);
+    }
+    this.moteBatch.setCount(n);
+    if (n > 0) this.moteBatch.flush();
   }
 
   sync(sim: Sim, aimX: number, aimZ: number, showAim: boolean, dt: number, struggle = false): void {
@@ -997,6 +1266,7 @@ export class View {
     // foes — hide all, then re-assign from sim
     let fi = 0;
     let shI = 1;
+    this.seenFoes.clear();
     this.stunCursor = 0;
     this.rootCursor = 0;
     this.chillCursor = 0;
@@ -1018,7 +1288,8 @@ export class View {
         v.glow.scale.setScalar(heartDef.scale);
         v.core.visible = f.kind === 'weaver';
         // LIVING FOES — take the rigged body the moment it is available
-        if ((f.kind === 'hound' || f.kind === 'weaver') && this.animator.has(f.kind) && this.protos.has(f.kind)) {
+        // (sprint 20-5: the striker/bulwark/herald trio joins hound + weaver)
+        if (isAnimKind(f.kind) && this.animator.has(f.kind) && this.protos.has(f.kind)) {
           this.mountSkinned(v, f.kind);
         }
       }
@@ -1049,6 +1320,11 @@ export class View {
         // the plate / the snout must read true — group yaw = locked facing
         v.group.rotation.y = f.face;
         v.mesh.rotation.y = 0;
+      } else if (f.kind === 'striker' && v.skinned) {
+        // rigged dart reads its run: velocity-facing (the dash line is the
+        // threat, so the dart must point where it will strike; view-layer only)
+        v.group.rotation.y = Math.atan2(f.vx, f.vz);
+        v.mesh.rotation.y = 0;
       } else {
         v.group.rotation.y = 0;
         v.mesh.rotation.y += dt * (f.kind === 'warden' ? 0.7 : f.kind === 'caster' ? 0.5 : 1.8);
@@ -1067,13 +1343,22 @@ export class View {
 
       // LIVING FOES — the rig follows the sim FSM (view-layer only: the
       // digest never sees this). hound: lurk→windup→charge→recover;
-      // weaver: a live loom zone = the anchor cast.
+      // weaver: a live loom zone = the anchor cast; striker: seek→telegraph
+      // coil→strike→recover; bulwark: one gait (the plate IS its statement);
+      // herald: the bell winds, then pulses right before the volley breaks.
       if (v.skinned) {
         if (f.kind === 'hound') {
           this.animator.setState(v.animId, f.state === 1 ? 'windup' : f.state === 2 ? 'charge' : f.state === 3 ? 'recover' : 'idle');
         } else if (f.kind === 'weaver') {
           const casting = sim.hexes.some((h) => h.weaverId === f.id && h.kind !== 'meteor');
           this.animator.setState(v.animId, casting ? 'cast' : 'idle');
+        } else if (f.kind === 'striker') {
+          this.animator.setState(v.animId, f.state === 1 ? 'windup' : f.state === 2 ? 'charge' : f.state === 3 ? 'recover' : 'idle');
+        } else if (f.kind === 'bulwark') {
+          this.animator.setState(v.animId, 'idle');
+        } else if (f.kind === 'herald') {
+          const late = f.state === 1 && f.timer <= 0.25; // the last quarter of the ring telegraph
+          this.animator.setState(v.animId, f.state === 1 ? (late ? 'cast' : 'windup') : 'idle');
         }
       }
 
@@ -1155,9 +1440,24 @@ export class View {
           t.mat.opacity = 0.25 + 0.55 * grow * (0.7 + 0.3 * Math.sin(this.time * 30));
         }
       }
+
+      // kill tracking (20-4c C3/C4) — last-seen live state; the reap needs the
+      // corpse's spot because the sim has already removed it by the next sync
+      this.seenFoes.add(f.id);
+      this.tracked.set(f.id, { kind: f.kind, x: f.x, y: v.group.position.y, z: f.z, yaw: v.group.rotation.y });
     }
     for (let i = fi; i < this.foePool.length; i++) this.foePool[i].group.visible = false;
     for (let i = shI; i < this.shadows.length; i++) this.shadows[i].visible = false;
+
+    // KILL DIFF (20-4c C3/C4) — sim.killCount moves exactly once per kill and
+    // NEVER on room wipes / run resets, so vanished tracked ids are the dead
+    // only when the counter moved. Ghosts + vacuum motes stay view-only.
+    const kc = sim.killCount;
+    const killDelta = this.lastKillCount >= 0 && kc >= this.lastKillCount ? kc - this.lastKillCount : 0;
+    this.lastKillCount = kc;
+    this.reapKills(killDelta);
+    this.updateGhosts(dt);
+    this.updateMotes(dt, sim.px, sim.pz);
     for (const t of this.telegraphs) {
       if (t.line.visible) {
         t.mat.opacity -= dt * 4;
@@ -1216,7 +1516,10 @@ export class View {
       hv.group.visible = true;
       hv.group.position.set(h.x, 0.12, h.z);
       const hk = Math.max(0, Math.min(1, h.t / HEX.telegraph)); // 1 fresh → 0 detonate
-      hv.group.scale.setScalar(0.9 + 0.22 * (1 - hk));
+      // SUNFALL meteors ride the zone's own radius (constants.ts:284 law —
+      // warning circle = blast circle); root hexes keep the authored read
+      const zr = h.kind === 'meteor' && h.radius ? h.radius / HEX.radius : 1;
+      hv.group.scale.setScalar((0.9 + 0.22 * (1 - hk)) * zr);
       hv.group.rotation.y = this.time * 0.7;
       hv.rimMat.opacity = (0.3 + 0.6 * (1 - hk)) * (0.75 + 0.25 * Math.sin(this.time * 14));
       hv.fillMat.opacity = 0.08 + 0.2 * (1 - hk);
@@ -1275,6 +1578,13 @@ export class View {
     this.disposed = true;
     this.animator.dispose();
     for (const f of this.foePool) this.unmountSkinned(f);
+    for (const g of this.ghosts) {
+      g.mixer.stopAllAction();
+      this.scene.remove(g.root);
+      for (const m of g.mats) m.dispose();
+    }
+    this.ghosts = [];
+    this.moteBatch.dispose();
     this.scene.remove(this.playerGroup, this.bulletPoints, this.heavyPoints, this.veilPoints, this.reticle);
     for (const s of this.shardViews) {
       this.scene.remove(s.mesh);

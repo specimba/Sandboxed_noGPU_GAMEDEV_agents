@@ -1,17 +1,19 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { getEngine } from '@/game/engine';
-import { useGameStore } from '@/game/store';
+import { useGameStore, type RunRecap } from '@/game/store';
 import { TIER_COLOR } from '@/game/run';
 import { BUILD } from '@/game/version';
 
-/** payout count-up — rewards TICK up, they don't teleport (sprint 17) */
-function useCountUp(target: number, active: boolean, dur = 900): number {
+/** payout count-up — rewards TICK up, they don't teleport (sprint 17);
+ *  sprint 20-4a adds an optional delay so recap rows stage in sequence */
+function useCountUp(target: number, active: boolean, dur = 900, delay = 0): number {
   const [val, setVal] = useState(0);
   useEffect(() => {
     if (!active) return;
     let raf = 0;
+    let timer = 0;
     const t0 = performance.now();
     const tick = (now: number) => {
       const k = Math.min(1, (now - t0) / dur);
@@ -19,10 +21,88 @@ function useCountUp(target: number, active: boolean, dur = 900): number {
       setVal(Math.round(target * (1 - Math.pow(1 - k, 3))));
       if (k < 1) raf = requestAnimationFrame(tick);
     };
-    raf = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(raf);
-  }, [target, active, dur]);
+    if (delay > 0) {
+      timer = window.setTimeout(() => {
+        raf = requestAnimationFrame(tick);
+      }, delay);
+    } else {
+      raf = requestAnimationFrame(tick);
+    }
+    return () => {
+      cancelAnimationFrame(raf);
+      if (timer) window.clearTimeout(timer);
+    };
+  }, [target, active, dur, delay]);
   return active ? val : 0;
+}
+
+/** staged text row — fades in after `delay` ms (no new CSS classes needed:
+ *  an inline transition over the existing opacity vocabulary) */
+function Staged({ delay, children }: { delay: number; children: ReactNode }) {
+  const [on, setOn] = useState(delay === 0);
+  useEffect(() => {
+    if (delay === 0) return;
+    const t = window.setTimeout(() => setOn(true), delay);
+    return () => window.clearTimeout(t);
+  }, [delay]);
+  return (
+    <span className="transition-opacity duration-500" style={{ opacity: on ? 1 : 0 }}>
+      {children}
+    </span>
+  );
+}
+
+/** RUN RECAP (sprint 20-4a) — the descent, recounted in staged count-ups */
+function RunRecapRows({ recap }: { recap: RunRecap }) {
+  const rooms = useCountUp(recap.rooms, true, 500, 200);
+  const bosses = useCountUp(recap.bosses, true, 500, 500);
+  return (
+    <div className="mt-5 w-full">
+      <div className="flex items-center gap-3">
+        <span aria-hidden="true" className="hs-hairline flex-1" />
+        <span className="hs-tracking text-[9px] text-[#f2e6cf]/45">THE DESCENT, RECOUNTED</span>
+        <span aria-hidden="true" className="hs-hairline flex-1" />
+      </div>
+      <div className="mt-2.5 grid w-full grid-cols-1 gap-y-2 text-left">
+        <div className="flex items-baseline justify-between border-b border-[rgba(255,196,120,0.12)] pb-2">
+          <span className="hs-tracking text-[9px] text-[#f2e6cf]/45">ROOMS CLEARED</span>
+          <span className="text-xs tabular-nums text-[#f2e6cf]/85">{rooms}</span>
+        </div>
+        <div className="flex items-baseline justify-between border-b border-[rgba(255,196,120,0.12)] pb-2">
+          <span className="hs-tracking text-[9px] text-[#f2e6cf]/45">BOSSES FELLED</span>
+          <span className="text-xs tabular-nums text-[#f2e6cf]/85">{bosses}</span>
+        </div>
+        {recap.contracts > 0 && (
+          <Staged delay={800}>
+            <div className="flex items-baseline justify-between border-b border-[rgba(255,196,120,0.12)] pb-2">
+              <span className="hs-tracking text-[9px] text-[#f2e6cf]/45">CONTRACTS FILLED</span>
+              <span className="hs-tracking text-[10px] text-[#ffc766]">✓ {recap.contracts}</span>
+            </div>
+          </Staged>
+        )}
+        {recap.boons.length > 0 && (
+          <Staged delay={1050}>
+            <div className="flex items-baseline justify-between gap-3 border-b border-[rgba(255,196,120,0.12)] pb-2">
+              <span className="hs-tracking shrink-0 text-[9px] text-[#f2e6cf]/45">BOONS TAKEN</span>
+              <span className="hs-tracking max-w-[190px] text-right text-[9px] leading-4 text-[#ffc766]/70 sm:max-w-none sm:text-[10px]">
+                {recap.boons.join(' · ')}
+              </span>
+            </div>
+          </Staged>
+        )}
+        {recap.rites.length > 0 && (
+          <Staged delay={1300}>
+            <div className="flex items-baseline justify-between gap-3 border-b border-[rgba(255,196,120,0.12)] pb-2">
+              <span className="hs-tracking shrink-0 text-[9px] text-[#f2e6cf]/45">RITES CARRIED</span>
+              <span className="hs-tracking max-w-[190px] text-right text-[9px] leading-4 text-[#ffc766]/70 sm:max-w-none sm:text-[10px]">
+                {recap.rites.join(' · ')}
+              </span>
+            </div>
+          </Staged>
+        )}
+      </div>
+    </div>
+  );
 }
 
 /** the run payout, counted up in stages: score → dawn */
@@ -67,6 +147,7 @@ export default function Overlays() {
   const embers = useGameStore((s) => s.embers);
   const embersMax = useGameStore((s) => s.embersMax);
   const seed = useGameStore((s) => s.seed);
+  const recap = useGameStore((s) => s.recap);
 
   // keyboard: 1-3 pick boons, H heals
   useEffect(() => {
@@ -249,6 +330,12 @@ export default function Overlays() {
           >
             {won ? 'THE SUN REKINDLES' : 'THE EMBER FADES'}
           </h2>
+          {/* sprint-20-4a — the killer is named in one breath */}
+          {recap && !won && recap.killer && (
+            <span className="hs-tracking mt-1 text-[10px] text-[#ff8a7a]/80 sm:text-[11px]">
+              FELLED BY {recap.killer}
+            </span>
+          )}
           <span aria-hidden="true" className="hs-hairline my-4 w-full" />
           <span className="hs-tracking text-[9px] text-[#f2e6cf]/45">FINAL SCORE</span>
           <DeathPayout />
@@ -292,6 +379,7 @@ export default function Overlays() {
               </span>
             </div>
           </div>
+          {recap && <RunRecapRows recap={recap} />}
           <p className="hs-tracking mt-4 text-[9px] text-[#f2e6cf]/30">
             ENTER — REKINDLE · SPEND DAWN AT THE SHRINE
           </p>

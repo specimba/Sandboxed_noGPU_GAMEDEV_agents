@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { getEngine } from '@/game/engine';
+import { MILESTONES } from '@/game/milestones';
 import { SHRINE_UPGRADES } from '@/game/run';
 import { useGameStore } from '@/game/store';
 import { buildStamp } from '@/game/version';
@@ -13,6 +14,7 @@ export default function TitleScreen() {
   const touch = useGameStore((s) => s.touch);
   const dawn = useGameStore((s) => s.dawn);
   const unlocked = useGameStore((s) => s.unlocked);
+  const milestones = useGameStore((s) => s.milestones);
   const [shrineOpen, setShrineOpen] = useState(false);
 
   useEffect(() => {
@@ -28,6 +30,14 @@ export default function TitleScreen() {
   }, [phase]);
 
   if (phase !== 'title') return null;
+
+  // DEEDS OF THE DESCENT (sprint-20-4a) — completion order is the meta key
+  // order (JSON round-trips preserve string-key insertion order)
+  const doneIds = Object.keys(milestones).filter((k) => milestones[k]);
+  const lastThree = doneIds
+    .slice(-3)
+    .reverse()
+    .map((id) => MILESTONES.find((m) => m.id === id)?.name ?? id);
 
   return (
     <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center">
@@ -154,6 +164,20 @@ export default function TitleScreen() {
             </div>
           </div>
         )}
+
+        {/* DEEDS OF THE DESCENT — compact trophy row (mobile ≤420px law:
+            two short lines, count + the 3 most recent names). Renders from
+            0/16 — the visible ladder IS the hook (sprint-20 audit #6). */}
+        <div className="flex max-w-full flex-col items-center gap-1">
+          <span className="hs-tracking text-[9px] text-[#ffc766]/75 sm:text-[10px]">
+            ✦ {doneIds.length}/{MILESTONES.length} DEEDS OF THE DESCENT
+          </span>
+          {lastThree.length > 0 && (
+            <span className="hs-tracking max-w-full truncate px-4 text-[8px] text-[#f2e6cf]/45 sm:text-[9px]">
+              {lastThree.join(' · ')}
+            </span>
+          )}
+        </div>
 
         {/* footer */}
         {(best > 0 || bestWave > 1) && (
