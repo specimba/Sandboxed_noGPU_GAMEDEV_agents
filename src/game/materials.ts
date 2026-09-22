@@ -72,7 +72,12 @@ void main() {
   #endif
   vec3 L = normalize(vec3(0.30, 0.85, 0.42));
   // chiseled key light — dark shell + facet highlight
-  float ndl = dot(N, L) * 0.5 + 0.5;
+  float ndlRaw = dot(N, L) * 0.5 + 0.5;
+  // banded toon ramp (sprint 21): the lit term quantizes to a 5-step ramp —
+  // ANY mesh reads as hand-painted stone, ~zero cost. Blended 60/40 with the
+  // smooth term so tiny props never strobe between bands.
+  float ndlBand = (floor(ndlRaw * 5.0) + 0.5) / 5.0;
+  float ndl = mix(ndlRaw, ndlBand, 0.6);
   vec3 col = uBase + uLit * pow(ndl, 1.7);
   #ifdef STYLIZED_MAP
   // baked detail mask (arena floor): MODULATES the lit term instead of

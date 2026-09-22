@@ -79,6 +79,7 @@ interface PerfSnapshot {
   fps: number;
   frameMs: { ema: number; p95: number };
   drawCallsPeak: number;
+  qScale: number;
   uptimeSec: number;
 }
 
@@ -170,6 +171,8 @@ export class Engine {
   private raycaster = new THREE.Raycaster();
   private ndc = new THREE.Vector2();
   private disposed = false;
+  private blobBuf = new Float32Array(3 * 41); // contact-shadow staging (player + 40 foes)
+  private qCool = 0; // adaptive-quality step cooldown
 
   // ?debug=1 forensics state
   private debug = false;
@@ -1073,6 +1076,7 @@ export class Engine {
       this.prevHitstop = this.hitstop;
     }
     this.samplePerf(dtReal);
+    this.adaptQuality(dtReal);
     const phase = this.store.getState().phase;
     if (this.debug && phase !== this.prevPhase) {
       this.debugLog(`phase ${this.prevPhase || '∅'} → ${phase}`);
@@ -1089,6 +1093,7 @@ export class Engine {
       this.view.sync(this.sim, 0, 0, false, dtReal);
       this.rings.update(dtReal);
       this.fx.update(dtReal);
+      this.syncBlobs();
       this.scene.render();
       return;
     }
@@ -1128,6 +1133,7 @@ export class Engine {
       this.rings.update(dtReal);
       this.fx.update(dtReal);
       this.dmgNums.update(this.scene.camera, dtReal);
+      this.syncBlobs();
       this.scene.update(dtReal * 0.45);
       this.rig.setVelocity(0, 0);
       this.rig.update(dtReal, this.scene.camera, this.sim.px, this.sim.pz, 0, 0, false, this.reduceFx);
@@ -1198,6 +1204,7 @@ export class Engine {
     this.fx.update(dtReal);
     this.dmgNums.update(this.scene.camera, dtReal);
     this.pips.update(this.scene.camera, this.sim, isBossRoom(this.runRoom));
+    this.syncBlobs();
     this.audio.setOverdrive(this.sim.odActive);
 
     // root-break snap (state-diffed — fires on the apply→clear edge only)
@@ -1386,6 +1393,43 @@ export class Engine {
     };
   }
 
+  /** contact shadows (view-only) — player first, then live foes; the sim is
+   *  read, never written (determinism law). Zero allocations per frame. */
+  private syncBlobs(): void {
+    const bb = this.blobBuf;
+    bb[0] = this.sim.px;
+    bb[1] = this.sim.pz;
+    bb[2] = 1.3;
+    let n = 1;
+    for (const f of this.sim.foes) {
+      if (n >= 41) break;
+      bb[n * 3] = f.x;
+      bb[n * 3 + 1] = f.z;
+      bb[n * 3 + 2] = 0.95;
+      n++;
+    }
+    this.scene.setBlobs(bb, n);
+  }
+
+  /** adaptive resolution — the stable-60 law owns pixel count, not the
+   *  reverse. Sustained >19ms frame EMA steps the scale down, sustained
+   *  <13.5ms buys it back; 2.5s cooldown per step so it can't oscillate. */
+  private adaptQuality(dtReal: number): void {
+    if (this.qCool > 0) {
+      this.qCool -= dtReal;
+      return;
+    }
+    if (perfMsEma <= 0) return;
+    const cur = this.scene.qualityScale;
+    if (perfMsEma > 19.2 && cur > 0.61) {
+      this.scene.setQualityScale(cur - 0.14);
+      this.qCool = 2.5;
+    } else if (perfMsEma < 13.5 && cur < 0.99) {
+      this.scene.setQualityScale(Math.min(1, cur + 0.07));
+      this.qCool = 2.5;
+    }
+  }
+
   /** live snapshot for the debug hook — query-time only (may sort/allocate) */
   private perfSnapshot(): PerfSnapshot {
     const info = this.scene.renderer.info;
@@ -1403,6 +1447,7 @@ export class Engine {
       fps: Math.round(perfFpsEma * 100) / 100,
       frameMs: { ema: Math.round(perfMsEma * 100) / 100, p95: Math.round(p95 * 100) / 100 },
       drawCallsPeak: perfDrawPeak,
+      qScale: Math.round(this.scene.qualityScale * 100) / 100,
       uptimeSec: perfBootAt > 0 ? Math.round(((performance.now() - perfBootAt) / 1000) * 1000) / 1000 : 0,
     };
     // restart the draw-call peak window at this query

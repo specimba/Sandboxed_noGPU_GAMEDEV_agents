@@ -4,6 +4,7 @@ import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { ARENA, BIOMES, COLORS } from './constants';
 import { loadAssetGeometry } from './assetLib';
 import { makeGlowTexture } from './fx';
@@ -53,6 +54,15 @@ vec4 hexCoords(vec2 uv) {
   return vec4(gv, uv - gv);
 }
 
+// value-noise fbm for the ember veins (2 octaves, cheap)
+float h21(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+float vnoise(vec2 p) {
+  vec2 i = floor(p), f = fract(p);
+  vec2 u = f * f * (3.0 - 2.0 * f);
+  return mix(mix(h21(i), h21(i + vec2(1.0, 0.0)), u.x),
+             mix(h21(i + vec2(0.0, 1.0)), h21(i + vec2(1.0, 1.0)), u.x), u.y);
+}
+
 void main() {
   vec2 p = vWorld.xz;
   float dCenter = length(p);
@@ -92,8 +102,23 @@ void main() {
   lineA += well * (0.35 + uIgnite * 0.6);
   lineCol += vec3(1.0, 0.72, 0.35) * well * (0.28 + uIgnite * 0.5);
 
+  // ember veins — RIDGE extraction along the fbm mid-level contour: thin,
+  // connected crack networks (value-noise thresholding gives round islands,
+  // which read as blurry blobs from the orbit rig — the ridge law instead)
+  float n1 = vnoise(p * 0.34 + vec2(uTime * 0.040, uTime * 0.023));
+  float n2 = vnoise(p * 0.61 - vec2(uTime * 0.017, uTime * 0.045));
+  float veinField = n1 * 0.62 + n2 * 0.38;
+  float ridge = 1.0 - abs(2.0 * veinField - 1.0);
+  float rimFade = 1.0 - smoothstep(ARENA_RADIUS - 9.0, ARENA_RADIUS - 2.0, dCenter);
+  float vein = pow(smoothstep(0.89, 0.98, ridge), 2.0) * rimFade;
+  float veinCore = pow(smoothstep(0.955, 0.997, ridge), 2.0) * rimFade;
+
   vec3 col = lineCol * edge * lineA * flick;
   col = min(col, vec3(1.15));  // keep the grid luminous, never white
+  // molten light crawling under the obsidian — sleeps at low energy, wakes
+  // with the sun (amplitude scales on uIgnite so biomes ignite dramatically)
+  col += hot * vein * (0.03 + uIgnite * 0.30) * (0.7 + 0.3 * sin(uTime * 2.2 + n1 * 6.28));
+  col += hot * veinCore * (0.10 + uIgnite * 0.42);
   // swallow everything at the arena rim
   col *= 1.0 - smoothstep(ARENA_RADIUS - 4.0, ARENA_RADIUS + 1.0, dCenter);
   col *= 1.0 - smoothstep(14.0, 34.0, length(vWorld - cameraPosition) * 0.35);
@@ -124,6 +149,71 @@ void main() {
 `;
 
 /** the "designed film look" — grade pass sits between bloom and output */
+const SHADOWS_CAP = 40;
+
+const SKY_VERT = /* glsl */ `
+varying vec3 vDir;
+void main() {
+  vDir = (modelMatrix * vec4(position, 1.0)).xyz;
+  gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+}
+`;
+
+/** the chasm dome — 3-stop vertical gradient hugging the fog color, an ember
+ *  afterglow band at the horizon and hash-cell twinkling stars above. Replaces
+ *  the flat void background: silhouettes finally separate. 1 draw call. */
+const SKY_FRAG = /* glsl */ `
+uniform vec3 uFog;
+uniform vec3 uTop;
+uniform float uTime;
+varying vec3 vDir;
+float h21(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+void main() {
+  vec3 d = normalize(vDir);
+  float h = clamp(d.y, -0.25, 1.0);
+  vec3 col = mix(uFog, uTop, smoothstep(0.02, 0.72, h));
+  // horizon ember band — the dead star's afterglow hugging the rim
+  col += vec3(1.0, 0.42, 0.15) * (1.0 - smoothstep(0.0, 0.32, abs(h - 0.055))) * 0.15;
+  // stars: hash-cell twinkle, upper hemisphere only, fog-free by construction
+  if (d.y > 0.08) {
+    vec2 sc = d.xz / (d.y + 0.35) * 6.0;
+    vec2 cell = floor(sc);
+    float star = step(0.982, h21(cell));
+    float tw = 0.55 + 0.45 * sin(uTime * 1.4 + h21(cell + 7.3) * 40.0);
+    col += vec3(1.0, 0.9, 0.75) * star * tw * smoothstep(0.08, 0.4, d.y) * 0.5;
+  }
+  gl_FragColor = vec4(col, 1.0);
+}
+`;
+
+/** skylight shafts — ONE mesh of six tapered additive quads (per-vertex seed),
+ *  leaning in over the rim behind the monolith field. Distinct from the core
+ *  god-rays: these are atmosphere from above, not the Lantern. +1 draw call. */
+const SHAFT_VERT = /* glsl */ `
+attribute float aSeed;
+varying vec2 vUv;
+varying float vSeed;
+void main() {
+  vUv = uv;
+  vSeed = aSeed;
+  gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+}
+`;
+
+const SHAFT_FRAG = /* glsl */ `
+uniform float uTime;
+uniform float uEnergy;
+varying vec2 vUv;
+varying float vSeed;
+void main() {
+  float fade = smoothstep(0.30, 0.62, vUv.y) * (1.0 - smoothstep(0.72, 1.0, vUv.y));
+  float side = smoothstep(0.0, 0.42, vUv.x) * (1.0 - smoothstep(0.58, 1.0, vUv.x));
+  float breathe = 0.6 + 0.4 * sin(uTime * 0.9 + vSeed * 17.0);
+  vec3 col = vec3(1.0, 0.72, 0.38) * fade * side * breathe * (0.03 + uEnergy * 0.10);
+  gl_FragColor = vec4(col, 1.0);
+}
+`;
+
 const GRADE_SHADER = {
   uniforms: {
     tDiffuse: { value: null as THREE.Texture | null },
@@ -146,7 +236,13 @@ const GRADE_SHADER = {
     }
 
     void main() {
-      vec3 col = texture2D(tDiffuse, vUv).rgb;
+      // radial chromatic aberration — grows to the corners (2 extra taps, ~free)
+      vec2 fromC = vUv - vec2(0.5, 0.46);
+      float ca = dot(fromC, fromC) * 0.010;
+      vec3 col;
+      col.r = texture2D(tDiffuse, vUv + fromC * ca).r;
+      col.g = texture2D(tDiffuse, vUv).g;
+      col.b = texture2D(tDiffuse, vUv - fromC * ca).b;
       // gentle S-curve — clamped knee keeps HDR hotspots monotonic
       vec3 s = clamp(col, 0.0, 1.0);
       col = mix(col, col * col * (3.0 - 2.0 * s), 0.22);
@@ -350,10 +446,25 @@ export class Scene {
   private time = 0;
   private ringCursor = 0;
   private fogSwellT = -1; // biome arrival swell clock (-1 idle)
+  private baseDpr = 1;
+  private qScale = 1;
+  private skyMat!: THREE.ShaderMaterial;
+  private shaftMat!: THREE.ShaderMaterial;
+  private shaftGroup!: THREE.Group;
+  private blobs!: THREE.InstancedMesh;
+  private blobM = new THREE.Matrix4();
+  private blobQ = new THREE.Quaternion();
+  private blobV = new THREE.Vector3();
+  private blobS = new THREE.Vector3();
 
   constructor(canvas: HTMLCanvasElement) {
-    this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    // PERF LAW (sprint 21): MSAA is wasted under the composer path (RenderPass
+    // renders into a plain RT; only the final quad touches the canvas) — the
+    // 4x MSAA bandwidth is traded for resolution headroom instead. DPR capped
+    // at 1.5; the adaptive quality scale (setQualityScale) owns the rest.
+    this.renderer = new THREE.WebGLRenderer({ canvas, antialias: false, powerPreference: 'high-performance' });
+    this.baseDpr = Math.min(window.devicePixelRatio || 1, 1.5);
+    this.renderer.setPixelRatio(this.baseDpr);
     this.renderer.setSize(window.innerWidth, window.innerHeight, false);
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.05;
@@ -377,15 +488,22 @@ export class Scene {
     this.buildShells();
     this.sun = this.buildSun();
     this.buildDust();
+    this.buildSky();
+    this.buildShafts();
+    this.buildBlobs();
 
-    // post: restrained bloom + film grade IS the look here
+    // post: restrained bloom + film grade IS the look here. Bloom's internal
+    // chain is CAPPED (capBloom) so its cost stops tracking DPR — on a 3K
+    // laptop panel the mip pyramid used to run at ~5K device px wide.
     this.composer = new EffectComposer(this.renderer);
     this.composer.addPass(new RenderPass(this.scene, this.camera));
-    this.bloom = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 0.55, 0.55, 0.55);
+    this.bloom = new UnrealBloomPass(new THREE.Vector2(1280, 720), 0.55, 0.55, 0.55);
     this.composer.addPass(this.bloom);
     this.gradePass = new ShaderPass(GRADE_SHADER);
     this.composer.addPass(this.gradePass);
     this.composer.addPass(new OutputPass());
+    this.capBloom();
+    this.setPixelRatio(this.baseDpr);
 
     // pipeline swap-in: assetgen .glb meshes replace primitives when they arrive
     this.loadGeneratedWorld();
@@ -551,6 +669,138 @@ export class Scene {
     const wall = new THREE.Mesh(wallGeo, wallMat);
     wall.position.y = 30;
     this.scene.add(wall);
+  }
+
+  /** THE CHASM DOME — gradient sky + stars (view-only, +1 draw call) */
+  private buildSky(): void {
+    const geo = new THREE.SphereGeometry(175, 24, 16);
+    this.skyMat = new THREE.ShaderMaterial({
+      vertexShader: SKY_VERT,
+      fragmentShader: SKY_FRAG,
+      uniforms: {
+        uFog: { value: new THREE.Color(BIOMES[0].fog) },
+        uTop: { value: new THREE.Color(BIOMES[0].fog).multiplyScalar(0.22) },
+        uTime: { value: 0 },
+      },
+      side: THREE.BackSide,
+      fog: false,
+      depthWrite: false,
+    });
+    const mesh = new THREE.Mesh(geo, this.skyMat);
+    mesh.renderOrder = -1;
+    mesh.frustumCulled = false;
+    this.scene.add(mesh);
+  }
+
+  /** SKYLIGHT SHAFTS — six tapered additive quads merged into ONE geometry
+   *  with per-vertex seeds; GPU-animated breathe, zero per-frame CPU. +1 DC.
+   *  DISTANT BY DESIGN: r 44–60 (behind the monolith field), thin, dim, high
+   *  band — near-camera quads project as huge washes from the orbit rig. */
+  private buildShafts(): void {
+    const quads: THREE.BufferGeometry[] = [];
+    for (let i = 0; i < 6; i++) {
+      const g = new THREE.PlaneGeometry(1, 1, 1, 1);
+      const pos = g.attributes.position as THREE.BufferAttribute;
+      for (let v = 0; v < pos.count; v++) {
+        if (pos.getY(v) > 0) pos.setX(v, pos.getX(v) * 0.35); // taper upward
+      }
+      const seed = new Float32Array(pos.count).fill(i * 0.618);
+      g.setAttribute('aSeed', new THREE.BufferAttribute(seed, 1));
+      const a = (i / 6) * Math.PI * 2 + (i % 2) * 0.35;
+      const r = 44 + (i % 3) * 8;
+      const hgt = 58 + (i % 4) * 10;
+      const wid = 1.4 + (i % 3) * 0.7;
+      g.scale(wid, hgt, 1);
+      g.rotateX(-0.26 - (i % 3) * 0.08); // lean inward from high above
+      g.translate(Math.cos(a) * r, hgt * 0.55 + 10, Math.sin(a) * r);
+      g.rotateY(-a + Math.PI / 2);
+      quads.push(g);
+    }
+    const merged = mergeGeometries(quads);
+    for (const q of quads) q.dispose();
+    if (!merged) return;
+    this.shaftMat = new THREE.ShaderMaterial({
+      vertexShader: SHAFT_VERT,
+      fragmentShader: SHAFT_FRAG,
+      uniforms: { uTime: { value: 0 }, uEnergy: { value: 0.3 } },
+      transparent: true,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+      fog: false,
+    });
+    this.shaftGroup = new THREE.Group();
+    const mesh = new THREE.Mesh(merged, this.shaftMat);
+    mesh.renderOrder = 2;
+    mesh.frustumCulled = false;
+    this.shaftGroup.add(mesh);
+    this.scene.add(this.shaftGroup);
+  }
+
+  /** CONTACT BLOB SHADOWS — one InstancedMesh of soft dark quads under the
+   *  player + live foes. The missing "weight" read with zero shadow-map cost.
+   *  +1 draw call for ALL entities. */
+  private buildBlobs(): void {
+    const c = document.createElement('canvas');
+    c.width = c.height = 64;
+    const ctx = c.getContext('2d')!;
+    const g = ctx.createRadialGradient(32, 32, 2, 32, 32, 30);
+    g.addColorStop(0, 'rgba(0,0,0,0.60)');
+    g.addColorStop(0.55, 'rgba(0,0,0,0.28)');
+    g.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, 64, 64);
+    const tex = new THREE.CanvasTexture(c);
+    const geo = new THREE.PlaneGeometry(1, 1);
+    geo.rotateX(-Math.PI / 2);
+    const mat = new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthWrite: false, fog: false });
+    this.blobs = new THREE.InstancedMesh(geo, mat, SHADOWS_CAP);
+    this.blobs.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    this.blobs.count = 0;
+    this.blobs.frustumCulled = false;
+    this.blobs.renderOrder = 1;
+    this.scene.add(this.blobs);
+  }
+
+  /** per-frame contact shadows — entries [x, z, radius] * count, engine-owned
+   *  preallocated buffer (view-only; the sim is never touched) */
+  setBlobs(entries: Float32Array, count: number): void {
+    const n = Math.min(SHADOWS_CAP, count);
+    for (let i = 0; i < n; i++) {
+      this.blobV.set(entries[i * 3], 0.02, entries[i * 3 + 1]);
+      const r = entries[i * 3 + 2];
+      this.blobS.set(r, 1, r);
+      this.blobM.compose(this.blobV, this.blobQ, this.blobS);
+      this.blobs.setMatrixAt(i, this.blobM);
+    }
+    this.blobs.count = n;
+    this.blobs.instanceMatrix.needsUpdate = true;
+  }
+
+  /** adaptive quality scale — 1.0 native → 0.86 → 0.72 → 0.6. The 60fps law
+   *  owns pixel count: sustained >19ms steps down, sustained <13.5ms buys
+   *  quality back (engine-side hysteresis). Uniform-only, zero allocations. */
+  setQualityScale(s: number): void {
+    const q = Math.min(1, Math.max(0.6, s));
+    if (Math.abs(q - this.qScale) < 0.001) return;
+    this.qScale = q;
+    const pr = Math.max(0.72, this.baseDpr * q);
+    this.renderer.setPixelRatio(pr);
+    this.composer.setPixelRatio(pr);
+    this.setPixelRatio(pr);
+    this.capBloom();
+  }
+
+  get qualityScale(): number {
+    return this.qScale;
+  }
+
+  /** decouple the bloom mip pyramid from DPR — cost stops tracking panel size */
+  private capBloom(): void {
+    const pr = this.renderer.getPixelRatio();
+    const w = Math.min(window.innerWidth * pr, 1600);
+    const h = Math.min(window.innerHeight * pr, 900);
+    this.bloom.setSize(w, h);
   }
 
   /** RIM MONOLITH FIELD — designed ring of leaning slabs around the arena */
@@ -782,6 +1032,7 @@ export class Scene {
   setEnergy(e: number): void {
     this.floorMat.uniforms.uIgnite.value = e;
     this.sun.setEnergy(e);
+    this.shaftMat.uniforms.uEnergy.value = e;
   }
 
   update(dt: number): void {
@@ -803,6 +1054,14 @@ export class Scene {
     }
     (this.starCore.material as THREE.MeshBasicMaterial).color.lerp(this.tgtSun, k);
     this.starLight.color.lerp(this.tgtSun, k);
+
+    // sky dome tracks the fog so biome shifts re-grade the whole vault
+    const fogCol = (this.scene.fog as THREE.FogExp2).color;
+    (this.skyMat.uniforms.uFog.value as THREE.Color).copy(fogCol);
+    (this.skyMat.uniforms.uTop.value as THREE.Color).copy(fogCol).multiplyScalar(0.22);
+    this.skyMat.uniforms.uTime.value = this.time;
+    this.shaftMat.uniforms.uTime.value = this.time;
+    this.shaftGroup.rotation.y += dt * 0.01;
 
     this.floorMat.uniforms.uTime.value = this.time;
     this.dustMat.uniforms.uTime.value = this.time;
@@ -839,6 +1098,7 @@ export class Scene {
     this.camera.updateProjectionMatrix();
     this.renderer.setSize(w, h, false);
     this.composer.setSize(w, h);
+    this.capBloom();
   }
 
   get sunGroupRef(): THREE.Group {
